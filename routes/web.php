@@ -43,7 +43,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
         Route::get('/overall',             [WipController::class, 'getOverallWip'])->name('overall');
         Route::get('/distinct-packages',   [WipController::class, 'getDistinctPackages'])->name('distinctPackages');
         Route::get('/overall-package',     [WipController::class, 'getOverallWipByPackage'])->name('overallByPackage');
-        Route::get('/filter-summary-trend',[WipController::class, 'getWIPStationTrend'])->name('filterSummaryTrend');
+        Route::get('/filter-summary-trend', [WipController::class, 'getWIPStationTrend'])->name('filterSummaryTrend');
         Route::get('/residual',            [WipController::class, 'getOverallResidual'])->name('residual');
         Route::get('/residual-summary',    [WipController::class, 'getPackageResidualSummary'])->name('residualSummary');
         Route::get('/wip-lot-totals',      [WipController::class, 'getWIPQuantityAndLotsTotal'])->name('wipLotTotals');
@@ -54,8 +54,8 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     // Outs
     Route::prefix('out')->name('api.out.')->group(function () {
         Route::get('/overall',       [WipController::class, 'getOverallOuts'])->name('overall');
-        Route::get('/out-lot-totals',[WipController::class, 'getOutQuantityAndLotsTotal'])->name('outLotTotals');
-        Route::get('/overall-package',[WipController::class, 'getOverallOutByPackage'])->name('overallByPackage');
+        Route::get('/out-lot-totals', [WipController::class, 'getOutQuantityAndLotsTotal'])->name('outLotTotals');
+        Route::get('/overall-package', [WipController::class, 'getOverallOutByPackage'])->name('overallByPackage');
     });
 
     // WIP-Out
@@ -143,7 +143,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     // Packages & Groups
     Route::prefix('package')->name('api.package.')->group(function () {
         Route::get('/packages',      [PackageController::class, 'getAllPackages'])->name('all');
-        Route::get('/package-groups',[PackageGroupController::class, 'index'])->name('packageGroups');
+        Route::get('/package-groups', [PackageGroupController::class, 'index'])->name('packageGroups');
         Route::middleware(ApiPermissionMiddleware::class . ':package_group_mutate')->group(function () {
             Route::post('/',       [PackageGroupController::class, 'saveGroup'])->name('store');
             Route::patch('/{id}',  [PackageGroupController::class, 'saveGroup'])->name('update');
@@ -154,8 +154,8 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     // Import Trace
     Route::prefix('import-trace')->name('api.import.trace.')->group(function () {
         Route::get('/imports',       [ImportTraceController::class, 'getAllLatestImports'])->name('getAllLatestImports');
-        Route::get('/imports/{type}',[ImportTraceController::class, 'getImport'])->name('getImport');
-        Route::post('/imports/{type}',[ImportTraceController::class, 'upsertImport'])->name('upsertImport');
+        Route::get('/imports/{type}', [ImportTraceController::class, 'getImport'])->name('getImport');
+        Route::post('/imports/{type}', [ImportTraceController::class, 'upsertImport'])->name('upsertImport');
     });
 
     // Analog Calendar
@@ -168,7 +168,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
         Route::get('/get-trend', [PackageCapacityController::class, 'getTrend'])->name('getTrend');
         Route::middleware(ApiPermissionMiddleware::class . ':capacity_upload')->group(function () {
             Route::get('/insert',    [PackageCapacityController::class, 'storeCapacity'])->name('insert');
-            Route::patch('/{id}/edit',[PackageCapacityController::class, 'updateCapacity'])->name('update');
+            Route::patch('/{id}/edit', [PackageCapacityController::class, 'updateCapacity'])->name('update');
         });
     });
 
@@ -207,7 +207,7 @@ Route::get('/',                  [DashboardController::class, 'index'])->name('d
 Route::get('/wip-trend',         [DashboardController::class, 'wipDashboardIndex'])->name('wip.trend');
 Route::get('/out-trend',         [DashboardController::class, 'outDashboardIndex'])->name('out.trend');
 Route::get('/pickup-dashboard',  [DashboardController::class, 'pickupDashboardIndex'])->name('pickup.dashboard');
-Route::get('/residual-dashboard',[DashboardController::class, 'residualDashboardIndex'])->name('residual.dashboard');
+Route::get('/residual-dashboard', [DashboardController::class, 'residualDashboardIndex'])->name('residual.dashboard');
 Route::get('/wip-station',       [WipController::class, 'wipStation'])->name('wipTable');
 Route::get('/body-size',         [WipController::class, 'bodySize'])->name('bodySize');
 Route::get('/pickup-list',       [PickupController::class, 'index'])->name('pickup.index');
@@ -221,14 +221,14 @@ Route::get('/admin',             [AdminController::class, 'index'])->name('admin
 Route::get('/new-admin',         [AdminController::class, 'index_addAdmin'])->name('index_addAdmin');
 Route::post('/add-admin',        [AdminController::class, 'addAdmin'])->name('addAdmin');
 Route::post('/remove-admin',     [AdminController::class, 'removeAdmin'])->name('removeAdmin');
-Route::patch('/change-admin-role',[AdminController::class, 'changeAdminRole'])->name('changeAdminRole');
+Route::patch('/change-admin-role', [AdminController::class, 'changeAdminRole'])->name('changeAdminRole');
 
 // Part Names
 Route::prefix('partname')->name('partname.')->group(function () {
     Route::get('/',            [PartNameController::class, 'index'])->name('index');
     Route::get('/create',      [PartNameController::class, 'upsert'])->name('create');
     Route::get('/create-many', [PartNameController::class, 'insertMany'])->name('createMany');
-    Route::post('/create-many',[PartNameController::class, 'insertMany'])->name('createManyPrefill');
+    Route::post('/create-many', [PartNameController::class, 'insertMany'])->name('createManyPrefill');
     Route::get('/{id}/edit',   [PartNameController::class, 'upsert'])->name('edit');
 });
 
@@ -258,7 +258,7 @@ Route::prefix('f3')->name('f3.')->group(function () {
         Route::get('/',            [F3RawPackageController::class, 'index'])->name('index');
         Route::get('/create',      [F3RawPackageController::class, 'upsert'])->name('create');
         Route::get('/create-many', [F3RawPackageController::class, 'insertMany'])->name('createMany');
-        Route::post('/create-many',[F3RawPackageController::class, 'insertMany'])->name('createManyPrefill');
+        Route::post('/create-many', [F3RawPackageController::class, 'insertMany'])->name('createManyPrefill');
         Route::get('/{id}/edit',   [F3RawPackageController::class, 'upsert'])->name('edit');
     });
 });
@@ -273,7 +273,7 @@ Route::prefix('f3-wip-out')->name('f3.')->group(function () {
 // Package Body Size Capacity
 Route::prefix('package-body-size-capacity')->name('package.body_size.capacity.')->group(function () {
     Route::get('/',          [PackageBodySizeCapacityController::class, 'index'])->name('index');
-    Route::get('/body-sizes',[BodySizeController::class, 'index'])->name('body-sizes');
+    Route::get('/body-sizes', [BodySizeController::class, 'index'])->name('body-sizes');
     Route::get('/machines',  [MachineController::class, 'index'])->name('machines');
 });
 
@@ -291,4 +291,4 @@ Route::prefix('import')->name('import.')->group(function () {
     Route::get('/f3-pickup', [AutoImportController::class, 'renderF3PickUpImportPage'])->name('f3.pickup.index');
 });
 
-Route::fallback(fn () => Inertia::render('404'))->name('404');
+Route::fallback(fn() => Inertia::render('404'))->name('404');
