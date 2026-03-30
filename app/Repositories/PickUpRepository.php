@@ -36,10 +36,14 @@ class PickUpRepository
   public function getTotalQuantity($startDate, $endDate)
   {
     return DB::table(self::TABLE_NAME . ' as pickup')
-      ->where('DATE_CREATED', ">=", $startDate)
-      ->where('DATE_CREATED', "<", $endDate)
-
-      ->sum('QTY');
+      ->where('pickup.DATE_CREATED', '>=', $startDate)
+      ->where('pickup.DATE_CREATED', '<', $endDate)
+      ->whereIn('pickup.PARTNAME', function ($q) {
+        $q->select('Partname')
+          ->from(self::PART_NAME_TABLE)
+          ->whereIn('PL', ['PL1', 'PL6']);
+      })
+      ->sum('pickup.QTY');
   }
 
   public function getFactoryTotalQuantityRanged($factory, $startDate, $endDate)
@@ -47,19 +51,14 @@ class PickUpRepository
     $factory = strtoupper($factory);
 
     $query = DB::table(self::TABLE_NAME . ' as pickup')
-      ->where('DATE_CREATED', '>=', $startDate)
-      ->where('DATE_CREATED', '<', $endDate);
-
-    if ($factory === 'F3') {
-      // join F3 table
-      $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
-    } elseif (in_array($factory, ['F1', 'F2'])) {
-      $partNames = DB::table(self::PART_NAME_TABLE)
-        ->where('Factory', $factory)
-        ->pluck('Partname');
-
-      $query->whereIn('pickup.PARTNAME', $partNames);
-    }
+      ->where('pickup.DATE_CREATED', '>=', $startDate)
+      ->where('pickup.DATE_CREATED', '<', $endDate)
+      ->whereIn('pickup.PARTNAME', function ($q) use ($factory) {
+        $q->select('Partname')
+          ->from(self::PART_NAME_TABLE)
+          ->where('Factory', $factory)
+          ->whereIn('PL', ['PL1', 'PL6']);
+      });
 
     return $query->sum('pickup.QTY');
   }
@@ -69,19 +68,15 @@ class PickUpRepository
     $factory = strtoupper($factory);
 
     $query = DB::table(self::TABLE_NAME . ' as pickup')
-      ->where('DATE_CREATED', '>=', $startDate)
-      ->where('DATE_CREATED', '<', $endDate);
+      ->where('pickup.DATE_CREATED', '>=', $startDate)
+      ->where('pickup.DATE_CREATED', '<', $endDate)
+      ->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
+        $q->select('Partname')
+          ->from(self::PART_NAME_TABLE)
+          ->where('Factory', $factory)
+          ->where('PL', $pl);
+      });
 
-    $partNames = DB::table(self::PART_NAME_TABLE)
-      ->where('Factory', $factory)
-      ->where('PL', $pl)
-      ->pluck('Partname');
-
-    if ($factory === 'F3') {
-      $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
-    }
-
-    $query->whereIn('pickup.PARTNAME', $partNames);
     return $query->sum('pickup.QTY');
   }
 
@@ -144,25 +139,14 @@ class PickUpRepository
 
     $factory = strtoupper($factory);
 
-    if ($factory === 'F3') {
-      $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
-    } elseif (in_array($factory, ['F1', 'F2'])) {
-      $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
-        $q->select('Partname')
-          ->from(self::PART_NAME_TABLE)
-          ->where('Factory', $factory);
-        if ($pl) {
-          $q->where('PL', strtoupper($pl));
-        }
-      });
-    } elseif ($pl) {
-      // F3 or unspecified factory but PL filter still applies
-      $query->whereIn('pickup.PARTNAME', function ($q) use ($pl) {
-        $q->select('Partname')
-          ->from(self::PART_NAME_TABLE)
-          ->where('PL', strtoupper($pl));
-      });
-    }
+    $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
+      $q->select('Partname')
+        ->from(self::PART_NAME_TABLE)
+        ->where('Factory', $factory);
+      if ($pl) {
+        $q->where('PL', strtoupper($pl));
+      }
+    });
 
     if ($aggregate) {
       $query = $this->applyTrendAggregation(

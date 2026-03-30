@@ -13,6 +13,7 @@ use App\Traits\ExportTrait;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Traits\TrendAggregationTrait;
+use Carbon\Carbon;
 
 class PickupService
 {
@@ -37,48 +38,43 @@ class PickupService
 
   public function getOverallPickUp($startDate, $endDate)
   {
-    // [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
+    $endDate = Carbon::parse($endDate)->addDay()->startOfDay();
 
-    $result = new \stdClass();
-
-    $result->total_wip = $this->pickUpRepo->getTotalQuantity($startDate, $endDate);
-
-    foreach (WipConstants::FACTORIES as $factory) {
-      $key = strtolower($factory) . '_total_wip';
-      $result->{$key} = $this->pickUpRepo->getFactoryTotalQuantityRanged($factory, $startDate, $endDate);
-    }
-
+    $plTotals = [];
     foreach (WipConstants::FACTORIES as $factory) {
       foreach (WipConstants::PRODUCTION_LINES as $pl) {
-        $key = strtolower($factory) . strtolower(string: $pl) . '_total_wip';
-        $result->{$key} = $this->pickUpRepo->getFactoryPlTotalQuantity($factory, $pl, $startDate, $endDate);
+        $key = strtolower($factory) . strtolower($pl);
+        $plTotals[$key] = (int) $this->pickUpRepo->getFactoryPlTotalQuantity($factory, $pl, $startDate, $endDate);
       }
     }
 
-    $pl1_total_wip = (int) $result->f1pl1_total_wip + (int) $result->f2pl1_total_wip + (int) $result->f3pl1_total_wip;
-    $pl6_total_wip = (int) $result->f1pl6_total_wip + (int) $result->f2pl6_total_wip + (int) $result->f3pl6_total_wip;
+    $f1_total = $plTotals['f1pl1'] + $plTotals['f1pl6'];
+    $f2_total = $plTotals['f2pl1'] + $plTotals['f2pl6'];
+    $f3_total = $plTotals['f3pl1'] + $plTotals['f3pl6'];
+    $pl1_total = $plTotals['f1pl1'] + $plTotals['f2pl1'] + $plTotals['f3pl1'];
+    $pl6_total = $plTotals['f1pl6'] + $plTotals['f2pl6'] + $plTotals['f3pl6'];
 
     return response()->json([
-      'total_wip'    => (int) $result->f1_total_wip + (int) $result->f2_total_wip + (int) $result->f3_total_wip,
-      'f1_total_wip' => (int) $result->f1_total_wip,
-      'f2_total_wip' => (int) $result->f2_total_wip,
-      'f3_total_wip' => (int) $result->f3_total_wip,
-      'total_f1_pl1'      => (int) $result->f1pl1_total_wip,
-      'total_f1_pl6'      => (int) $result->f1pl6_total_wip,
-      'total_f2_pl1'      => (int) $result->f2pl1_total_wip,
-      'total_f2_pl6'      => (int) $result->f2pl6_total_wip,
-      'total_f3_pl1'      => (int) $result->f3pl1_total_wip,
-      'total_f3_pl6'      => (int) $result->f3pl6_total_wip,
-      'total_pl1'         => $pl1_total_wip,
-      'total_pl6'         => $pl6_total_wip,
-      'status'            => 'success',
-      'message'           => 'Data retrieved successfully',
+      'total_wip'    => $f1_total + $f2_total + $f3_total,
+      'f1_total_wip' => $f1_total,
+      'f2_total_wip' => $f2_total,
+      'f3_total_wip' => $f3_total,
+      'total_f1_pl1' => $plTotals['f1pl1'],
+      'total_f1_pl6' => $plTotals['f1pl6'],
+      'total_f2_pl1' => $plTotals['f2pl1'],
+      'total_f2_pl6' => $plTotals['f2pl6'],
+      'total_f3_pl1' => $plTotals['f3pl1'],
+      'total_f3_pl6' => $plTotals['f3pl6'],
+      'total_pl1'    => $pl1_total,
+      'total_pl6'    => $pl6_total,
+      'status'       => 'success',
+      'message'      => 'Data retrieved successfully',
     ]);
   }
 
   public function getPackagePickUpTrend($packageName, $period, $startDate, $endDate, $workweeks)
   {
-    [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
+    $endDate   = Carbon::parse($endDate)->addDay()->startOfDay();
     return $this->pickUpRepo->getPickUpTrend($packageName, $period, $startDate, $endDate, $workweeks);
   }
 
@@ -104,7 +100,6 @@ class PickupService
 
   public function getPackagePickUpSummary($chartStatus, $startDate, $endDate)
   {
-    // [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
     $results = $this->pickUpRepo->getPackageSummary($chartStatus, $startDate, $endDate);
     Log::info("startDate", $startDate);
     Log::info("endDate", $endDate);
