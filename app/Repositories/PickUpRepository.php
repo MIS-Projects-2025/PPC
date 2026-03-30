@@ -139,46 +139,49 @@ class PickUpRepository
 
   public function getBaseTrend($factory, $packageName, $period, $startDate, $endDate, $workweeks, $aggregate = true, $pl = null)
   {
-    $query = DB::table(self::TABLE_NAME . ' as pickup');
-    $query = $this->filterByPackageName($query, $packageName);
+      $query = DB::table(self::TABLE_NAME . ' as pickup');
+      $query = $this->filterByPackageName($query, $packageName);
 
-    $factory = strtoupper($factory);
+      $factory = strtoupper($factory);
 
-    if ($factory === 'F3') {
-      $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
-    } elseif (in_array($factory, ['F1', 'F2'])) {
-      $partNames = DB::table(self::PART_NAME_TABLE)
-        ->where('Factory', $factory)
-        ->pluck('Partname');
-      $query->whereIn('pickup.PARTNAME', $partNames);
-    }
+      if ($factory === 'F3') {
+          $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
+      } elseif (in_array($factory, ['F1', 'F2'])) {
+          $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
+              $q->select('Partname')
+                ->from(self::PART_NAME_TABLE)
+                ->where('Factory', $factory);
+              if ($pl) {
+                  $q->where('PL', strtoupper($pl));
+              }
+          });
+      } elseif ($pl) {
+          // F3 or unspecified factory but PL filter still applies
+          $query->whereIn('pickup.PARTNAME', function ($q) use ($pl) {
+              $q->select('Partname')
+                ->from(self::PART_NAME_TABLE)
+                ->where('PL', strtoupper($pl));
+          });
+      }
 
-    if ($pl) {
-      $query->whereIn('pickup.PARTNAME', function ($q) use ($pl) {
-        $q->select('Partname')
-          ->from(self::PART_NAME_TABLE)
-          ->where('PL', strtoupper($pl));
-      });
-    }
+      if ($aggregate) {
+          $query = $this->applyTrendAggregation(
+              $query,
+              $period,
+              $startDate,
+              $endDate,
+              'pickup.DATE_CREATED',
+              self::aggregateColumn,
+              ['pickup.PACKAGE as package'],
+              workRange: $this->analogCalendarRepo->getDatesByWorkWeekRange($workweeks)['range']
+          );
+      } else {
+          $query->where('pickup.DATE_CREATED', '>=', $startDate)
+                ->where('pickup.DATE_CREATED', '<', $endDate)
+                ->select('pickup.PARTNAME', 'pickup.LOTID', 'pickup.QTY', 'pickup.PACKAGE', 'pickup.LC', 'pickup.ADDED_BY', 'pickup.DATE_CREATED');
+      }
 
-    if ($aggregate) {
-      $query = $this->applyTrendAggregation(
-        $query,
-        $period,
-        $startDate,
-        $endDate,
-        'pickup.DATE_CREATED',
-        self::aggregateColumn,
-        ['pickup.PACKAGE as package'],
-        workRange: $this->analogCalendarRepo->getDatesByWorkWeekRange($workweeks)['range']
-      );
-    } else {
-      $query->where('pickup.DATE_CREATED', '>=', $startDate)
-        ->where('pickup.DATE_CREATED', '<', $endDate)
-        ->select('pickup.PARTNAME', 'pickup.LOTID', 'pickup.QTY', 'pickup.PACKAGE', 'pickup.LC', 'pickup.ADDED_BY', 'pickup.DATE_CREATED');
-    }
-
-    return $query;
+      return $query;
   }
 
   public function getPickUpTrend($packageName, $period, $startDate, $endDate, $workweeks)
