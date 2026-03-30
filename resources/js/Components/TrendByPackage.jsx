@@ -51,10 +51,6 @@ const TrendByPackage = memo(function TrendByPackage({
 		setSelectedStartDate: setSavedStartDate,
 		setSelectedEndDate: setSavedEndDate,
 	} = useSelectedFilteredStore();
-
-	const [isChartTableVisible, setIsChartTableVisible] = useState(
-		!noChartTable ? true : false,
-	);
 	const [selectPeriod, setSelectedPeriod] = useState(savedPeriod || "weekly");
 	const [selectedLookBack, setSelectedLookBack] = useState(savedLookBack || 20);
 	const [selectedOffsetPeriod, setSelectedOffsetPeriod] = useState(
@@ -197,14 +193,15 @@ const TrendByPackage = memo(function TrendByPackage({
 						style={{ positionAnchor: "--anchor-period" }}
 					>
 						{periodOptions.map((option) => (
-							<li
-								key={option.value}
-								onKeyDown={() => {
-									setSelectedPeriod(option.value);
-									setSavedSelectedPeriod(option.value);
-								}}
-							>
-								<a>{option.label}</a>
+							<li key={option.value}>
+								<a
+									onClick={() => {
+										setSelectedPeriod(option.value);
+										setSavedSelectedPeriod(option.value);
+									}}
+								>
+									{option.label}
+								</a>
 							</li>
 						))}
 					</ul>
@@ -292,24 +289,6 @@ const TrendByPackage = memo(function TrendByPackage({
 					toggleBar={toggleLine}
 					buttonClassName="h-8"
 				/>
-
-				{!noChartTable && (
-					<button
-						type="button"
-						className="btn btn-sm btn-outline h-8 btn-secondary px-4"
-						onClick={() => setIsChartTableVisible((prev) => !prev)}
-					>
-						{}
-						{isChartTableVisible ? (
-							<FaEye className="mr-2" />
-						) : (
-							<FaEyeSlash className="mr-2" />
-						)}
-						<span className="w-18">
-							{isChartTableVisible ? "Show Table" : "Hide Table"}
-						</span>
-					</button>
-				)}
 
 				{!disableBodySizeView && (
 					<button

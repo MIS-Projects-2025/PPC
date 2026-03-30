@@ -42,10 +42,6 @@ const WipOutTrendByPackage = ({
 	noChartTable = false,
 	downloadRoute = null,
 }) => {
-	const [isChartTableVisible, setIsChartTableVisible] = useState(
-		!noChartTable ? true : false,
-	);
-
 	const {
 		download,
 		isLoading,
@@ -440,24 +436,6 @@ const WipOutTrendByPackage = ({
 					)}
 
 					{errorMessage && <p style={{ color: "red" }}>{errorMessage}</p>}
-
-					{!noChartTable && (
-						<button
-							type="button"
-							className="btn btn-sm btn-outline h-8 btn-secondary px-4"
-							onClick={() => setIsChartTableVisible((prev) => !prev)}
-						>
-							{}
-							{isChartTableVisible ? (
-								<FaEye className="mr-2" />
-							) : (
-								<FaEyeSlash className="mr-2" />
-							)}
-							<span className="w-18">
-								{isChartTableVisible ? "Show Table" : "Hide Table"}
-							</span>
-						</button>
-					)}
 				</div>
 				<div className="text-sm opacity-80">{fullLabel}</div>
 				<div className="w-full">
