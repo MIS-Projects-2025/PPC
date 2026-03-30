@@ -37,7 +37,7 @@ class PickupService
 
   public function getOverallPickUp($startDate, $endDate)
   {
-    [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
+    // [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
 
     $result = new \stdClass();
 
@@ -106,7 +106,8 @@ class PickupService
   {
     // [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
     $results = $this->pickUpRepo->getPackageSummary($chartStatus, $startDate, $endDate);
-
+    Log::info("startDate", $startDate);
+    Log::info("endDate", $endDate);
     return response()->json([
       'data' => $results,
       'status' => 'success',
