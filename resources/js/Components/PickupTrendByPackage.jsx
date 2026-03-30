@@ -30,6 +30,7 @@ const PickupTrendByPackage = ({
 	dataAPI = null,
 	showWIPLines = {},
 	showPLLines = {},
+	mainTrendChartTitle = "WIP & OUTs",
 	noChartTable = false,
 	downloadRoute = null,
 }) => {
@@ -403,7 +404,7 @@ const PickupTrendByPackage = ({
 						errorMessage={overallByPackageWipErrorMessage}
 						lines={lines}
 						syncId={"dashboard-trend"}
-						title={chartTitle("WIP & Outs")}
+						title={chartTitle(mainTrendChartTitle)}
 						rightAxisTickFormatter={(value) => `${value.toFixed(2)}%`}
 					/>
 					<TrendLineChart

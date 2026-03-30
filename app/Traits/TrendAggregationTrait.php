@@ -140,11 +140,16 @@ trait TrendAggregationTrait
     ],
     array $additionalFields = [],
     array $workRange = [],
+    int $shiftHours = 0,
   ): Builder {
     $query = clone $query;
     $query->select([]);
 
     $groupByOrderBy = WipConstants::PERIOD_GROUP_BY[$period];
+
+    $shiftedColumn = $shiftHours !== 0
+      ? "DATE_SUB($column, INTERVAL $shiftHours HOUR)"
+      : $column;
 
     $aggSelects = collect($aggregateColumns)->map(function ($alias, $expr) {
       if (is_int($expr)) {
@@ -160,48 +165,53 @@ trait TrendAggregationTrait
       case 'daily':
         $query->selectRaw("
                 $extraFields
-                DATE($column) as day,
+                DATE($shiftedColumn) as day,
                 $aggSelects
             ");
         break;
 
       case 'weekly':
         if (!empty($workRange)) {
-          $query->where(function ($q) use ($column, $workRange) {
+          $query->where(function ($q) use ($shiftedColumn, $workRange) {
             foreach ($workRange as $range) {
-              $q->orWhere(function ($query) use ($column, $range) {
-                $query->where($column, '>=', $range->startDate)
-                  ->where($column, '<', $range->endDate);
+              $q->orWhere(function ($query) use ($shiftedColumn, $range) {
+                $query->whereRaw("$shiftedColumn >= ?", [$range->startDate])
+                  ->whereRaw("$shiftedColumn < ?",  [$range->endDate]);
               });
             }
           });
 
-          $case = implode(' ', array_map(function ($range) use ($column) {
-            return "WHEN $column >= '{$range->startDate}' AND $column < '{$range->endDate}' THEN CONCAT('w', '{$range->workweek}')";
-          }, $workRange));
+          $case = implode(' ', array_map(
+            fn($range) =>
+            "WHEN $shiftedColumn >= '{$range->startDate}' AND $shiftedColumn < '{$range->endDate}' THEN CONCAT('w', '{$range->workweek}')",
+            $workRange
+          ));
 
-          $weekCase = implode(' ', array_map(function ($range) use ($column) {
-            return "WHEN $column >= '{$range->startDate}' AND $column < '{$range->endDate}' THEN '{$range->workweek}'";
-          }, $workRange));
+          $weekCase = implode(' ', array_map(
+            fn($range) =>
+            "WHEN $shiftedColumn >= '{$range->startDate}' AND $shiftedColumn < '{$range->endDate}' THEN '{$range->workweek}'",
+            $workRange
+          ));
 
           $workweekSelect = "CASE $case ELSE NULL END as workweek,
-                                   CASE $weekCase ELSE NULL END as week,";
+                           CASE $weekCase ELSE NULL END as week,";
         } else {
           $workweekSelect = "NULL as workweek, NULL as week,";
         }
 
         $query->selectRaw("
-                $extraFields
-                $workweekSelect
-                $aggSelects
-            ");
+          $extraFields
+          $workweekSelect
+          $aggSelects
+        ");
+
         break;
 
       case 'monthly':
         $query->selectRaw("
                 $extraFields
-                YEAR($column) as year,
-                MONTH($column) as month,
+                YEAR($shiftedColumn) as year,
+                MONTH($shiftedColumn) as month,
                 $aggSelects
             ");
         break;
@@ -209,8 +219,8 @@ trait TrendAggregationTrait
       case 'quarterly':
         $query->selectRaw("
                 $extraFields
-                YEAR($column) as year,
-                QUARTER($column) as quarter,
+                YEAR($shiftedColumn) as year,
+                QUARTER($shiftedColumn) as quarter,
                 $aggSelects
             ");
         break;
@@ -218,7 +228,7 @@ trait TrendAggregationTrait
       case 'yearly':
         $query->selectRaw("
                 $extraFields
-                YEAR($column) as year,
+                YEAR($shiftedColumn) as year,
                 $aggSelects
             ");
         break;
@@ -234,8 +244,8 @@ trait TrendAggregationTrait
     }
 
     if ($period !== 'weekly' || empty($workRange)) {
-      $query->where($column, '>=', $startDate)
-        ->where($column, '<', $endDate);
+      $query->whereRaw("$shiftedColumn >= ?", [$startDate])
+        ->whereRaw("$shiftedColumn < ?",  [$endDate]);
     }
 
     return $query;

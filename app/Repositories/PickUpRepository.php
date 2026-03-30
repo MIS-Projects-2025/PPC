@@ -139,49 +139,50 @@ class PickUpRepository
 
   public function getBaseTrend($factory, $packageName, $period, $startDate, $endDate, $workweeks, $aggregate = true, $pl = null)
   {
-      $query = DB::table(self::TABLE_NAME . ' as pickup');
-      $query = $this->filterByPackageName($query, $packageName);
+    $query = DB::table(self::TABLE_NAME . ' as pickup');
+    $query = $this->filterByPackageName($query, $packageName);
 
-      $factory = strtoupper($factory);
+    $factory = strtoupper($factory);
 
-      if ($factory === 'F3') {
-          $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
-      } elseif (in_array($factory, ['F1', 'F2'])) {
-          $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
-              $q->select('Partname')
-                ->from(self::PART_NAME_TABLE)
-                ->where('Factory', $factory);
-              if ($pl) {
-                  $q->where('PL', strtoupper($pl));
-              }
-          });
-      } elseif ($pl) {
-          // F3 or unspecified factory but PL filter still applies
-          $query->whereIn('pickup.PARTNAME', function ($q) use ($pl) {
-              $q->select('Partname')
-                ->from(self::PART_NAME_TABLE)
-                ->where('PL', strtoupper($pl));
-          });
-      }
+    if ($factory === 'F3') {
+      $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
+    } elseif (in_array($factory, ['F1', 'F2'])) {
+      $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
+        $q->select('Partname')
+          ->from(self::PART_NAME_TABLE)
+          ->where('Factory', $factory);
+        if ($pl) {
+          $q->where('PL', strtoupper($pl));
+        }
+      });
+    } elseif ($pl) {
+      // F3 or unspecified factory but PL filter still applies
+      $query->whereIn('pickup.PARTNAME', function ($q) use ($pl) {
+        $q->select('Partname')
+          ->from(self::PART_NAME_TABLE)
+          ->where('PL', strtoupper($pl));
+      });
+    }
 
-      if ($aggregate) {
-          $query = $this->applyTrendAggregation(
-              $query,
-              $period,
-              $startDate,
-              $endDate,
-              'pickup.DATE_CREATED',
-              self::aggregateColumn,
-              ['pickup.PACKAGE as package'],
-              workRange: $this->analogCalendarRepo->getDatesByWorkWeekRange($workweeks)['range']
-          );
-      } else {
-          $query->where('pickup.DATE_CREATED', '>=', $startDate)
-                ->where('pickup.DATE_CREATED', '<', $endDate)
-                ->select('pickup.PARTNAME', 'pickup.LOTID', 'pickup.QTY', 'pickup.PACKAGE', 'pickup.LC', 'pickup.ADDED_BY', 'pickup.DATE_CREATED');
-      }
+    if ($aggregate) {
+      $query = $this->applyTrendAggregation(
+        $query,
+        $period,
+        $startDate,
+        $endDate,
+        'pickup.DATE_CREATED',
+        self::aggregateColumn,
+        ['pickup.PACKAGE as package'],
+        workRange: $this->analogCalendarRepo->getDatesByWorkWeekRange($workweeks)['range'],
+        shiftHours: 6,
+      );
+    } else {
+      $query->where('pickup.DATE_CREATED', '>=', $startDate)
+        ->where('pickup.DATE_CREATED', '<', $endDate)
+        ->select('pickup.PARTNAME', 'pickup.LOTID', 'pickup.QTY', 'pickup.PACKAGE', 'pickup.LC', 'pickup.ADDED_BY', 'pickup.DATE_CREATED');
+    }
 
-      return $query;
+    return $query;
   }
 
   public function getPickUpTrend($packageName, $period, $startDate, $endDate, $workweeks)
@@ -203,6 +204,9 @@ class PickUpRepository
       'f3_trend' => 'f3_pl6',
       'overall_trend' => 'overall_pl6',
     ];
+
+    // $startDate = Carbon::parse($startDate)->setTime(6, 0, 0);
+    // $endDate   = Carbon::parse($endDate)->addDay()->setTime(6, 0, 0);
 
     foreach (WipConstants::FACTORIES as $factory) {
       $key = strtolower($factory) . '_trend';

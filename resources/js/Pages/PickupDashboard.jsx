@@ -116,6 +116,7 @@ const PickupDashboard = () => {
 					isVisible
 					title="PickUp Trend by Packages"
 					dataAPI={route("api.pickup.pickupSummaryTrend")}
+					mainTrendChartTitle="Pickup WIP and LOTs"
 					showLines={{
 						showQuantities: true,
 						showLots: true,

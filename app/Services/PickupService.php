@@ -104,7 +104,7 @@ class PickupService
 
   public function getPackagePickUpSummary($chartStatus, $startDate, $endDate)
   {
-    [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
+    // [$startDate, $endDate] = $this->translateToBusinessRange($startDate, $endDate);
     $results = $this->pickUpRepo->getPackageSummary($chartStatus, $startDate, $endDate);
 
     return response()->json([
