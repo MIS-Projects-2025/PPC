@@ -9,6 +9,7 @@ use App\Traits\MassDeletesByIds;
 use Inertia\Inertia;
 use App\Services\PickupService;
 use App\Traits\ParseRequestTrait;
+use Illuminate\Support\Facades\Storage;
 
 class PickupController extends Controller
 {
@@ -117,20 +118,36 @@ class PickupController extends Controller
   public function downloadPickUpTemplate()
   {
     $headers = ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-    $filePath = public_path('storage/excels/pickup_template.xlsx');
+    $relativePath = 'excels/pickup_template.xlsx';
+
+    if (!Storage::disk('public')->exists($relativePath)) {
+      return response()->json(['error' => 'Template file not found.'], 404);
+    }
+
     $filename = "pickup_template_" . now()->format('Ymd_His_u') . ".xlsx";
 
-    ob_end_clean();
-    return response()->download($filePath, $filename, $headers);
+    if (ob_get_level()) {
+      ob_end_clean();
+    }
+
+    return response()->download(Storage::disk('public')->path($relativePath), $filename, $headers);
   }
 
   public function downloadF3PickUpTemplate()
   {
     $headers = ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-    $filePath = public_path('storage/excels/f3_pickup_template.xlsx');
+    $relativePath = 'excels/f3_pickup_template.xlsx';
+
+    if (!Storage::disk('public')->exists($relativePath)) {
+      return response()->json(['error' => 'Template file not found.'], 404);
+    }
+
     $filename = "f3_pickup_template_" . now()->format('Ymd_His_u') . ".xlsx";
 
-    ob_end_clean();
-    return response()->download($filePath, $filename, $headers);
+    if (ob_get_level()) {
+      ob_end_clean();
+    }
+
+    return response()->download(Storage::disk('public')->path($relativePath), $filename, $headers);
   }
 }

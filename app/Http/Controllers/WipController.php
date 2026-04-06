@@ -12,6 +12,7 @@ use App\Services\WipService;
 use App\Repositories\F1F2WipRepository;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Storage;
 
 class WipController extends Controller
 {
@@ -247,15 +248,22 @@ class WipController extends Controller
     );
   }
 
+
   public function downloadCapacityTemplate()
   {
-    $headers = ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+    $relativePath = 'excels/TSPI_Capacity.xlsx';
 
-    $filePath = public_path('storage/excels/TSPI_Capacity.xlsx');
+    if (!Storage::disk('public')->exists($relativePath)) {
+      return response()->json(['error' => 'Template file not found.'], 404);
+    }
+
     $filename = "tspi_capacity_template_" . now()->format('Ymd_His_u') . ".xlsx";
 
-    ob_end_clean();
-    return response()->download($filePath, $filename, $headers);
+    if (ob_get_level()) {
+      ob_end_clean();
+    }
+
+    return response()->download(Storage::disk('public')->path($relativePath), $filename);
   }
 
   public function wipStation()

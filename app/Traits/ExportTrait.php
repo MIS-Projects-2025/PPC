@@ -12,7 +12,7 @@ trait ExportTrait
 {
   protected function downloadRawXlsx(array $sheets, string $filenamePrefix)
   {
-    $tempFile = tempnam(sys_get_temp_dir(), 'xlsx');
+    $tempFile = tempnam(sys_get_temp_dir(), 'ppc_export_');
 
     $writer = WriterEntityFactory::createXLSXWriter();
     $writer->setShouldCreateNewSheetsAutomatically(false);
@@ -22,38 +22,49 @@ trait ExportTrait
       ->setShouldWrapText(false)
       ->build();
 
-    $firstSheet = true;
+    $isFirstSheet = true;
+
     foreach ($sheets as $sheetName => $queryFn) {
       $rows = $queryFn();
 
-      if (!$rows->count()) {
+      if (!$rows || $rows->isEmpty()) {
         continue;
       }
 
-      if ($firstSheet) {
+      if ($isFirstSheet) {
         $writer->getCurrentSheet()->setName($sheetName);
-        $firstSheet = false;
+        $isFirstSheet = false;
       } else {
         $writer->addNewSheetAndMakeItCurrent();
         $writer->getCurrentSheet()->setName($sheetName);
       }
 
-      // Write header row
-      $firstRow = $rows->first();
-      $columns = array_keys((array) $firstRow);
+      $firstRow = (array) $rows->first();
+      $columns = array_keys($firstRow);
       $writer->addRow(WriterEntityFactory::createRowFromArray($columns, $style));
 
-      // Stream each row
       foreach ($rows as $row) {
         $writer->addRow(WriterEntityFactory::createRowFromArray((array) $row, $style));
       }
+
+      unset($rows);
     }
 
     $writer->close();
 
-    $headers = ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-    $response = response()->download($tempFile, "{$filenamePrefix}_" . now()->format('Ymd_His') . ".xlsx", $headers);
-    ob_end_clean();
-    return $response->deleteFileAfterSend(true);
+    if (ob_get_level()) {
+      ob_end_clean();
+    }
+
+    $filename = "{$filenamePrefix}_" . now()->format('Ymd_His') . ".xlsx";
+
+    $headers = [
+      'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+    ];
+
+    return response()
+      ->download($tempFile, $filename, $headers)
+      ->deleteFileAfterSend(true);
   }
 }
