@@ -39,8 +39,9 @@ return Application::configure(basePath: dirname(__DIR__))
         });
     })
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->prepend(StartSession::class);
-        
+        $middleware->trustProxies(at: '*');
+        // $middleware->prepend(StartSession::class);
+
         $middleware->encryptCookies(except: [
             'sso_token',
         ]);

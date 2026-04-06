@@ -270,6 +270,15 @@ class ExcelValidatorService
       $headerRow = $sheet->rangeToArray("A1:{$highestColumn}1", null, true, true, false)[0];
     }
 
+    if (!$headerRow) {
+      return [
+        'status' => 'error',
+        'errorType' => 'EMPTY_SHEET',
+        'message' => 'The CSV file appears to be empty.',
+        'data' => [],
+      ];
+    }
+
     $result = $this->processHeaders($headerRow, $expectedHeaders);
 
     if (($result['status'] ?? null) === 'error') {
@@ -309,19 +318,27 @@ class ExcelValidatorService
     $headerRowIndex = 1;
     $currentRowIndex = 0;
 
+    $aliasMap = $this->buildAliasMap($expectedHeaders);
+
     foreach ($reader->getSheetIterator() as $sheet) {
       foreach ($sheet->getRowIterator() as $row) {
         $currentRowIndex++;
         if ($currentRowIndex > 10) break;
 
         $cells = $row->toArray();
-        $score = $this->scoreHeaderRow($cells);
+        $score = $this->scoreHeaderRow($cells, $aliasMap);
 
-        if ($score > $bestScore) {
+        if ($score >= $bestScore) {
           $bestScore = $score;
-          $headerRow = $cells;
+          $headerRow = $row->toArray();
           $headerRowIndex = $currentRowIndex;
         }
+
+        // if ($score > $bestScore) {
+        //   $bestScore = $score;
+        //   $headerRow = $cells;
+        //   $headerRowIndex = $currentRowIndex;
+        // }
       }
       break; // only first sheet
     }
@@ -336,6 +353,15 @@ class ExcelValidatorService
         break;
       }
       $reader->close();
+    }
+
+    if (!$headerRow) {
+      return [
+        'status' => 'error',
+        'errorType' => 'EMPTY_SHEET',
+        'message' => 'The CSV file appears to be empty.',
+        'data' => [],
+      ];
     }
 
     $result = $this->processHeaders($headerRow, $expectedHeaders);
