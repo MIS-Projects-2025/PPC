@@ -25,5 +25,6 @@ class AppServiceProvider extends ServiceProvider
             'appName' => env('APP_NAME', ''),
         ]);
         Vite::prefetch(concurrency: 3);
+        \App\Models\Lot::observe(\App\Observers\LotObserver::class);
     }
 }

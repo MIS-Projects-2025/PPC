@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware};
 use App\Http\Controllers\{
@@ -22,13 +23,96 @@ use App\Http\Controllers\{
     PlPackageMasterController,
     PlRuleController,
     WipController,
+    LotController,
+    RackController
 };
 use App\Http\Controllers\General\{AdminController, ProfileController};
+
 
 $app_name = env('APP_NAME', '');
 Route::redirect('/', "/$app_name");
 
 require __DIR__ . '/auth.php';
+
+function getRackInventoryData()
+{
+    $allSlots = collect([
+        ['id' => 101, 'rack_id' => 1, 'label' => "A1", 'is_manually_full' => 0],
+        ['id' => 104, 'rack_id' => 1, 'label' => "A4", 'is_manually_full' => 1],
+    ])->keyBy('id');
+
+    $racks = [];
+    $slotIdCounter = 1000;
+    $lotIdCounter = 500;
+
+    for ($i = 0; $i < 20; $i++) {
+        $rackId = 4 + $i;
+        $rackLabel = "RACK-" . chr(68 + $i);
+        $numSlots = rand(20, 30);
+        $currentRackSlots = [];
+
+        for ($s = 1; $s <= $numSlots; $s++) {
+            $label = chr(rand(65, 70)) . "-" . $s;
+            $isManuallyFull = (rand(1, 100) > 90) ? 1 : 0;
+
+            $slotId = $slotIdCounter++;
+            $allSlots[$slotId] = [
+                'id'              => $slotId,
+                'rack_id'         => $rackId,
+                'label'           => $label,
+                'is_manually_full' => $isManuallyFull,
+            ];
+
+            $lots = [];
+            if (rand(1, 100) > 10) {
+                $numLots = rand(1, 5);
+                for ($l = 0; $l < $numLots; $l++) {
+                    $lotId = "LOT-" . $lotIdCounter++;
+                    $lots[] = [
+                        'lot_id' => $lotId,
+                        'partname' => "Part-" . rand(100, 999),
+                        'qty' => rand(100, 1500),
+                        'received_at' => now()->toDateTimeString(),
+                        'slot_ids' => [$slotId],
+                        'has_exceeded_age_threshold' => (rand(1, 100) > 80)
+                    ];
+                }
+            }
+
+            $currentRackSlots[] = [
+                'id' => $slotId,
+                'lots' => $lots,
+                'label' => $label,
+                'is_manually_full' => $isManuallyFull,
+            ];
+        }
+
+        $shelves = collect($currentRackSlots)
+            ->groupBy(fn($slot) => substr($slot['label'], 0, 1))
+            ->toArray();
+
+        $racks[] = [
+            'id' => $rackId,
+            'label' => $rackLabel,
+            'slots' => $currentRackSlots,
+            'shelves' => $shelves,
+        ];
+    }
+
+    return ['slots' => $allSlots, 'racks' => $racks];
+}
+
+Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
+    Route::get('/', [LotController::class, 'index'])->name('index');
+    Route::patch('/{id}/update', [LotController::class, 'update'])->name('update');
+    Route::post('/store', [LotController::class, 'store'])->name('store');
+});
+
+Route::prefix('/rack')->name('rack.')->group(function () {
+    Route::get('/', [RackController::class, 'index']);
+    Route::get('/barcode', [RackController::class, 'all'])->name('barcode');
+});
+
 
 /*
 |--------------------------------------------------------------------------

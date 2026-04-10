@@ -6,10 +6,10 @@ export function useToast() {
 		"alert shadow-lg rounded-lg w-fit max-w-sm font-medium transition-all duration-300";
 
 	const variants = {
-		success: "alert-success text-success-content text-sm",
-		error: "alert-error text-error-content text-sm",
-		info: "alert-info text-info-content text-sm",
-		loading: "alert-info text-info-content text-sm",
+		success: "z-10000000 alert-success text-success-content text-sm",
+		error: "z-10000000 alert-error text-error-content text-sm",
+		info: "z-10000000 alert-info text-info-content text-sm",
+		loading: "z-10000000 alert-info text-info-content text-sm",
 	};
 
 	const icons = {
@@ -35,6 +35,7 @@ export function useToast() {
 				id: opts.id,
 				duration: opts.duration ?? (type === "error" ? 5000 : 3000),
 				position: opts.position ?? "top-right",
+				...opts,
 			},
 		);
 	};

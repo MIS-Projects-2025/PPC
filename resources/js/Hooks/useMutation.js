@@ -27,6 +27,7 @@ export function useMutation() {
 				body,
 				isFormData = false,
 				isContentTypeInclude = true,
+				additionalHeaders = {},
 			} = options;
 			const token = localStorage.getItem("authify-token");
 
@@ -38,6 +39,7 @@ export function useMutation() {
 					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
 						.content,
 					...(token ? { Authorization: `Bearer ${token}` } : {}),
+					...additionalHeaders,
 				},
 				body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
 				signal: controller.signal,

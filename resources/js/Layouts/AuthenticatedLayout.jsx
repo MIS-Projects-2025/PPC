@@ -20,10 +20,10 @@ export default function AuthenticatedLayout({ header, children }) {
 	useEffect(() => {
 		if (!emp_data || hasUserFetched) return;
 
-		fetchPackages();
-		fetchWip();
-		fetchWorkweek();
-		fetchAllImports();
+		// fetchPackages();
+		// fetchWip();
+		// fetchWorkweek();
+		// fetchAllImports();
 
 		setHasUserFetched(true);
 	}, [emp_data, hasUserFetched]);

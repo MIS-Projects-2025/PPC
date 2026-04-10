@@ -7,10 +7,30 @@
 
 @theme {
   --animate-hehe: hehe .8s ease-in-out infinite;
+  --animate-new-item: slideInHighlight 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  --animate-updated: highlight-glow 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 
   @keyframes hehe {
     50% {
       opacity: .1
+    }
+  }
+
+  @keyframes highlight-glow {
+    0% { background-color: var(--color-accent); shadow: 0 0 15px var(--color-accent); }
+    100% { background-color: transparent; shadow: none; }
+  }
+
+  @keyframes slideInHighlight {
+    0% { 
+      opacity: 0; 
+      transform: translateY(-10px); 
+      background-color: var(--color-success);
+    }
+    100% { 
+      opacity: 1; 
+      transform: translateY(0); 
+      background-color: transparent; 
     }
   }
   
@@ -132,7 +152,6 @@ html {
   font-family: var(--font-sans);
 }
 
-
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   opacity: 0;
@@ -154,4 +173,12 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
 .no-spinner {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+@media print {
+  /* hide everything */
+  /* body > * { display: none; } */
+  
+  /* only show the print sheet */
+  /* #print-sheet { display: block !important; } */
 }
