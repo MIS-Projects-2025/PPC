@@ -33,11 +33,21 @@ export default function AuthenticatedLayout({ header, children }) {
 			<Sidebar />
 			<div className="h-full flex flex-col flex-1 overflow-y-hidden">
 				<NavBar />
-				<main className="p-4 z-10 flex-1 w-full relative overflow-y-auto">
+				<div className="px-4 flex-1 w-full relative overflow-y-auto">
 					<div className="w-full">{children}</div>
-				</main>
+				</div>
 				<Footer />
 			</div>
 		</div>
+		// <div className="flex bg-base-200 h-screen text-sm">
+		// 	<Sidebar />
+		// 	<div className="h-full flex flex-col flex-1 overflow-y-hidden">
+		// 		<NavBar />
+		// 		<div className="p-4 z-10 flex-1 relative w-full overflow-y-auto">
+		// 			<div className="w-full">{children}</div>
+		// 		</div>
+		// 		<Footer />
+		// 	</div>
+		// </div>
 	);
 }

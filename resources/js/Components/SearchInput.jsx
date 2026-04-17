@@ -4,7 +4,7 @@ import { FaSearch } from "react-icons/fa";
 import { MdClose } from "react-icons/md";
 
 const SearchInput = React.memo(function SearchInput({
-	inputClassName = "",
+	inputClassName = "ml-auto",
 	placeholder = "search",
 	initialSearchInput,
 	onSearchChange,
@@ -12,15 +12,19 @@ const SearchInput = React.memo(function SearchInput({
 	const [searchInput, setSearchInput] = useState(initialSearchInput);
 
 	useEffect(() => {
+		if (searchInput === initialSearchInput) {
+			return;
+		}
+
 		const handler = setTimeout(() => {
 			onSearchChange(searchInput);
 		}, 300);
 
 		return () => clearTimeout(handler);
-	}, [searchInput, onSearchChange]);
+	}, [searchInput, onSearchChange, initialSearchInput]);
 
 	return (
-		<label className={clsx("input h-7.5 ml-auto", inputClassName)}>
+		<label className={clsx("input h-7.5", inputClassName)}>
 			<FaSearch className="mr-2" />
 			<input
 				type="text"

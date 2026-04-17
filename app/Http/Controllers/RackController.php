@@ -5,9 +5,11 @@ namespace App\Http\Controllers;
 use Illuminate\Http\RedirectResponse;
 use Inertia\Inertia;
 use Inertia\Response;
+use App\Models\ProductionLine;
 use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\ProductionLineRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
+use Illuminate\Support\Facades\Log;
 use Laravel\Reverb\Concerns\InteractsWithApplications;
 
 class RackController extends Controller
@@ -18,12 +20,39 @@ class RackController extends Controller
         protected RackSlotRepositoryInterface $rackSlotRepo,
     ) {}
 
-    public function index(): Response
+    public function index(?string $productionLine = null): Response
     {
-        return Inertia::render('Racks/Index', [
-            'racks'           => $this->repo->all(),
-            'slots' => fn() => $this->rackSlotRepo->all()->keyBy('id'),
+        // Initialize $racks with a default value
+        $racks = null;
+
+        if ($productionLine) {
+            $pl = ProductionLine::where('name', strtoupper($productionLine))
+                ->firstOrFail();
+
+            // Use the specific repository method if PL is provided
+            $racks = $this->repo->getAllByProductionLine($pl->id);
+        } else {
+            // Default to all if no parameter is passed
+            $racks = $this->repo->all();
+        }
+
+        Log::info("Racks count: " . $racks->count());
+
+        return Inertia::render('Rack', [
+            'racks'           => $racks,
+            'slots'           => fn() => $this->rackSlotRepo->all()->keyBy('id'),
             'productionLines' => $this->productionLines->allActive(),
+        ]);
+    }
+
+    public function edit()
+    {
+        $plines = $this->productionLines->allActive();
+        $racksWithSlots = $this->repo->all();
+
+        return Inertia::render('RackConfigurator', [
+            'racks' => $racksWithSlots,
+            'plines' => $plines
         ]);
     }
 
@@ -53,14 +82,33 @@ class RackController extends Controller
             'production_line_id' => 'required|exists:production_lines,id',
             'label'              => 'required|string|max:50',
             'description'        => 'nullable|string|max:255',
+            'slots'              => 'required|array|min:1',
+            'slots.*.label'      => 'required|string|max:50|distinct',
+            'slots.*.is_active'  => 'required|boolean',
         ]);
 
-        $rack = $this->repo->create(request()->only('production_line_id', 'label', 'description'));
+        if ($this->repo->existByLabel($data['label'])) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => "Rack with label '{$data['label']}' already exists.",
+            ], 400);
+        }
+
+        $rack = $this->repo->create(
+            request()->only('production_line_id', 'label', 'description')
+        );
+
+        $rack->slots()->createMany(
+            collect($data['slots'])->map(fn($slot) => [
+                'label' => $slot['label'],
+                'is_active' => $slot['is_active'],
+            ])->all()
+        );
 
         return response()->json([
             'status'  => 'success',
             'message' => "Rack '{$rack->label}' created successfully.",
-            'data'    => $rack
+            'data'    => $rack->load('slots'),
         ], 201);
     }
 

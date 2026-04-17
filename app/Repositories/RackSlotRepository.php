@@ -10,7 +10,7 @@ class RackSlotRepository implements RackSlotRepositoryInterface
 {
   public function all(): Collection
   {
-    return RackSlot::all();
+    return RackSlot::with('rack.productionLine')->get();
   }
 
   public function find(int $id): RackSlot

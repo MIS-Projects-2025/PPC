@@ -9,12 +9,12 @@ const Pagination = ({
 	overallTotal = 0,
 	start = 0,
 	end = 0,
-	contentClassName = "bg-base-200",
+	contentClassName = "bg-base-200 mt-4",
 }) => {
 	return (
 		<div
 			className={clsx(
-				"flex justify-between items-center w-full mt-4 sticky -bottom-8 inset-shadow-lg rounded-lg px-2",
+				"flex justify-between items-center w-full sticky -bottom-8 inset-shadow-lg rounded-lg px-2",
 				contentClassName,
 			)}
 		>

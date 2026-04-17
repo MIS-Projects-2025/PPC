@@ -2,7 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\RedirectResponse;
+use App\Models\Lot;
+use App\Models\ProductionLine;
 use Inertia\Inertia;
 use Inertia\Response;
 use App\Services\LotService;
@@ -36,17 +37,34 @@ class LotController extends Controller
 
     // GET /lots
     // Full inventory — filterable by status, date, search
-    public function index(): Response
+    public function index(string $productionLine): Response
     {
-        $filters = request()->only('status', 'search', 'date', 'per_page');
+        $pl = ProductionLine::where('name', strtoupper($productionLine))
+            ->firstOrFail();
+
+        $filters = request()->only([
+            'status',
+            'search',
+            'date',
+            'received_date_from',
+            'received_date_to',
+            'released_date_from',
+            'released_date_to',
+            'aging',
+            'unslotted',
+            'per_page',
+        ]);
 
         return Inertia::render('LotsUpstream', [
-            'lots'    => $this->lotRepo->paginate($filters),
-
-            'racks' => fn() => $this->rackRepo->all(),
+            'lots' => Inertia::always(
+                fn() =>
+                $this->lotRepo->paginate($filters, $pl->id)
+            ),
+            'racks' => fn() => $this->rackRepo->getAllByProductionLine($pl->id),
             'slots' => fn() => $this->rackSlotRepo->all()->keyBy('id'),
-
             'filters' => $filters,
+            'productionLine' => $pl->name,
+            'totalEntries' => Lot::count(),
         ]);
     }
 
@@ -65,20 +83,20 @@ class LotController extends Controller
     {
         $data = request()->validate([
             'lot_id'    => 'required|string|max:50',
-            'partname' => 'required|string|max:255',
-            'qty'       => 'required|integer|min:1',
-            'slot_ids'  => 'required|array|min:1',
-            'slot_ids.*' => 'required|integer|exists:rack_slots,id',
+            'partname' => 'nullable|string|max:255',
+            'qty'       => 'nullable|integer|min:1',
+            'slot_ids'  => 'sometimes|array|min:0',
+            'slot_ids.*' => 'sometimes|integer|exists:rack_slots,id',
         ]);
 
-        $data['received_by'] = session('emp_data')['emp_id'] ?? null;
+        $data['received_by'] = session('emp_data')['emp_id'] ?? 'system';
 
         $result = $this->lotService->receive($data);
 
         return response()->json([
             'status'  => 'success',
             'message' => "Lot {$data['lot_id']} received successfully.",
-            'data'    => $result // Optionally return the new lot data
+            'data'    => $result,
         ]);
     }
 
@@ -90,7 +108,7 @@ class LotController extends Controller
             'reason' => 'required|string|max:500',
         ]);
 
-        $removedBy = request()->user()->employee_id ?? 'system';
+        $removedBy = session('emp_data')['emp_id'] ?? 'system';
 
         $this->lotService->remove($id, $removedBy, request('reason'));
 
@@ -102,15 +120,22 @@ class LotController extends Controller
 
     // POST /lots/{id}/release
     // Release lot to MH — called from release workflow
-    public function release(int $id)
+    public function release()
     {
-        $releasedBy = request()->user()->employee_id ?? 'system';
+        $releasedBy = session('emp_data')['emp_id'] ?? 'system';
 
-        $this->lotService->release($id, $releasedBy);
+        $data = request()->validate([
+            'lot_id'    => 'required|string|max:50',
+            'partname' => 'required|string|max:255',
+        ]);
+
+        $releasedLot = $this->lotService->release($data['lot_id'], $data['partname'], $releasedBy);
 
         return response()->json([
             'status'  => 'success',
-            'message' => 'Lot released to MH.'
+            'message' => 'Lot released to MH.',
+            'data'    => $releasedLot
+
         ]);
     }
 
@@ -123,16 +148,18 @@ class LotController extends Controller
             'partname' => 'sometimes|string|max:255',
             'qty'       => 'sometimes|integer|min:1',
             'status'    => 'sometimes|string|in:staged,removed,released',
+            'slot_ids'  => 'sometimes|array|min:0',
+            'slot_ids.*' => 'sometimes|integer|exists:rack_slots,id',
         ]);
 
         $data['modified_by'] = $userId;
 
-        $this->lotRepo->update($id, $data);
+        $updated = $this->lotRepo->update($id, $data);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Lot updated successfully',
-            'data' => $this->lotRepo->find($id),
+            'data' => $updated,
         ]);
     }
 }

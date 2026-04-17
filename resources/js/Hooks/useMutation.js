@@ -7,15 +7,18 @@ export function useMutation() {
 	const [errorMessage, setErrorMessage] = useState(null);
 	const [errorData, setErrorData] = useState(null);
 	const [data, setData] = useState(null);
-	const abortControllerRef = useRef(null);
+
+	const abortControllersRef = useRef({});
 
 	const mutate = async (url, options = {}) => {
-		if (abortControllerRef.current) {
-			abortControllerRef.current.abort();
+		const { cancelPrevious = false, mutationKey = "default" } = options;
+
+		if (cancelPrevious && abortControllersRef.current[mutationKey]) {
+			abortControllersRef.current[mutationKey].abort();
 		}
 
 		const controller = new AbortController();
-		abortControllerRef.current = controller;
+		abortControllersRef.current[mutationKey] = controller;
 
 		setIsLoading(true);
 		setErrorMessage(null);
@@ -29,6 +32,7 @@ export function useMutation() {
 				isContentTypeInclude = true,
 				additionalHeaders = {},
 			} = options;
+
 			const token = localStorage.getItem("authify-token");
 
 			const response = await fetch(url, {
@@ -37,7 +41,7 @@ export function useMutation() {
 					...(isContentTypeInclude && { "Content-Type": "application/json" }),
 					Accept: "application/json",
 					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
-						.content,
+						?.content,
 					...(token ? { Authorization: `Bearer ${token}` } : {}),
 					...additionalHeaders,
 				},
@@ -66,25 +70,28 @@ export function useMutation() {
 			setData(result);
 			return result;
 		} catch (error) {
-			console.log("🚀 ~ mutate ~ error:", error.data);
 			if (error.name !== "AbortError") {
 				setErrorData(error.data);
 				setErrorMessage(error.message);
 				throw error;
 			}
+			throw error;
 		} finally {
+			delete abortControllersRef.current[mutationKey];
 			setIsLoading(false);
 		}
 	};
 
 	useEffect(() => {
 		return () => {
-			abortControllerRef.current?.abort();
+			Object.values(abortControllersRef.current).forEach((controller) =>
+				controller.abort(),
+			);
 		};
 	}, []);
 
-	const cancel = () => {
-		abortControllerRef.current?.abort();
+	const cancel = (mutationKey = "default") => {
+		abortControllersRef.current[mutationKey]?.abort();
 	};
 
 	return { mutate, data, errorMessage, errorData, isLoading, cancel };

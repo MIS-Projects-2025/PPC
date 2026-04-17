@@ -1,34 +1,37 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
+
+const SCANNER_TIMEOUT_MS = 100;
 
 const useBarcodeScanner = (onScan) => {
-  const buffer = useRef('');
-  const lastKeyTime = useRef(Date.now());
+	const buffer = useRef("");
+	const lastKeyTime = useRef(Date.now());
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      const currentTime = Date.now();
-      const timeDiff = currentTime - lastKeyTime.current;
-      
-      if (timeDiff > 30) {
-        buffer.current = '';
-      }
+	useEffect(() => {
+		const handleKeyDown = (e) => {
+			const now = Date.now();
+			const timeDiff = now - lastKeyTime.current;
+			lastKeyTime.current = now;
 
-      if (e.key === 'Enter') {
-        if (buffer.current.length > 2) {
-          console.log("🚀 ~ ScanInput ~ value:", buffer.current);
-          onScan(buffer.current);
-          buffer.current = '';
-        }
-      } else if (e.key.length === 1) {
-        buffer.current += e.key;
-      }
+			if (timeDiff > SCANNER_TIMEOUT_MS) {
+				buffer.current = "";
+			}
 
-      lastKeyTime.current = currentTime;
-    };
+			if (e.key === "Enter") {
+				const currentBuffer = buffer.current;
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onScan]);
+				if (currentBuffer.length > 2) {
+					console.log("🚀 ~ ScanInput ~ value:", currentBuffer);
+					onScan(currentBuffer, e);
+					buffer.current = "";
+				}
+			} else if (e.key.length === 1) {
+				buffer.current += e.key;
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [onScan]);
 };
 
 export default useBarcodeScanner;

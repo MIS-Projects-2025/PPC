@@ -6,9 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Rack extends Model
 {
+    use SoftDeletes;
+
     protected $appends = ['shelves'];
 
     protected $fillable = [
@@ -34,5 +37,14 @@ class Rack extends Model
                 // Optional: Sort keys so shelf A comes before B
                 ->sortKeys()
         );
+    }
+
+    protected static function booted(): void
+    {
+        static::deleting(function (Rack $rack) {
+            $rack->label = $rack->label . '__deleted__' . $rack->id;
+            $rack->save();
+            $rack->slots()->each(fn($slot) => $slot->delete());
+        });
     }
 }

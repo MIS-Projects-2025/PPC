@@ -18,6 +18,21 @@ class RackRepository implements RackRepositoryInterface
       ->get();
   }
 
+  public function getAllByProductionLine(int $productionLineId): Collection
+  {
+    return Rack::with([
+      'productionLine',
+      'slots.lots.lot',
+    ])->where('production_line_id', $productionLineId)
+      ->orderBy('label')
+      ->get();
+  }
+
+  public function existByLabel(string $label): bool
+  {
+    return Rack::where('label', $label)->exists();
+  }
+
   public function byProductionLine(int $productionLineId): Collection
   {
     return Rack::where('production_line_id', $productionLineId)

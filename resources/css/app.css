@@ -1,4 +1,5 @@
-@import "https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700&display=swap";
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700&display=swap");
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
 
 @import "tailwindcss";
 @plugin "daisyui" {
@@ -33,6 +34,8 @@
       background-color: transparent; 
     }
   }
+
+  --font-jet-brains: "JetBrains Mono";
   
   --font-sans: "Inter", sans-serif;
   
@@ -175,10 +178,40 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   appearance: textfield;
 }
 
-@media print {
-  /* hide everything */
-  /* body > * { display: none; } */
+/* @media print {
+  .slot-card {
+    break-inside: avoid;
+  }
   
-  /* only show the print sheet */
-  /* #print-sheet { display: block !important; } */
+  .rack-group {
+    break-inside: avoid-page;
+  }
+} */
+
+body.print-mode-active > :not(#print-sheet-wrapper) {
+  display: none !important;
+}
+
+@media print {
+  /* 1. Hide UI noise */
+  nav, footer, aside, .navbar, button {
+    display: none !important;
+  }
+
+  /* 2. CRITICAL: Neutralize the Fixed Portal */
+  #print-sheet, 
+  #print-sheet > div {
+    position: static !important; /* Removes 'fixed' */
+    overflow: visible !important; /* Removes 'scrollbar' behavior */
+    height: auto !important;
+    width: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* 3. Ensure the body allows long content */
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+  }
 }

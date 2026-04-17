@@ -12,6 +12,7 @@ class LotPosition extends Model
     protected $fillable = [
         'lot_id',
         'rack_slot_id',
+        'production_line_id',
         'assigned_at',
         'assigned_by',
         'released_at',
@@ -25,12 +26,21 @@ class LotPosition extends Model
 
     public function lot(): BelongsTo
     {
-        return $this->belongsTo(Lot::class);
+        // 1. Related model
+        // 2. The foreign key on this table ('lot_id')
+        // 3. The primary key on the Lot table ('id')
+        return $this->belongsTo(Lot::class, 'lot_id', 'id');
+    }
+
+    public function productionLine(): BelongsTo
+    {
+        return $this->belongsTo(ProductionLine::class, 'production_line_id', 'id');
     }
 
     public function rackSlot(): BelongsTo
     {
-        return $this->belongsTo(RackSlot::class);
+        return $this->belongsTo(RackSlot::class)->withTrashed();
+        // return $this->belongsTo(RackSlot::class);
     }
 
     public function isActive(): bool

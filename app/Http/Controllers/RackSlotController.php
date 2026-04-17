@@ -64,7 +64,7 @@ class RackSlotController extends Controller
     // POST /rack-slots/{id}/mark-full
     public function markFull(int $id): RedirectResponse
     {
-        $by = request()->user()->employee_id ?? 'system';
+        $by = session('emp_data')['emp_id'] ?? 'system';
         $this->service->markFull($id, $by);
         return back();
     }

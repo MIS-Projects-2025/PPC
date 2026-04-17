@@ -1,6 +1,6 @@
 import Dropdown from "@/Components/sidebar/Dropdown";
 import SidebarLink from "@/Components/sidebar/SidebarLink";
-import { BiImport } from "react-icons/bi";
+import { BiBarcode, BiCabinet, BiImport } from "react-icons/bi";
 import { FaBatteryHalf, FaCheckCircle, FaRecycle } from "react-icons/fa";
 import { FaCodeBranch, FaLayerGroup, FaTruckPickup } from "react-icons/fa6";
 import {
@@ -65,6 +65,39 @@ export default function NavLinks({ isCollapse = false }) {
 						href: route("residual.dashboard"),
 						label: "Residual Dashboard",
 						icon: <FaRecycle className="w-4 h-4" />,
+						notification: false,
+					},
+				]}
+				notification={false}
+			/>
+
+			<Dropdown
+				isIconOnly={isCollapse}
+				label="Production"
+				icon={<MdConveyorBelt className="w-4 h-4" />}
+				links={[
+					{
+						href: route("lot-upstream.index", { productionLine: "pl1" }),
+						label: "PL1 Lot Controller",
+						icon: <MdConveyorBelt className="w-4 h-4" />,
+						notification: false,
+					},
+					{
+						href: route("lot-upstream.index", { productionLine: "pl6" }),
+						label: "PL6 Lot Controller",
+						icon: <MdConveyorBelt className="w-4 h-4" />,
+						notification: false,
+					},
+					{
+						href: route("rack.edit"),
+						label: "Rack Configurator",
+						icon: <BiCabinet className="w-4 h-4" />,
+						notification: false,
+					},
+					{
+						href: route("rack.barcode"),
+						label: "Rack Barcodes",
+						icon: <BiBarcode className="w-4 h-4" />,
 						notification: false,
 					},
 				]}

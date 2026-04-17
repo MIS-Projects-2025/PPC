@@ -103,16 +103,21 @@ function getRackInventoryData()
 }
 
 Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
-    Route::get('/', [LotController::class, 'index'])->name('index');
-    Route::patch('/{id}/update', [LotController::class, 'update'])->name('update');
+    Route::get('/{productionLine}', [LotController::class, 'index'])
+        ->name('index');
+    Route::patch('/{id}/update', [LotController::class, 'update'])->name('update')->where('lot_id', '[^/]+');
     Route::post('/store', [LotController::class, 'store'])->name('store');
+    Route::post('/release', [LotController::class, 'release'])->name('release')->where('lot_id', '[^/]+');
 });
 
 Route::prefix('/rack')->name('rack.')->group(function () {
-    Route::get('/', [RackController::class, 'index']);
+    Route::get('/{productionLine?}', [RackController::class, 'index'])->name('index');
+    Route::get('/', [RackController::class, 'index'])->name('index');
     Route::get('/barcode', [RackController::class, 'all'])->name('barcode');
+    Route::post('/', [RackController::class, 'store'])->name('store');
+    Route::get('/edit', [RackController::class, 'edit'])->name('edit');
+    Route::delete('{id}/delete', [RackController::class, 'destroy'])->name('destroy');
 });
-
 
 /*
 |--------------------------------------------------------------------------

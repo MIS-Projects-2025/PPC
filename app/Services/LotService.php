@@ -35,9 +35,34 @@ class LotService
 
                 if (!$slot->isAvailable()) {
                     throw ValidationException::withMessages([
-                        'slot_ids' => "Slot {$slot->label} is already occupied or marked full.",
+                        'slot_ids' => "Slot {$slot->label} is marked full.",
                     ]);
                 }
+            }
+
+            $productionLineIds = collect($data['slot_ids'])
+                ->map(function ($slotId) {
+                    return $this->slots->find($slotId)
+                        ->rack
+                        ->production_line_id;
+                })
+                ->unique();
+
+            if ($productionLineIds->count() > 1) {
+                throw ValidationException::withMessages([
+                    'slot_ids' => 'All selected slots must belong to the same production line.',
+                ]);
+            }
+
+            $productionLineId = $productionLineIds->first();
+
+            $alreadyStaged = Lot::where('lot_id', $data['lot_id'])
+                ->where('partname', $data['partname'])
+                ->where('status', 'staged')
+                ->exists();
+
+            if ($alreadyStaged) {
+                throw new \Exception('Lot is already staged.');
             }
 
             // 2. Create the lot record
@@ -52,7 +77,12 @@ class LotService
 
             // 3. Assign all slots atomically
             foreach ($data['slot_ids'] as $slotId) {
-                $this->positions->assign($lot->id, $slotId, $data['received_by']);
+                $this->positions->assign(
+                    $lot->id,
+                    $slotId,
+                    $data['received_by'],
+                    $productionLineId,
+                );
             }
 
             return $lot->load('activePositions.rackSlot');
@@ -99,14 +129,21 @@ class LotService
      * Release a lot to the MH (normal flow through loading plan).
      * Frees all slots and flips status to released.
      *
-     * @param  int     $lotId
+     * @param  string  $lotId
+     * @param  string  $partname
      * @param  string  $releasedBy
      * @return Lot
      */
-    public function release(int $lotId, string $releasedBy): Lot
+    public function release(string $lotId, string $partname, string $releasedBy): Lot
     {
-        return DB::transaction(function () use ($lotId, $releasedBy) {
-            $lot = $this->lots->find($lotId);
+        return DB::transaction(function () use ($lotId, $partname, $releasedBy) {
+            $lot = $this->lots->findLastStaged($lotId, $partname);
+
+            if (!$lot) {
+                throw ValidationException::withMessages([
+                    'lot' => 'No staged lot found for this scan. It may have already been released.',
+                ]);
+            }
 
             if ($lot->status !== 'staged') {
                 throw ValidationException::withMessages([
@@ -114,9 +151,9 @@ class LotService
                 ]);
             }
 
-            $this->positions->releaseByLot($lotId, $releasedBy);
+            $this->positions->releaseByLot($lot->id, $releasedBy);
 
-            return $this->lots->update($lotId, ['status' => 'released']);
+            return $this->lots->update($lot->id, ['status' => 'released']);
         });
     }
 }
