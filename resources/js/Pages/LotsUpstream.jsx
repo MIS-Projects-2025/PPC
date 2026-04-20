@@ -16,6 +16,7 @@ const RACK_SELECTION_ID = "lots_upstream_rack_selector_modal";
 
 import Pagination from "@/Components/Pagination";
 import SearchInput from "@/Components/SearchInput";
+import { useDownloadFile } from "@/Hooks/useDownload";
 import { parseLotScanInput } from "@/Lib/parseLotScanInput";
 import { router } from "@inertiajs/react";
 
@@ -171,45 +172,7 @@ function ScanPanel({ lotActions }) {
 					/>
 				</div>
 			))}
-			{/* <div>
-				<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
-					Lot ID
-				</label>
 
-				<input
-					value={pendingLotToBeAdded.lot_id || ""}
-					className={clsx("input", isScanning ? "animate-pulse" : "")}
-					onChange={(e) => {
-						editPendingLot("lot_id", e.target.value);
-					}}
-				/>
-			</div>
-			<div>
-				<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
-					Partname
-				</label>
-
-				<input
-					value={pendingLotToBeAdded.partname || ""}
-					className={clsx("input", isScanning ? "animate-pulse" : "")}
-					onChange={(e) => {
-						editPendingLot("partname", e.target.value);
-					}}
-				/>
-			</div>
-			<div>
-				<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
-					Qty
-				</label>
-
-				<input
-					value={pendingLotToBeAdded.qty || ""}
-					className={clsx("input", isScanning ? "animate-pulse" : "")}
-					onChange={(e) => {
-						editPendingLot("qty", e.target.value);
-					}}
-				/>
-			</div> */}
 			<SlotAssign />
 
 			<CancellableActionButton
@@ -388,9 +351,11 @@ export default function LotsUpstream({
 		setEditingLot,
 		setSlots,
 		toggleSlotPendingLot,
+		editPendingLot,
 		scanResult,
 		receiveLot,
 		appendRecentUpdate,
+		pendingLotToBeAdded,
 		clearSlotPendingLot,
 		clearRecentUpdate,
 		slotPendingLot,
@@ -423,6 +388,21 @@ export default function LotsUpstream({
 				preserveScroll: true,
 			},
 		);
+	};
+
+	const {
+		download: downloadLots,
+		isLoading,
+		errorMessage,
+		abort: abortDownload,
+	} = useDownloadFile();
+
+	const download = async () => {
+		const params = Object.fromEntries(
+			Object.entries(filters).filter(([, v]) => v !== "" && v !== false),
+		);
+
+		downloadLots(route("api.download.downloadLots"), params);
 	};
 
 	const resetFilters = () => {
@@ -496,6 +476,14 @@ export default function LotsUpstream({
 	useBarcodeScanner((currentBuffer, e) => {
 		const parsed = parseLotScanInput(currentBuffer);
 		console.log("🚀 ~ LotsUpstream ~ parsed:", parsed);
+
+		if (
+			parsed.type !== LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE &&
+			lotActions.focusedField
+		) {
+			const current = pendingLotToBeAdded[lotActions.focusedField] ?? "";
+			editPendingLot(lotActions.focusedField, current.slice(0, -1));
+		}
 
 		if (
 			parsed.type === LOT_UPSTREAM_MODES.TYPE_SLOT ||
@@ -658,7 +646,7 @@ export default function LotsUpstream({
 							<button
 								type="button"
 								className={clsx(
-									"btn btn-primary border-2 h-full",
+									"btn btn-primary border-2 h-full rounded-sm",
 									isScanning
 										? "border-success shadow-success"
 										: "border-transparent",
@@ -672,7 +660,7 @@ export default function LotsUpstream({
 							<SearchInput
 								initialSearchInput={filters.search}
 								onSearchChange={(searchInput) => set("search", searchInput)}
-								inputClassName="w-30 ml-0"
+								inputClassName="w-30 ml-0 rounded-sm"
 							/>
 						</div>
 
@@ -789,14 +777,21 @@ export default function LotsUpstream({
 							<button
 								type="button"
 								onClick={apply}
-								className="btn btn-xs btn-primary text-[12px]"
+								className="btn w-36 rounded-sm btn-xs btn-primary text-[12px]"
 							>
 								Apply filters
 							</button>
 							<button
 								type="button"
+								onClick={download}
+								className="btn w-40 rounded-sm btn-xs btn-primary text-[12px]"
+							>
+								Download this data <FaDownload />
+							</button>
+							<button
+								type="button"
 								onClick={resetFilters}
-								className="btn btn-xs btn-ghost text-[12px]"
+								className="btn btn-xs rounded-sm btn-ghost text-[12px]"
 							>
 								reset filters
 							</button>

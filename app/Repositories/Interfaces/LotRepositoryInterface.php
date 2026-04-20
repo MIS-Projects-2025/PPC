@@ -14,7 +14,8 @@ interface LotRepositoryInterface
     public function findLastStaged(string $lotId, string $partname): ?Lot;
     public function today(): Collection;
     public function staged(): Collection;
-    public function aging(): Collection;             // received_at >= 3 days ago
+    public function aging(): Collection;
+    public function buildLotQuery(array $filters, ?int $productionLineId);            // received_at >= 3 days ago
     public function paginate(array $filters, int $productionLineId): LengthAwarePaginator;
     public function create(array $data): Lot;
     public function update(int $id, array $data): Lot;

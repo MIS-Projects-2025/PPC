@@ -18,28 +18,26 @@ function pad(n) {
 }
 
 function SlotGrid({ shelves }) {
-	const letters = Object.keys(shelves).sort();
-	const colCount = (shelves[letters[0]] ?? []).length;
+	const rowKeys = Object.keys(shelves).sort();
+	const colCount = (shelves[rowKeys[0]] ?? []).length;
 
 	return (
-		<div className="border border-base-content/50 rounded-lg bg-base-100 p-4 overflow-x-auto">
-			<div className="flex gap-1 mb-1 pl-7">
+		<div>
+			{/* Header: Letters */}
+			<div className="flex gap-1 mb-1 ml-8">
 				{Array.from({ length: colCount }, (_, i) => (
-					<div
-						key={i}
-						className="w-10 text-center text-[10px] text-base-content font-mono flex-shrink-0"
-					>
-						{pad(i + 1)}
+					<div key={i} className="w-10 text-center text-[10px] opacity-50">
+						{LETTERS[i]}
 					</div>
 				))}
 			</div>
 
-			{letters.map((letter) => (
-				<div key={letter} className="flex items-center gap-1 mb-1">
-					<div className="w-6 text-center text-xs font-mono font-medium text-base-content flex-shrink-0">
-						{letter}
+			{rowKeys.map((rowNumber) => (
+				<div key={rowNumber} className="flex gap-1 mb-1">
+					<div className="w-6 text-[10px] font-bold flex items-center justify-center bg-base-300 rounded">
+						{rowNumber}
 					</div>
-					{shelves[letter].map((slot) => (
+					{shelves[rowNumber].map((slot) => (
 						<div
 							key={slot.label}
 							className={[
@@ -58,8 +56,6 @@ function SlotGrid({ shelves }) {
 	);
 }
 
-// ─── Individual rack row ──────────────────────────────────────────────────────
-
 function RackRow({ rack }) {
 	const toast = useToast();
 	const [expanded, setExpanded] = useState(false);
@@ -75,6 +71,11 @@ function RackRow({ rack }) {
 		0,
 	);
 
+	const [isEditing, setIsEditing] = useState(false);
+	const [newName, setNewName] = useState(rack.label || rack.name);
+
+	const { mutate: updateRack, isLoading: isUpdateLoading } = useMutation();
+
 	const {
 		mutate: deleteRack,
 		isLoading: isDeleteRackLoading,
@@ -82,6 +83,25 @@ function RackRow({ rack }) {
 		errorData: deleteRackErrorData,
 		cancel: deleteRackCancel,
 	} = useMutation();
+
+	async function handleRename() {
+		if (!newName.trim() || newName === (rack.label || rack.name)) {
+			setIsEditing(false);
+			return;
+		}
+
+		try {
+			await updateRack(route("rack.update", rack.id), {
+				method: "PATCH",
+				body: { label: newName.trim() },
+			});
+			toast.success("Rack renamed!");
+			setIsEditing(false);
+			router.reload();
+		} catch (error) {
+			toast.error(error.message);
+		}
+	}
 
 	function handleDelete() {
 		if (!confirmDelete) {
@@ -105,7 +125,7 @@ function RackRow({ rack }) {
 	return (
 		<div className="border border-base-content/50 rounded-lg overflow-hidden">
 			<div className="flex items-center justify-between px-4 py-3 bg-base-100">
-				<div className="flex items-center gap-4">
+				<div className="flex items-center gap-4 w-full">
 					<button
 						type="button"
 						onClick={() => setExpanded((v) => !v)}
@@ -118,19 +138,61 @@ function RackRow({ rack }) {
 						)}
 					</button>
 
-					<div>
-						<span className="text-sm font-medium text-base-content">
-							{rack.name}
+					{rack.production_line && (
+						<span className="ml-2 text-xs text-base-content">
+							{rack.production_line.name}
 						</span>
-						{rack.production_line && (
-							<span className="ml-2 text-xs text-base-content">
-								{rack.production_line.name}
-							</span>
-						)}
-					</div>
+					)}
 
-					<div className="flex gap-3 text-xs text-base-content">
-						<span>{rack?.label ?? "-"}</span>
+					{isEditing ? (
+						<div className="flex items-center gap-2">
+							<input
+								autoFocus
+								type="text"
+								className="input input-sm input-bordered w-48"
+								value={newName}
+								onChange={(e) => setNewName(e.target.value)}
+								onKeyDown={(e) => e.key === "Enter" && handleRename()}
+							/>
+							<button
+								type="button"
+								className="btn btn-sm btn-primary"
+								onClick={handleRename}
+								disabled={isUpdateLoading}
+							>
+								{isUpdateLoading ? "..." : "Save"}
+							</button>
+							<button
+								type="button"
+								className="btn btn-sm btn-ghost"
+								onClick={() => {
+									setIsEditing(false);
+									setNewName(rack.label);
+								}}
+							>
+								Cancel
+							</button>
+						</div>
+					) : (
+						<div className="group flex items-center gap-2">
+							<button
+								type="button"
+								className="btn hover:text-primary cursor-pointer font-bold text-lg"
+								onClick={() => setIsEditing(true)}
+							>
+								{rack.label || rack.name}
+							</button>
+							<button
+								type="button"
+								className="opacity-0 group-hover:opacity-100 btn btn-ghost btn-xs"
+								onClick={() => setIsEditing(true)}
+							>
+								Edit Name
+							</button>
+						</div>
+					)}
+
+					<div className="ml-auto flex gap-3 text-xs text-base-content">
 						<span>{letters.length} layers</span>
 						<span>
 							{activeSlots}/{totalSlots} active
@@ -143,6 +205,7 @@ function RackRow({ rack }) {
 						<span className="text-xs text-red-500">Are you sure?</span>
 					)}
 					<button
+						type="button"
 						className="btn btn-ghost"
 						onClick={() => setConfirmDelete(!confirmDelete)}
 					>
@@ -183,10 +246,10 @@ export default function RackConfigurator({ racks, plines }) {
 
 	const slots = useMemo(() => {
 		const rows = [];
-		for (let l = 0; l < appliedLayers; l++) {
+		for (let r = 1; r <= appliedLayers; r++) {
 			const row = [];
-			for (let c = 1; c <= appliedCols; c++) {
-				row.push(`${LETTERS[l]}${pad(c)}`);
+			for (let c = 0; c < appliedCols; c++) {
+				row.push(`${LETTERS[c]}${pad(r)}`);
 			}
 			rows.push(row);
 		}
@@ -341,26 +404,25 @@ export default function RackConfigurator({ racks, plines }) {
 				Apply Dimensions
 			</button>
 
-			{/* Grid */}
 			<div className="border border-base-content/50 rounded-lg bg-base-100 p-4 overflow-x-auto">
-				{/* Column headers */}
-				<div className="flex gap-1 mb-1 pl-7">
-					{Array.from({ length: appliedCols }, (_, i) => (
-						<div
-							key={i}
-							className="w-10 text-center text-[10px] text-base-content font-mono flex-shrink-0"
-						>
-							{pad(i + 1)}
-						</div>
-					))}
+				<div className="flex mb-1">
+					<div className="flex mb-2 gap-1 ml-9">
+						{" "}
+						{Array.from({ length: appliedCols }, (_, i) => (
+							<div
+								key={i}
+								className="w-10 text-center text-xs font-bold opacity-50"
+							>
+								{LETTERS[i]}
+							</div>
+						))}
+					</div>
 				</div>
 
-				{/* Rows */}
-				{slots.map((row, li) => (
-					<div key={li} className="flex items-center gap-1 mb-1">
-						{/* Layer label */}
-						<div className="w-6 text-center text-xs font-mono font-medium text-base-content flex-shrink-0">
-							{LETTERS[li]}
+				{slots.map((row, rowIndex) => (
+					<div key={rowIndex} className="flex items-center gap-1 mb-1">
+						<div className="w-8 flex-shrink-0 flex items-center justify-center font-bold text-sm bg-base-200 rounded">
+							{rowIndex + 1}
 						</div>
 
 						{row.map((slotId) => {

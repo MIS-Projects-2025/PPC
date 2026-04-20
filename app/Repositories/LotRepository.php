@@ -69,7 +69,7 @@ class LotRepository implements LotRepositoryInterface
       ->get();
   }
 
-  public function paginate(array $filters, int $productionLineId): LengthAwarePaginator
+  public function buildLotQuery(array $filters, ?int $productionLineId)
   {
     $query = Lot::query();
 
@@ -81,9 +81,11 @@ class LotRepository implements LotRepositoryInterface
       $query->aging();
     }
 
-    $query->whereHas('latestPosition', function ($q) use ($productionLineId) {
-      $q->where('production_line_id', $productionLineId);
-    });
+    if ($productionLineId) {
+      $query->whereHas('latestPosition', function ($q) use ($productionLineId) {
+        $q->where('production_line_id', $productionLineId);
+      });
+    }
 
     if (!empty($filters['search'])) {
       $query->where(function ($q) use ($filters) {
@@ -92,23 +94,26 @@ class LotRepository implements LotRepositoryInterface
       });
     }
 
-    if (!empty($filters['received_date_from']) && !empty($filters['received_date_to'])) {
-      $from = Carbon::parse($filters['received_date_from'], 'Asia/Manila')->startOfDay()->utc();
-      $to   = Carbon::parse($filters['received_date_to'],   'Asia/Manila')->endOfDay()->utc();
-      $query->whereBetween('received_at', [$from, $to]);
-    }
-
-    if (!empty($filters['released_date_from']) && !empty($filters['released_date_to'])) {
-      $from = Carbon::parse($filters['released_date_from'], 'Asia/Manila')->startOfDay()->utc();
-      $to   = Carbon::parse($filters['released_date_to'],   'Asia/Manila')->endOfDay()->utc();
-      $query->whereBetween('released_at', [$from, $to]);
+    foreach (['received', 'released'] as $type) {
+      if (!empty($filters["{$type}_date_from"]) && !empty($filters["{$type}_date_to"])) {
+        $from = Carbon::parse($filters["{$type}_date_from"], 'Asia/Manila')->startOfDay()->utc();
+        $to   = Carbon::parse($filters["{$type}_date_to"], 'Asia/Manila')->endOfDay()->utc();
+        $query->whereBetween("{$type}_at", [$from, $to]);
+      }
     }
 
     if (!empty($filters['unslotted'])) {
       $query->whereDoesntHave('activePositions');
     }
 
-    return $query->latest('received_at')->paginate($filters['per_page'] ?? 20);
+    return $query;
+  }
+
+  public function paginate(array $filters, int $productionLineId): LengthAwarePaginator
+  {
+    return $this->buildLotQuery($filters, $productionLineId)
+      ->latest('received_at')
+      ->paginate($filters['per_page'] ?? 20);
   }
 
   public function create(array $data): Lot
@@ -127,7 +132,16 @@ class LotRepository implements LotRepositoryInterface
       $lot->update($data);
 
       if ($slotIds !== null) {
+        $currentlyOccupiedSlotIds = LotPosition::where('lot_id', $lot->id)
+          ->whereNull('released_at')
+          ->pluck('rack_slot_id')
+          ->all();
+
         foreach ($slotIds as $slotId) {
+          if (in_array($slotId, $currentlyOccupiedSlotIds)) {
+            continue;
+          }
+
           $slot = RackSlot::find($slotId);
 
           if (!$slot->isAvailable()) {
@@ -139,10 +153,8 @@ class LotRepository implements LotRepositoryInterface
 
         $now = Carbon::now('UTC');
 
-        // Correction: hard-delete positions that are no longer in the new set
-        // (these were data entry errors, not actual removals)
         LotPosition::where('lot_id', $lot->id)
-          ->whereNull('released_at')          // don't touch already-released records
+          ->whereNull('released_at')
           ->whereNotIn('rack_slot_id', $slotIds)
           ->delete();
 

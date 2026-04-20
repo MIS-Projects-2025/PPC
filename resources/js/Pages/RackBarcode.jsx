@@ -80,9 +80,11 @@ export default function RackBarcode({ racks }) {
 			{/* Control Barcode */}
 			<div className="mb-8 print:break-inside-avoid">
 				<h2 className="font-bold mb-3">Control</h2>
-				<div className="flex justify-between">
-					<SlotBarcode value="DONE" label="DONE" />
-					<SlotBarcode value="CANCEL" label="CANCEL" />
+				<div className="flex flex-wrap gap-4 justify-between">
+					<SlotBarcode
+						value={LOT_UPSTREAM_MODES.DONE}
+						label={LOT_UPSTREAM_MODES.DONE}
+					/>
 					<SlotBarcode
 						value={`FIELD:${LOT_UPSTREAM_MODES.LOTID}`}
 						label={`FIELD:${LOT_UPSTREAM_MODES.LOTID}`}
@@ -97,12 +99,12 @@ export default function RackBarcode({ racks }) {
 					/>
 
 					<SlotBarcode
-						value="RECEIVING"
+						value={LOT_UPSTREAM_MODES.RECEIVING}
 						label="RECEIVING MODE"
 						className={"bg-lime-200"}
 					/>
 					<SlotBarcode
-						value="RELEASING"
+						value={LOT_UPSTREAM_MODES.RELEASING}
 						label="RELEASING MODE"
 						className={"bg-rose-300"}
 					/>

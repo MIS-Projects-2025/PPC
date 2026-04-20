@@ -1,13 +1,29 @@
+import { useToast } from "@/Hooks/useToast";
 import clsx from "clsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaTimes } from "react-icons/fa";
 import { PiArrowFatDownFill } from "react-icons/pi";
+import { Tooltip } from "react-tooltip";
 import { create } from "zustand";
 
 const useInternalStore = create((set) => ({
+	racks: [], // Add racks to store
 	selectedSlot: null,
 	isDetailedView: true,
 	slotsMap: {},
+	initializeRacks: (racks) => set({ racks }),
+	updateSlot: (slotId, payload) =>
+		set((state) => ({
+			racks: state.racks.map((rack) => ({
+				...rack,
+				shelves: Object.fromEntries(
+					Object.entries(rack.shelves).map(([label, slots]) => [
+						label,
+						slots.map((s) => (s.id === slotId ? { ...s, ...payload } : s)),
+					]),
+				),
+			})),
+		})),
 	setSelectedSlot: (slot) => set({ selectedSlot: slot }),
 	clearSelectedSlot: () => set({ selectedSlot: null }),
 	setIsDetailedView: (val) => set({ isDetailedView: val }),
@@ -25,6 +41,12 @@ export default function RackManagement({
 }) {
 	const [primedVisible, setPrimedVisible] = useState(false);
 	const isDetailedView = useInternalStore((state) => state.isDetailedView);
+	const initializeRacks = useInternalStore((state) => state.initializeRacks);
+	const storeRacks = useInternalStore((state) => state.racks);
+
+	useEffect(() => {
+		initializeRacks(racks);
+	}, [racks, initializeRacks]);
 
 	useEffect(() => {
 		const id = requestIdleCallback(() => setPrimedVisible(true), {
@@ -61,7 +83,7 @@ export default function RackManagement({
 				</div>
 
 				<div className="grid w-full gap-4">
-					{racks.map((rack) => (
+					{storeRacks.map((rack) => (
 						<RackGrid
 							key={rack.id}
 							rack={rack}
@@ -112,15 +134,6 @@ function RackGrid({
 		if (!selectedSlot) return new Set();
 		return new Set(selectedSlot.lots.flatMap((l) => l.slot_ids));
 	}, [selectedSlot]);
-
-	// useEffect(() => {
-	//   const observer = new IntersectionObserver(
-	//     ([entry]) => { if (entry.isIntersecting) setVisible(true); },
-	//     { threshold: 0.01 }
-	//   );
-	//   if (ref.current) observer.observe(ref.current);
-	//   return () => observer.disconnect();
-	// }, []);
 
 	return (
 		<section
@@ -189,7 +202,9 @@ const SlotButton = React.memo(function SlotButton({
 }) {
 	const setSelectedSlot = useInternalStore((state) => state.setSelectedSlot);
 	const isDetailedView = useInternalStore((state) => state.isDetailedView);
-
+	const updateSlot = useInternalStore((state) => state.updateSlot);
+	const toast = useToast();
+	const [hovered, setHovered] = useState(false);
 	const hasLots = slot.lots.length > 0;
 	const slotLabel = slot?.label || slot?.meta?.label;
 	const isMultiLot = slot.lots.length > 1;
@@ -207,6 +222,39 @@ const SlotButton = React.memo(function SlotButton({
 		if (onSlotSelect) onSlotSelect(slot);
 	};
 
+	const handleMarkSlotFullToggle = async () => {
+		console.log("slot", slot);
+
+		const updateType = isManuallyFull ? "clearFull" : "markFull";
+		const url = route(`rack.rack-slot.${updateType}`, { id: slot.id });
+		const token = localStorage.getItem("authify-token");
+		const nextValue = !isManuallyFull;
+
+		try {
+			const response = await fetch(url, {
+				method: "PATCH",
+				headers: {
+					Accept: "application/json",
+					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
+						?.content,
+					...(token ? { Authorization: `Bearer ${token}` } : {}),
+				},
+				body: JSON.stringify({
+					is_manually_full: !isManuallyFull,
+				}),
+			});
+
+			if (response.ok) {
+				updateSlot(slot.id, { is_manually_full: nextValue });
+			}
+
+			const data = await response.json();
+			console.log(data);
+		} catch (error) {
+			console.error(error);
+		}
+	};
+
 	return (
 		<button
 			type="button"
@@ -214,16 +262,18 @@ const SlotButton = React.memo(function SlotButton({
 				setSelectedSlot(slot);
 				handleSlotClick(slot);
 			}}
+			onMouseEnter={() => setHovered(true)}
+			onMouseLeave={() => setHovered(false)}
 			className={clsx(
-				"btn min-h-12 z-2 border transition-all py-1 flex flex-col items-center justify-center relative group",
+				"relative btn min-h-12 z-2 border transition-all py-1 flex flex-col items-center justify-center relative group",
 				multiSelect && isSelected && "ring-2 ring-primary animate-pulse",
 				"rounded-none -ml-[1px] -mt-[1px]",
 				{
-					"bg-rose-500 border-rose-700": isManuallyFull,
+					"bg-rose-500 border-rose-700 cursor-not-allowed": isManuallyFull,
 					"bg-black border-black": !isSlotEnabled,
 					"min-w-15 text-xs font-mono p-0": !isDetailedView,
-					"": isHighlighted || hasLots, // Bring active/filled slots to front so their border shows over neighbors
-					"font-extrabold border-accent bg-accent/10": isHighlighted, // Highest z-index for highlighted
+					"": isHighlighted || hasLots,
+					"font-extrabold border-accent bg-accent/10": isHighlighted,
 					"!border-base-content/20":
 						!isHighlighted && !hasLots && !isManuallyFull,
 					"border-violet bg-violet/10":
@@ -234,6 +284,26 @@ const SlotButton = React.memo(function SlotButton({
 				},
 			)}
 		>
+			<div
+				className={clsx(
+					"absolute left-0 -top-8 flex transition-all duration-200 ease-out",
+					{
+						"opacity-100 translate-y-0 pointer-events-auto": hovered,
+						"opacity-0 -translate-y-2 pointer-events-none": !hovered,
+					},
+				)}
+			>
+				<button
+					type="button"
+					className={clsx(
+						"btn text-neutral hover:bg-primary bg-accent z-100 text-sm rounded",
+					)}
+					onClick={() => handleMarkSlotFullToggle()}
+				>
+					{isManuallyFull ? "Mark as Empty" : "Mark as Full"}
+				</button>
+			</div>
+
 			{multiSelect && (
 				<div className="absolute top-0 right-0">
 					<input

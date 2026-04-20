@@ -10,6 +10,7 @@ use App\Services\LotService;
 use App\Repositories\Interfaces\LotRepositoryInterface;
 use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
+use Illuminate\Support\Facades\Log;
 
 class LotController extends Controller
 {
@@ -20,8 +21,6 @@ class LotController extends Controller
         protected RackSlotRepositoryInterface $rackSlotRepo
     ) {}
 
-    // GET /lots/receive
-    // Lot receiving page — scan panel + today's received list
     public function receive(): Response
     {
         return Inertia::render('Lots/Receive', [
@@ -35,8 +34,6 @@ class LotController extends Controller
         return $this->lotRepo->all();
     }
 
-    // GET /lots
-    // Full inventory — filterable by status, date, search
     public function index(string $productionLine): Response
     {
         $pl = ProductionLine::where('name', strtoupper($productionLine))
@@ -118,8 +115,7 @@ class LotController extends Controller
         ]);
     }
 
-    // POST /lots/{id}/release
-    // Release lot to MH — called from release workflow
+
     public function release()
     {
         $releasedBy = session('emp_data')['emp_id'] ?? 'system';
@@ -161,5 +157,25 @@ class LotController extends Controller
             'message' => 'Lot updated successfully',
             'data' => $updated,
         ]);
+    }
+
+    public function download()
+    {
+        $filters = request()->only([
+            'status',
+            'search',
+            'date',
+            'received_date_from',
+            'received_date_to',
+            'released_date_from',
+            'released_date_to',
+            'aging',
+            'unslotted',
+            'per_page',
+        ]);
+
+        return $this->lotService->downloadFilteredExport(
+            $filters
+        );
     }
 }

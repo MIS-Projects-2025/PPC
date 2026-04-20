@@ -24,7 +24,8 @@ use App\Http\Controllers\{
     PlRuleController,
     WipController,
     LotController,
-    RackController
+    RackController,
+    RackSlotController,
 };
 use App\Http\Controllers\General\{AdminController, ProfileController};
 
@@ -111,12 +112,17 @@ Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
 });
 
 Route::prefix('/rack')->name('rack.')->group(function () {
-    Route::get('/{productionLine?}', [RackController::class, 'index'])->name('index');
-    Route::get('/', [RackController::class, 'index'])->name('index');
+    Route::get('/edit', [RackController::class, 'edit'])->name('edit');
+    Route::patch('{id}/update', [RackController::class, 'update'])->name('update');
     Route::get('/barcode', [RackController::class, 'all'])->name('barcode');
     Route::post('/', [RackController::class, 'store'])->name('store');
-    Route::get('/edit', [RackController::class, 'edit'])->name('edit');
     Route::delete('{id}/delete', [RackController::class, 'destroy'])->name('destroy');
+    Route::get('/{productionLine?}', [RackController::class, 'index'])->name('index');
+
+    Route::prefix('/rack-slot')->name('rack-slot.')->group(function () {
+        Route::patch('{id}/mark-full', [RackSlotController::class, 'markFull'])->name('markFull');
+        Route::patch('{id}/clear-full', [RackSlotController::class, 'clearFull'])->name('clearFull');
+    });
 });
 
 /*
@@ -282,6 +288,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
         Route::get('/downloadCapacityTemplate', [WipController::class,    'downloadCapacityTemplate'])->name('downloadCapacityTemplate');
         Route::get('/downloadPickUpTemplate',   [PickupController::class,  'downloadPickUpTemplate'])->name('downloadPickUpTemplate');
         Route::get('/downloadF3PickUpTemplate', [PickupController::class,  'downloadF3PickUpTemplate'])->name('downloadF3PickUpTemplate');
+        Route::get('/downloadLotsUpstream', [LotController::class,  'download'])->name('downloadLots');
     });
 });
 

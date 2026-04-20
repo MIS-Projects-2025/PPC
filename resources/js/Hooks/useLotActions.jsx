@@ -185,6 +185,10 @@ export function useLotActions() {
 		}
 	};
 
+	const sanitizeFieldValue = (field, value) => {
+		return value.replace(/\([^)]*\)/g, "").trim();
+	};
+
 	const handleScanParsed = (parsed) => {
 		if (isMutateLotLoading) {
 			toast.info("woah, hold on...", toastOptions);
@@ -250,18 +254,16 @@ export function useLotActions() {
 
 		if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE) {
 			if (!focusedField) {
-				toast.error(
-					"No field targeted. Scan a FIELD: barcode or re-scan RECEIVING.",
-					toastOptions,
-				);
-
+				advanceFocus(LOT_UPSTREAM_MODES.FIELD_ORDER[2]);
 				store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
 				return;
 			}
 
+			const value = sanitizeFieldValue(focusedField, parsed.value);
+
 			store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
 
-			store.editPendingLot(focusedField, parsed.value);
+			store.editPendingLot(focusedField, value);
 
 			advanceFocus(focusedField);
 

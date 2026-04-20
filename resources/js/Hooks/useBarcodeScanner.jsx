@@ -5,6 +5,11 @@ const SCANNER_TIMEOUT_MS = 100;
 const useBarcodeScanner = (onScan) => {
 	const buffer = useRef("");
 	const lastKeyTime = useRef(Date.now());
+	const onScanRef = useRef(onScan);
+
+	useEffect(() => {
+		onScanRef.current = onScan;
+	}, [onScan]);
 
 	useEffect(() => {
 		const handleKeyDown = (e) => {
@@ -12,26 +17,27 @@ const useBarcodeScanner = (onScan) => {
 			const timeDiff = now - lastKeyTime.current;
 			lastKeyTime.current = now;
 
-			if (timeDiff > SCANNER_TIMEOUT_MS) {
-				buffer.current = "";
-			}
-
 			if (e.key === "Enter") {
 				const currentBuffer = buffer.current;
+				buffer.current = "";
 
 				if (currentBuffer.length > 2) {
-					console.log("🚀 ~ ScanInput ~ value:", currentBuffer);
-					onScan(currentBuffer, e);
-					buffer.current = "";
+					onScanRef.current(currentBuffer, e);
 				}
 			} else if (e.key.length === 1) {
+				if (timeDiff > SCANNER_TIMEOUT_MS) {
+					buffer.current = "";
+				} else {
+					// Chars 2+ arriving fast = definitely a scanner, block from input
+					e.preventDefault();
+				}
 				buffer.current += e.key;
 			}
 		};
 
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [onScan]);
+		window.addEventListener("keydown", handleKeyDown, true);
+		return () => window.removeEventListener("keydown", handleKeyDown, true);
+	}, []);
 };
 
 export default useBarcodeScanner;

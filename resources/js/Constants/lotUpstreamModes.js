@@ -4,6 +4,7 @@ const QTY = "qty";
 
 export const LOT_UPSTREAM_MODES = {
 	PREFIX_SLOT_MODE: "[SLOT]:",
+	PREFIX_FIELS_SELECTOR: "FIELD:",
 	RECEIVE: "receive",
 	RELEASE: "release",
 	RECEIVING: "RECEIVING",
@@ -20,10 +21,9 @@ export const LOT_UPSTREAM_MODES = {
 	WRONG: "wrong",
 	OPEN: "open",
 	CLOSE: "close",
+	DONE: "DONE",
 	LOTID: LOTID,
 	PARTNAME: PARTNAME,
 	QTY: QTY,
-	DONE: "DONE",
-	CANCEL: "CANCEL",
 	FIELD_ORDER: [LOTID, PARTNAME, QTY],
 };

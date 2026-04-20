@@ -10,9 +10,12 @@ use App\Repositories\Interfaces\LotRepositoryInterface;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use Carbon\Carbon;
+use App\Traits\ExportTrait;
 
 class LotService
 {
+    use ExportTrait;
+
     public function __construct(
         protected LotRepositoryInterface         $lots,
         protected LotPositionRepositoryInterface $positions,
@@ -155,5 +158,39 @@ class LotService
 
             return $this->lots->update($lot->id, ['status' => 'released']);
         });
+    }
+
+    public function downloadFilteredExport(array $filters)
+    {
+        $sheets = [
+            'LOTS' => function () use ($filters) {
+                return $this->lots->buildLotQuery($filters, null)
+                    ->with(['latestPosition.rackSlot.rack.productionLine'])
+                    ->latest('received_at')
+                    ->cursor()
+                    ->map(function ($lot) {
+                        $pos = $lot->latestPosition;
+                        $slot = $pos?->rackSlot;
+                        $receivedAt = $lot->getRawOriginal('received_at')
+                            ? Carbon::createFromFormat('Y-m-d H:i:s', $lot->getRawOriginal('received_at'), 'UTC')
+                            ->setTimezone('Asia/Manila')
+                            ->toDateTimeString()
+                            : 'N/A';
+                        Log::info($receivedAt);
+                        return [
+                            'Lot ID'      => $lot->lot_id,
+                            'Part Name'   => $lot->partname,
+                            'Quantity'    => $lot->qty,
+                            'Status'      => $lot->status,
+                            'Received At' => $receivedAt,
+                            'Line'        => $slot?->rack?->productionLine?->name,
+                            'Rack'        => $slot?->rack?->label,
+                            'Slot'        => $slot?->label,
+                        ];
+                    });
+            },
+        ];
+
+        return $this->downloadRawXlsx($sheets, 'lots_' . now()->format('Y-m-d'));
     }
 }

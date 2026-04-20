@@ -19,8 +19,7 @@ export function parseLotScanInput(input) {
 			command: LOT_UPSTREAM_MODES.RELEASING,
 		};
 
-	// Field-select command barcodes (Option B)
-	if (normalized.startsWith("FIELD:")) {
+	if (normalized.startsWith(LOT_UPSTREAM_MODES.PREFIX_FIELS_SELECTOR)) {
 		const field = normalized.split(":")[1]?.toLowerCase();
 		if (LOT_UPSTREAM_MODES.FIELD_ORDER.includes(field)) {
 			return { type: LOT_UPSTREAM_MODES.TYPE_FIELD_SELECT, field };

@@ -30,7 +30,7 @@ class RackSlotController extends Controller
         return $this->repo->all();
     }
 
-    public function store(int $rackId): RedirectResponse
+    public function store(int $rackId)
     {
         request()->validate([
             'label' => "required|string|max:10|unique:rack_slots,label,NULL,id,rack_id,{$rackId}",
@@ -41,38 +41,53 @@ class RackSlotController extends Controller
             'label'   => strtoupper(request('label')),
         ]);
 
-        return back();
+        return response()->json([
+            'status'  => 'success',
+            'message' => "Rack updated successfully.",
+        ]);
     }
 
-    public function update(int $id): RedirectResponse
+    public function update(int $id)
     {
         request()->validate([
             'label' => 'required|string|max:10',
         ]);
 
-        $this->repo->update($id, ['label' => strtoupper(request('label'))]);
+        $updated = $this->repo->update($id, ['label' => strtoupper(request('label'))]);
 
-        return back();
+        return response()->json([
+            'status'  => 'success',
+            'message' => "Rack updated successfully.",
+            'data'    => $updated,
+        ]);
     }
 
-    public function destroy(int $id): RedirectResponse
+    public function destroy(int $id)
     {
         $this->repo->delete($id);
-        return back();
+        return response()->json([
+            'status'  => 'success',
+            'message' => "Rack deleted successfully.",
+            'id'      => $id
+        ]);
     }
 
-    // POST /rack-slots/{id}/mark-full
-    public function markFull(int $id): RedirectResponse
+    public function markFull(int $id)
     {
         $by = session('emp_data')['emp_id'] ?? 'system';
         $this->service->markFull($id, $by);
-        return back();
+        return response()->json([
+            'status'  => 'success',
+            'message' => "Rack updated successfully.",
+        ]);
     }
 
-    // POST /rack-slots/{id}/clear-full
-    public function clearFull(int $id): RedirectResponse
+    public function clearFull(int $id)
     {
         $this->service->clearFull($id);
-        return back();
+        return response()->json([
+            'status'  => 'success',
+            'message' => "Rack updated successfully.",
+        ]);
     }
 }

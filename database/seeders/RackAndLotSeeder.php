@@ -4,100 +4,119 @@ namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
+use Carbon\Carbon;
 
-class RackAndLotSeeder extends Seeder
+class RackAndSlotSeeder extends Seeder
 {
   public function run(): void
   {
-    // 1. Create Production Line
-    $plId = 1;
+    $now = Carbon::now();
 
-    // 2. Create 3 Racks (150 slots total)
-    $racks = ['RACK-A', 'RACK-B', 'RACK-C'];
-    $allSlotIds = [];
+    // Map the Production Line names to their respective Racks and Slots
+    $config = [
+      'PL6' => [
+        'Middle-racks' => [
+          'A01',
+          'A02',
+          'A03',
+          'A04',
+          'B01',
+          'B02',
+          'B03',
+          'B04',
+          'C01',
+          'C02',
+          'C03',
+          'C04',
+          'D01',
+          'D02',
+          'D03',
+          'D04'
+        ],
+        'corner-racks' => [
+          'A01',
+          'A02',
+          'A03',
+          'A04',
+          'A05',
+          'B01',
+          'B02',
+          'B03',
+          'B04',
+          'B05',
+          'C01',
+          'C02',
+          'C03',
+          'C04',
+          'C05',
+          'D01',
+          'D02',
+          'D03',
+          'D04',
+          'D05',
+          'E01',
+          'E02',
+          'E03',
+          'E04',
+          'E05'
+        ],
+      ],
+      'PL1' => [
+        'Rack-1' => [
+          'A01',
+          'A02',
+          'A03',
+          'A04',
+          'B01',
+          'B02',
+          'B03',
+          'B04'
+        ],
+        'Rack-2' => [
+          'A01',
+          'A02',
+          'A03',
+          'A04',
+          'B01',
+          'B02',
+          'B03',
+          'B04'
+        ],
+      ],
+    ];
 
-    foreach ($racks as $rackLabel) {
-      $rackId = DB::table('racks')->insertGetId([
-        'production_line_id' => $plId,
-        'label' => $rackLabel,
-      ]);
+    foreach ($config as $plName => $racks) {
+      $plId = DB::table('production_lines')->where('name', $plName)->value('id');
 
-      foreach (range('A', 'E') as $layer) {
-        for ($i = 1; $i <= 10; $i++) {
-          $isFull = rand(1, 10) === 1; // 10% chance to be "Manually Full"
+      if (!$plId) {
+        continue;
+      }
 
-          $allSlotIds[] = DB::table('rack_slots')->insertGetId([
+      foreach ($racks as $rackLabel => $slots) {
+        DB::table('racks')->updateOrInsert(
+          ['label' => $rackLabel, 'production_line_id' => $plId],
+          ['created_at' => $now, 'updated_at' => $now]
+        );
+
+        $rackId = DB::table('racks')
+          ->where('label', $rackLabel)
+          ->where('production_line_id', $plId)
+          ->value('id');
+
+        $slotInserts = [];
+        foreach ($slots as $slotLabel) {
+          $slotInserts[] = [
             'rack_id' => $rackId,
-            'label' => $layer . str_pad($i, 2, '0', STR_PAD_LEFT),
-            'is_manually_full' => $isFull,
-            'marked_full_by' => $isFull ? 'OP999' : null,
-            'marked_full_at' => $isFull ? now() : null,
-          ]);
+            'label' => $slotLabel,
+            'is_manually_full' => 0,
+            'is_active' => 1,
+            'created_at' => $now,
+            'updated_at' => $now
+          ];
         }
+
+        DB::table('rack_slots')->insertOrIgnore($slotInserts);
       }
     }
-
-    // 3. Generate 100 Lots using the helper function
-    $lotsToCreate = $this->generateLots(100);
-
-    $currentSlotIndex = 0;
-    $totalAvailableSlots = count($allSlotIds);
-
-    foreach ($lotsToCreate as $data) {
-      // Check if we still have enough physical slots for this lot's size
-      if ($currentSlotIndex + $data['slots'] > $totalAvailableSlots) {
-        break; // Stop if the racks are physically full
-      }
-
-      $lotRecordId = DB::table('lots')->insertGetId([
-        'lot_id'      => $data['id'],
-        'partname'   => $data['part'],
-        'qty'         => $data['qty'],
-        'status'      => 'staged',
-        'received_by' => 'OP001',
-        'received_at' => now(),
-      ]);
-
-      // 4. Assign to N slots (handles multi-slot lots)
-      for ($i = 0; $i < $data['slots']; $i++) {
-        DB::table('lot_positions')->insert([
-          'lot_id'       => $lotRecordId,
-          'rack_slot_id' => $allSlotIds[$currentSlotIndex],
-          'assigned_by'  => 'OP001',
-          'assigned_at'  => now(),
-        ]);
-        $currentSlotIndex++;
-      }
-    }
-  }
-
-  /**
-   * Helper to generate a specified number of lot data arrays
-   */
-  private function generateLots(int $count): array
-  {
-    $lots = [];
-    $parts = ['ADXL312', 'AD8221ARZ', 'TMP36GRTZ', 'MAX3232', 'ESP32-WROOM'];
-
-    for ($i = 0; $i < $count; $i++) {
-      $part = $parts[array_rand($parts)];
-      $prefix = strtoupper(Str::random(2));
-      $suffix = rand(10000, 99999);
-
-      // Randomly determine if it's a 1, 2, or 3 slot lot
-      // 80% single, 15% double, 5% triple
-      $roll = rand(1, 100);
-      $slotsNeeded = ($roll > 95) ? 3 : (($roll > 80) ? 2 : 1);
-
-      $lots[] = [
-        'id'    => "{$prefix}{$suffix}.{$i};{$part};" . rand(2400, 2450) . ";" . rand(500, 5000) . ";1",
-        'part'  => $part,
-        'qty'   => rand(500, 5000),
-        'slots' => $slotsNeeded
-      ];
-    }
-
-    return $lots;
   }
 }
