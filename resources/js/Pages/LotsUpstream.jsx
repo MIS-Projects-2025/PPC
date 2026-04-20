@@ -193,7 +193,7 @@ function ReceivedList({ slots, onEdit, lotActions }) {
 	const [releaseConfirm, setReleaseConfirm] = useState(null);
 
 	return (
-		<div className="bg-base-100 h-[calc(100vh-230px)] border shadow-md border-base-300 rounded-xl overflow-hidden flex flex-col">
+		<div className="bg-base-100 h-[calc(100vh-240px)] border shadow-md border-base-300 rounded-xl overflow-hidden flex flex-col">
 			<div
 				className="overflow-y-auto mt-2"
 				style={{ maxHeight: "calc(100vh - 260px)" }}
@@ -300,7 +300,7 @@ function ReceivedList({ slots, onEdit, lotActions }) {
 											/>
 										</div>
 									) : (
-										<div className="absolute p-4 backdrop-blur-xs top-1/2 -translate-y-1/2 right-0 hidden group-hover:flex gap-2">
+										<div className="absolute p-3 backdrop-blur-xs top-1/2 -translate-y-1/2 right-0 hidden group-hover:flex gap-2">
 											<button
 												type="button"
 												onClick={() => onEdit(lot)}
@@ -337,8 +337,6 @@ export default function LotsUpstream({
 	filters: serverFilters,
 	productionLine,
 }) {
-	console.log("🚀 ~ LotsUpstream ~ racks:", racks);
-	console.log("🚀 ~ LotsUpstream ~ received:", received);
 	const toast = useToast();
 	const lotActions = useLotActions();
 	const {
