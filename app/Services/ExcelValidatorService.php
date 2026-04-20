@@ -2,13 +2,12 @@
 
 namespace App\Services;
 
-use Symfony\Component\HttpFoundation\Response;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use Illuminate\Support\Facades\Log;
 use Box\Spout\Reader\Common\Creator\ReaderEntityFactory;
-use Box\Spout\Reader\ReaderInterface;
 use PhpOffice\PhpSpreadsheet\Worksheet\CellIterator;
 use App\Traits\Sanitize;
+use Illuminate\Validation\ValidationException;
 
 class ExcelValidatorService
 {
@@ -208,7 +207,9 @@ class ExcelValidatorService
   public function errorOnMultipleSheet(Spreadsheet $spreadsheet)
   {
     if ($spreadsheet->getSheetCount() > 1) {
-      throw new \Exception('Multiple sheets detected in the Excel file. Please ensure the file contains only one sheet. Even hidden sheets are not allowed.', Response::HTTP_UNPROCESSABLE_ENTITY);
+      throw ValidationException::withMessages([
+        'file' => 'Multiple sheets detected. The file must contain only one sheet — hidden sheets are not allowed.',
+      ]);
     }
   }
 

@@ -142,7 +142,7 @@ class LotRepository implements LotRepositoryInterface
             continue;
           }
 
-          $slot = RackSlot::find($slotId);
+          $slot = RackSlot::with('rack')->find($slotId);
 
           if (!$slot->isAvailable()) {
             throw ValidationException::withMessages([
@@ -167,6 +167,7 @@ class LotRepository implements LotRepositoryInterface
           LotPosition::create([
             'lot_id'       => $lot->id,
             'rack_slot_id' => $slotId,
+            'production_line_id' => $slot->rack->production_line_id,
             'assigned_at'  => $now,
             'assigned_by'  => $modifiedBy,
           ]);

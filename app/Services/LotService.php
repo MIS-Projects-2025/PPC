@@ -65,7 +65,11 @@ class LotService
                 ->exists();
 
             if ($alreadyStaged) {
-                throw new \Exception('Lot is already staged.');
+                if ($alreadyStaged) {
+                    throw ValidationException::withMessages([
+                        'lot_id' => 'Lot is already staged.',
+                    ]);
+                }
             }
 
             // 2. Create the lot record
