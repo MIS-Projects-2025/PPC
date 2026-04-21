@@ -63,10 +63,12 @@ function ScanPanel({ lotActions }) {
 		pendingLotToBeAdded,
 		isScanning,
 		addPendingLot,
+		editingLot,
+		isEditMode,
 		editPendingLotWithRawInput,
 		slotPendingLot,
 		lotMutations,
-		mode,
+		// mode,
 	} = useLotStore();
 	const {
 		focusedField,
@@ -84,7 +86,7 @@ function ScanPanel({ lotActions }) {
 			return;
 		}
 
-		if (mode === LOT_UPSTREAM_MODES.EDIT) {
+		if (isEditMode) {
 			console.log("🚀 ~ handleConfirm ~ slotPendingLot:", slotPendingLot);
 			editLot({
 				...pendingLotToBeAdded,
@@ -114,14 +116,12 @@ function ScanPanel({ lotActions }) {
 		}
 	}, [focusedField]);
 
-	const isEdit = mode === LOT_UPSTREAM_MODES.EDIT;
-
 	return (
 		<div className="w-full flex flex-col h-full">
 			<div className="flex justify-between items-center mb-4">
 				<div>
 					<h2 className="text-[13px] font-bold tracking-wide">
-						{isEdit ? `Edit lot: ${pendingLotToBeAdded?.lot_id}` : "Scan lot"}
+						{isEditMode ? `Edit lot: ${pendingLotToBeAdded?.lot_id}` : "Scan lot"}
 						{pendingLotToBeAdded?.status && (
 							<span
 								className={clsx("badge", {
@@ -133,7 +133,7 @@ function ScanPanel({ lotActions }) {
 							</span>
 						)}
 					</h2>
-					{!isEdit && (
+					{!isEditMode && (
 						<p className="text-[11px] text-base-content mt-0.5">
 							Scan QR or fill fields manually
 						</p>
@@ -180,8 +180,8 @@ function ScanPanel({ lotActions }) {
 				refetch={handleConfirm}
 				disabled={!canConfirm}
 				loading={lotMutations[pendingLotToBeAdded?.lot_id]?.isLoading}
-				buttonText={isEdit ? "Save changes" : "Confirm receive"}
-				loadingMessage={isEdit ? "Saving..." : "Receiving..."}
+				buttonText={isEditMode ? "Save changes" : "Confirm receive"}
+				loadingMessage={isEditMode ? "Saving..." : "Receiving..."}
 			/>
 		</div>
 	);
@@ -349,6 +349,7 @@ export default function LotsUpstream({
 		setEditingLot,
 		setSlots,
 		toggleSlotPendingLot,
+		setIsEditMode,
 		editPendingLot,
 		scanResult,
 		receiveLot,
@@ -457,9 +458,7 @@ export default function LotsUpstream({
 	}, [scanResult]);
 
 	const handleEdit = (lot) => {
-		console.log("🚀 ~ handleEdit ~ lot:", lot);
-		addPendingLot(lot);
-		setMode(LOT_UPSTREAM_MODES.EDIT);
+		setIsEditMode(true);
 		setEditingLot(lot);
 
 		clearSlotPendingLot();
@@ -473,10 +472,10 @@ export default function LotsUpstream({
 
 	useBarcodeScanner((currentBuffer, e) => {
 		const parsed = parseLotScanInput(currentBuffer);
-		console.log("🚀 ~ LotsUpstream ~ parsed:", parsed);
+		const type = parsed.type;
 
 		if (
-			parsed.type !== LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE &&
+			type !== LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE &&
 			lotActions.focusedField
 		) {
 			const current = pendingLotToBeAdded[lotActions.focusedField] ?? "";
@@ -484,8 +483,8 @@ export default function LotsUpstream({
 		}
 
 		if (
-			parsed.type === LOT_UPSTREAM_MODES.TYPE_SLOT ||
-			parsed.type === LOT_UPSTREAM_MODES.TYPE_COMMAND
+			type === LOT_UPSTREAM_MODES.TYPE_SLOT ||
+			type === LOT_UPSTREAM_MODES.TYPE_COMMAND
 		) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -552,11 +551,25 @@ export default function LotsUpstream({
 		});
 	};
 
+	const dialogRef = useRef(null);
+
+	useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const handleClose = () => {
+        setIsEditMode(false);
+    };
+
+    dialog.addEventListener('close', handleClose);
+    return () => dialog.removeEventListener('close', handleClose);
+}, []);
+
 	return (
 		<div className="bg-base-200 font-mono">
 			<Toaster position="top-right" />
 
-			<dialog id={RACK_SELECTION_ID} className="modal z-50">
+			<dialog ref={dialogRef} id={RACK_SELECTION_ID} className="modal z-50">
 				<div className="modal-box w-11/12 border border-base-content/50 max-w-[calc(100vw-4rem)] h-[calc(100vh-4.5rem)] overflow-hidden p-0">
 					<Toaster position="top-right" />
 

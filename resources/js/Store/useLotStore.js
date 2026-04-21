@@ -14,6 +14,7 @@ export const useLotStore = create((set, get) => ({
 	isScanning: false,
 	editingLot: null,
 	mode: LOT_UPSTREAM_MODES.RECEIVE,
+	isEditMode: false,
 	recentUpdates: {},
 	scanResult: { status: null, at: 0 },
 	lotMutations: {},
@@ -50,6 +51,7 @@ export const useLotStore = create((set, get) => ({
 			return { lotMutations: next };
 		}),
 
+	setIsEditMode: (isEditMode) => set({ isEditMode }),
 	setMode: (mode) => set({ mode }),
 	setSlots: (slots) => set({ slots }),
 	setSocketId: (socketId) => set({ socketId }),

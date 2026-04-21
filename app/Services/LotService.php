@@ -180,13 +180,21 @@ class LotService
                             ->setTimezone('Asia/Manila')
                             ->toDateTimeString()
                             : 'N/A';
-                        Log::info($receivedAt);
+                        $releasedAt = $lot->getRawOriginal('released_at')
+                            ? Carbon::createFromFormat('Y-m-d H:i:s', $lot->getRawOriginal('released_at'), 'UTC')
+                            ->setTimezone('Asia/Manila')
+                            ->toDateTimeString()
+                            : 'N/A';
+
                         return [
                             'Lot ID'      => $lot->lot_id,
                             'Part Name'   => $lot->partname,
                             'Quantity'    => $lot->qty,
                             'Status'      => $lot->status,
+                            'Released At' => $releasedAt,
+                            'Released By' => $lot->released_by,
                             'Received At' => $receivedAt,
+                            'Received By' => $lot->received_by,
                             'Line'        => $slot?->rack?->productionLine?->name,
                             'Rack'        => $slot?->rack?->label,
                             'Slot'        => $slot?->label,

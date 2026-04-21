@@ -30,7 +30,7 @@ export function parseLotScanInput(input) {
 		const parts = input.split(";");
 		if (parts.length >= 4) {
 			return {
-				type: "LOT",
+				type: LOT_UPSTREAM_MODES.TYPE_LOT,
 				lot_id: parts[0].trim(),
 				partname: parts[1].trim(),
 				qty: parts[3].trim(),
@@ -42,7 +42,7 @@ export function parseLotScanInput(input) {
 		const parts = input.split("|");
 		if (parts.length >= 3) {
 			return {
-				type: "LOT",
+				type: LOT_UPSTREAM_MODES.TYPE_LOT,
 				lot_id: parts[1].trim(),
 				partname: parts[0].trim(),
 				qty: parts[2].trim(),
