@@ -62,6 +62,7 @@ class LotController extends Controller
             'slots' => fn() => $this->rackSlotRepo->all()->keyBy('id'),
             'filters' => $filters,
             'productionLine' => $pl->name,
+            'productionLineId' => $pl->id,
             'totalEntries' => Lot::count(),
         ]);
     }

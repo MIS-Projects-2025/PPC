@@ -23,7 +23,14 @@ class LotChanged implements ShouldBroadcastNow
 
     public function broadcastOn(): array
     {
-        return [new Channel('lot-updates')];
+        $productionLineId = $this->item->activePositions->first()?->production_line_id;
+        $channels = [new Channel('lot-updates')];
+
+        if ($productionLineId) {
+            $channels[] = new Channel("lot-updates.{$productionLineId}");
+        }
+
+        return $channels;
     }
 
     public function broadcastWith(): array

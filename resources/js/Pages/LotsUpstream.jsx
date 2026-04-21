@@ -336,6 +336,7 @@ export default function LotsUpstream({
 	racks,
 	filters: serverFilters,
 	productionLine,
+	productionLineId,
 }) {
 	const toast = useToast();
 	const lotActions = useLotActions();
@@ -503,7 +504,8 @@ export default function LotsUpstream({
 	);
 
 	useEffect(() => {
-		const channel = window.Echo.channel("lot-updates");
+		const channel = window.Echo.channel(`lot-updates.${productionLineId}`);
+		// const channel = window.Echo.channel("lot-updates");
 
 		channel.listen("LotChanged", (e) => {
 			console.log("⚡ Received (Plain):", e);

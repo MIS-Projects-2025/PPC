@@ -41,17 +41,17 @@ class LotPositionRepository implements LotPositionRepositoryInterface
   public function releaseByLot(int $lotId, string $by): void
   {
     DB::transaction(function () use ($lotId, $by) {
+      Lot::where('id', $lotId)->update([
+        'released_by' => $by,
+        'released_at' => Carbon::now('UTC')
+      ]);
+
       LotPosition::where('lot_id', $lotId)
         ->whereNull('released_at')
         ->update([
           'released_at' => Carbon::now('UTC'),
           'released_by' => $by,
         ]);
-
-      Lot::where('id', $lotId)->update([
-        'released_by' => $by,
-        'released_at' => Carbon::now('UTC')
-      ]);
     });
   }
 }

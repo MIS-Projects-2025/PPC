@@ -152,30 +152,29 @@ function RackGrid({
 					</span>
 				)}
 			</h2>
-			{/* {visible ?  */}
 			<div className="space-y-4 pb-2">
 				{(() => {
-						const entries = Object.entries(rack.shelves);
-						const slotCount = entries[0]?.[1]?.length ?? 0;
+					const entries = Object.entries(rack.shelves);
+					const slotCount = entries[0]?.[1]?.length ?? 0;
 
-						return Array.from({ length: slotCount }, (_, i) => (
-								<div key={i} className="flex">
-										{entries.map(([rowLabel, rowSlots]) => {
-												const slot = rowSlots[i];
-												return (
-														<SlotButton
-																key={slot.id}
-																slot={slot}
-																isActive={selectedSlot?.id === slot.id}
-																isHighlighted={highlightedSlotIds.has(slot.id)}
-																isSelected={selectedSlotIds.has(slot.id)}
-																multiSelect={multiSelect}
-																onSlotSelect={onSlotSelect}
-														/>
-												);
-										})}
-								</div>
-						));
+					return Array.from({ length: slotCount }, (_, i) => (
+						<div key={i} className="flex">
+							{entries.map(([rowLabel, rowSlots]) => {
+								const slot = rowSlots[i];
+								return (
+									<SlotButton
+										key={slot.id}
+										slot={slot}
+										isActive={selectedSlot?.id === slot.id}
+										isHighlighted={highlightedSlotIds.has(slot.id)}
+										isSelected={selectedSlotIds.has(slot.id)}
+										multiSelect={multiSelect}
+										onSlotSelect={onSlotSelect}
+									/>
+								);
+							})}
+						</div>
+					));
 				})()}
 			</div>
 		</section>
