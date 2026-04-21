@@ -141,10 +141,10 @@ class LotService
      * @param  string  $releasedBy
      * @return Lot
      */
-    public function release(string $lotId, string $partname, string $releasedBy): Lot
+    public function release(string $lotId, string $releasedBy): Lot
     {
-        return DB::transaction(function () use ($lotId, $partname, $releasedBy) {
-            $lot = $this->lots->findLastStaged($lotId, $partname);
+        return DB::transaction(function () use ($lotId, $releasedBy) {
+            $lot = $this->lots->findLastStaged($lotId);
 
             if (!$lot) {
                 throw ValidationException::withMessages([

@@ -133,8 +133,6 @@ export function useLotActions() {
 			return;
 		}
 
-		// TODO: 2 rapid consequtive released will not update the first lot relased on store
-
 		if (!lotId) {
 			toast.error(
 				`Error: No lot scanned. Please scan a lot and try again.`,
@@ -149,7 +147,7 @@ export function useLotActions() {
 			cancelPrevious: true,
 			mutationKey: lotId,
 			method: "POST",
-			body: { lot_id: lotId, partname: lot.partname },
+			body: { lot_id: lotId },
 			additionalHeaders: {
 				...(socketId && { "X-Socket-ID": socketId }),
 			},
@@ -255,13 +253,25 @@ export function useLotActions() {
 		if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE) {
 			if (!focusedField) {
 				advanceFocus(LOT_UPSTREAM_MODES.FIELD_ORDER[2]);
-				store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-				return;
+				// store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+				// return;
 			}
 
 			const value = sanitizeFieldValue(focusedField, parsed.value);
 
-			store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
+			if (mode === LOT_UPSTREAM_MODES.RELEASE) {
+				releaseLot({
+					lot_id: parsed.value,
+					partname: null,
+					qty: null,
+				});
+
+				return;
+			}
+
+			if (mode !== LOT_UPSTREAM_MODES.RELEASE) {
+				store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
+			}
 
 			store.editPendingLot(focusedField, value);
 

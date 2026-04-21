@@ -11,7 +11,7 @@ interface LotRepositoryInterface
     public function find(int $id): Lot;
     public function all(): Collection;
     public function findById(int $id): ?Lot;
-    public function findLastStaged(string $lotId, string $partname): ?Lot;
+    public function findLastStaged(string $lotId): ?Lot;
     public function today(): Collection;
     public function staged(): Collection;
     public function aging(): Collection;

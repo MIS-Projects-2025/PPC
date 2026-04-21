@@ -152,42 +152,32 @@ function RackGrid({
 					</span>
 				)}
 			</h2>
-			{/* {visible ?  */}(
+			{/* {visible ?  */}
 			<div className="space-y-4 pb-2">
-				{Object.entries(rack.shelves).map(([rowLabel, rowSlots]) => (
-					<div key={rowLabel} className="flex">
-						<div className="flex items-center justify-center font-black text-slate-700 w-6">
-							{rowLabel}
-						</div>
-						<div
-							className={clsx(
-								"flex-1",
-								isDetailedView
-									? "inline-grid grid-cols-4 lg:grid-cols-8 border-t border-l border-dashed border-base-content/20"
-									: "flex flex-wrap",
-							)}
-						>
-							{rowSlots.map((slot) => {
-								return (
-									<SlotButton
-										key={slot.id}
-										slot={slot}
-										isActive={selectedSlot?.id === slot.id}
-										isHighlighted={highlightedSlotIds.has(slot.id)}
-										isSelected={selectedSlotIds.has(slot.id)}
-										multiSelect={multiSelect}
-										onSlotSelect={onSlotSelect}
-									/>
-								);
-							})}
-						</div>
-					</div>
-				))}
+				{(() => {
+						const entries = Object.entries(rack.shelves);
+						const slotCount = entries[0]?.[1]?.length ?? 0;
+
+						return Array.from({ length: slotCount }, (_, i) => (
+								<div key={i} className="flex">
+										{entries.map(([rowLabel, rowSlots]) => {
+												const slot = rowSlots[i];
+												return (
+														<SlotButton
+																key={slot.id}
+																slot={slot}
+																isActive={selectedSlot?.id === slot.id}
+																isHighlighted={highlightedSlotIds.has(slot.id)}
+																isSelected={selectedSlotIds.has(slot.id)}
+																multiSelect={multiSelect}
+																onSlotSelect={onSlotSelect}
+														/>
+												);
+										})}
+								</div>
+						));
+				})()}
 			</div>
-			)
-			{/* : (
-        <div style={{ height: '200px' }} />
-      )} */}
 		</section>
 	);
 }

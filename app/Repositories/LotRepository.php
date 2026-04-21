@@ -24,10 +24,9 @@ class LotRepository implements LotRepositoryInterface
     return Lot::where('id', $id)->latest('received_at')->first();
   }
 
-  public function findLastStaged(string $lotId, string $partname): ?Lot
+  public function findLastStaged(string $lotId): ?Lot
   {
     $lot = Lot::where('lot_id', $lotId)
-      ->where('partname', $partname)
       ->where('status', 'staged')
       ->first();
 

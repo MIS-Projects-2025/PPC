@@ -122,10 +122,9 @@ class LotController extends Controller
 
         $data = request()->validate([
             'lot_id'    => 'required|string|max:50',
-            'partname' => 'required|string|max:255',
         ]);
 
-        $releasedLot = $this->lotService->release($data['lot_id'], $data['partname'], $releasedBy);
+        $releasedLot = $this->lotService->release($data['lot_id'], $releasedBy);
 
         return response()->json([
             'status'  => 'success',
