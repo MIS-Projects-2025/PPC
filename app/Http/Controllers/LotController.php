@@ -50,6 +50,7 @@ class LotController extends Controller
             'aging',
             'unslotted',
             'per_page',
+            'sort'
         ]);
 
         return Inertia::render('LotsUpstream', [

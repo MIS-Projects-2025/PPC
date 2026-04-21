@@ -105,6 +105,9 @@ class LotRepository implements LotRepositoryInterface
       $query->whereDoesntHave('activePositions');
     }
 
+    $direction = in_array($filters['sort'] ?? '', ['asc', 'desc']) ? $filters['sort'] : 'asc';
+    $query->orderBy('received_at', $direction);
+
     return $query;
   }
 
