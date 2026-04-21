@@ -3,6 +3,7 @@
 namespace App\Events;
 
 use App\Models\Lot;
+use App\Models\LotPosition;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
@@ -23,7 +24,9 @@ class LotChanged implements ShouldBroadcastNow
 
     public function broadcastOn(): array
     {
-        $productionLineId = $this->item->activePositions->first()?->production_line_id;
+        $productionLineId = LotPosition::where('lot_id', $this->item->id)
+            ->latest('released_at')
+            ->value('production_line_id');
         $channels = [new Channel('lot-updates')];
 
         if ($productionLineId) {

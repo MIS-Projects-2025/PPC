@@ -144,7 +144,7 @@ function RackGrid({
 			ref={ref}
 			className="bg-base-100 rounded-lg border border-base-300 relative w-full shadow-xs"
 		>
-			<h2 className="text-xl w-full font-bold mb-2 flex items-center sticky -top-4 bg-base-100 z-3 p-2 rounded-t-lg shadow-sm">
+			<h2 className="text-xl w-full font-bold mb-2 flex items-center sticky -top-4 bg-base-100 z-10 p-2 rounded-t-lg shadow-sm">
 				{rack.label}
 				{Object.entries(rack.shelves).length === 0 && (
 					<span className="ml-2 text-sm font-light text-base-content/70">
@@ -254,7 +254,7 @@ const SlotButton = React.memo(function SlotButton({
 			onMouseEnter={() => setHovered(true)}
 			onMouseLeave={() => setHovered(false)}
 			className={clsx(
-				"relative btn min-h-12 z-2 border transition-all py-1 flex flex-col items-center justify-center relative group",
+				"relative btn min-h-12 z-20 border transition-all py-1 flex flex-col items-center justify-center relative group",
 				multiSelect && isSelected && "ring-2 ring-primary animate-pulse",
 				"rounded-none -ml-[1px] -mt-[1px]",
 				{
