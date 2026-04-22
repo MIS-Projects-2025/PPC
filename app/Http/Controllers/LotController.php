@@ -10,6 +10,7 @@ use App\Services\LotService;
 use App\Repositories\Interfaces\LotRepositoryInterface;
 use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
+use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 use Illuminate\Support\Facades\Log;
 
 class LotController extends Controller
@@ -17,6 +18,7 @@ class LotController extends Controller
     public function __construct(
         protected LotService              $lotService,
         protected LotRepositoryInterface  $lotRepo,
+        protected LotPositionRepositoryInterface  $lotPositionRepo,
         protected RackRepositoryInterface $rackRepo,
         protected RackSlotRepositoryInterface $rackSlotRepo
     ) {}
@@ -59,11 +61,15 @@ class LotController extends Controller
                 $this->lotRepo->paginate($filters, $pl->id)
             ),
             'racks' => fn() => $this->rackRepo->getAllByProductionLine($pl->id),
-            'slots' => fn() => $this->rackSlotRepo->all()->keyBy('id'),
+            'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByProductionLine($pl->id),
             'filters' => $filters,
             'productionLine' => $pl->name,
             'productionLineId' => $pl->id,
-            'totalEntries' => Lot::count(),
+            'totalEntries' => Lot::whereHas(
+                'positions',
+                fn($q) =>
+                $q->where('production_line_id', $pl->id)
+            )->count(),
         ]);
     }
 

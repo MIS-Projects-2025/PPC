@@ -91,7 +91,6 @@ export const useLotStore = create((set, get) => ({
 
 	toggleSlotPendingLot: (slot) =>
 		set((state) => {
-			console.log("xxxxxxxxx TOGGGGGGGGLE", slot);
 			const already = state.slotPendingLot.some((s) => s.id === slot.id);
 			return {
 				slotPendingLot: already

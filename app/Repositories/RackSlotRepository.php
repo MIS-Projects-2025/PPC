@@ -8,9 +8,19 @@ use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 
 class RackSlotRepository implements RackSlotRepositoryInterface
 {
-  public function all(): Collection
+  public function all(?int $productionLineId = null): Collection
   {
-    return RackSlot::with('rack.productionLine')->get();
+    return RackSlot::with('rack')
+      ->when(
+        $productionLineId,
+        fn($q) =>
+        $q->whereHas(
+          'rack',
+          fn($q) =>
+          $q->where('production_line_id', $productionLineId)
+        )
+      )
+      ->get();
   }
 
   public function find(int $id): RackSlot

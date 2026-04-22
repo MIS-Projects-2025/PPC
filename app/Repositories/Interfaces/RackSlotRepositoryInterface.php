@@ -8,7 +8,7 @@ use App\Models\RackSlot;
 interface RackSlotRepositoryInterface
 {
     public function find(int $id): RackSlot;
-    public function all(): Collection;
+    public function all(?int $productionLineId = null): Collection;
     public function byRack(int $rackId): Collection;
     public function availableByRack(int $rackId): Collection;
     public function create(array $data): RackSlot;

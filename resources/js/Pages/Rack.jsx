@@ -33,6 +33,7 @@ const useInternalStore = create((set) => ({
 
 export default function RackManagement({
 	racks,
+	occupancy,
 	onSlotSelect,
 	initialDetailedView = true,
 	disableSideDetailPanel = false,
@@ -87,6 +88,7 @@ export default function RackManagement({
 						<RackGrid
 							key={rack.id}
 							rack={rack}
+							occupancy={occupancy}
 							onSlotSelect={onSlotSelect}
 							multiSelect={multiSelect}
 							selectedSlotIds={selectedSlotIds}
@@ -103,6 +105,7 @@ export default function RackManagement({
 
 function RackGrid({
 	rack,
+	occupancy,
 	onSlotSelect,
 	multiSelect,
 	selectedSlotIds,
@@ -132,7 +135,8 @@ function RackGrid({
 
 	const highlightedSlotIds = useMemo(() => {
 		if (!selectedSlot) return new Set();
-		return new Set(selectedSlot.lots.flatMap((l) => l.slot_ids));
+		const lots = occupancy[String(selectedSlot.id)] ?? [];
+		return new Set(lots.flatMap((l) => l.slot_ids));
 	}, [selectedSlot]);
 
 	return (
@@ -161,10 +165,12 @@ function RackGrid({
 						<div key={i} className="flex">
 							{entries.map(([rowLabel, rowSlots]) => {
 								const slot = rowSlots[i];
+								// console.log("🚀 ~ SLOT SLOT ~ slot:", slot);
 								return (
 									<SlotButton
 										key={slot.id}
 										slot={slot}
+										lots={occupancy[slot.id] ?? []}
 										isActive={selectedSlot?.id === slot.id}
 										isHighlighted={highlightedSlotIds.has(slot.id)}
 										isSelected={selectedSlotIds.has(slot.id)}
@@ -183,6 +189,7 @@ function RackGrid({
 
 const SlotButton = React.memo(function SlotButton({
 	slot,
+	lots,
 	isActive,
 	isHighlighted,
 	multiSelect,
@@ -192,13 +199,12 @@ const SlotButton = React.memo(function SlotButton({
 	const setSelectedSlot = useInternalStore((state) => state.setSelectedSlot);
 	const isDetailedView = useInternalStore((state) => state.isDetailedView);
 	const updateSlot = useInternalStore((state) => state.updateSlot);
-	const toast = useToast();
 	const [hovered, setHovered] = useState(false);
-	const hasLots = slot.lots.length > 0;
+	const hasLots = lots.length > 0;
 	const slotLabel = slot?.label || slot?.meta?.label;
-	const isMultiLot = slot.lots.length > 1;
-	const isLargeLot = slot.lots.some((l) => l.slot_ids?.length > 1);
-	const hasExceededAgeThreshold = slot.lots.some(
+	const isMultiLot = lots.length > 1;
+	const isLargeLot = lots.some((l) => l.slot_ids?.length > 1);
+	const hasExceededAgeThreshold = lots.some(
 		(l) => l.has_exceeded_age_threshold,
 	);
 	const isManuallyFull = slot?.is_manually_full;
@@ -212,8 +218,6 @@ const SlotButton = React.memo(function SlotButton({
 	};
 
 	const handleMarkSlotFullToggle = async () => {
-		console.log("slot", slot);
-
 		const updateType = isManuallyFull ? "clearFull" : "markFull";
 		const url = route(`rack.rack-slot.${updateType}`, { id: slot.id });
 		const token = localStorage.getItem("authify-token");
@@ -334,7 +338,7 @@ const SlotButton = React.memo(function SlotButton({
 				) : hasLots ? (
 					<div className="text-center">
 						<div className="text-xs font-black text-base-content">
-							{isMultiLot ? `${slot.lots.length}` : slot.lots[0].id}
+							{isMultiLot ? `${lots.length}` : lots[0].id}
 						</div>
 						{isLargeLot && (
 							<div className="text-[8px] text-indigo-400 font-bold uppercase mt-1">

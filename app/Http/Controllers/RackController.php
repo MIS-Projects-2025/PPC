@@ -10,13 +10,14 @@ use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\ProductionLineRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use Illuminate\Support\Facades\Log;
-use Laravel\Reverb\Concerns\InteractsWithApplications;
+use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 
 class RackController extends Controller
 {
     public function __construct(
         protected RackRepositoryInterface         $repo,
         protected ProductionLineRepositoryInterface $productionLines,
+        protected LotPositionRepositoryInterface  $lotPositionRepo,
         protected RackSlotRepositoryInterface $rackSlotRepo,
     ) {}
 
@@ -41,6 +42,7 @@ class RackController extends Controller
         return Inertia::render('Rack', [
             'racks'           => $racks,
             'slots'           => fn() => $this->rackSlotRepo->all()->keyBy('id'),
+            'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByProductionLine($pl->id),
             'productionLines' => $this->productionLines->allActive(),
         ]);
     }

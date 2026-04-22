@@ -33,9 +33,14 @@ class Rack extends Model
     {
         return Attribute::make(
             get: fn() => $this->slots
-                ->groupBy(fn($slot) => substr($slot->label, 0, 1))
+                ->groupBy(fn($slot) => preg_replace('/\d+$/', '', $slot->label))
                 // Optional: Sort keys so shelf A comes before B
-                ->sortKeys()
+                ->pipe(fn($col) => $col->sortKeysUsing(function ($a, $b) {
+                    if (strlen($a) !== strlen($b)) {
+                        return strlen($a) - strlen($b);
+                    }
+                    return strcmp($a, $b);
+                }))
         );
     }
 

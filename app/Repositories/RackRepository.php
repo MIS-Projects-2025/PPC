@@ -20,10 +20,8 @@ class RackRepository implements RackRepositoryInterface
 
   public function getAllByProductionLine(int $productionLineId): Collection
   {
-    return Rack::with([
-      'productionLine',
-      'slots.lots.lot',
-    ])->where('production_line_id', $productionLineId)
+    return Rack::with(['slots'])
+      ->where('production_line_id', $productionLineId)
       ->orderBy('label')
       ->get();
   }

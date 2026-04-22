@@ -3,55 +3,56 @@ import { useMutation } from "@/Hooks/useMutation";
 import { useToast } from "@/Hooks/useToast";
 import { router } from "@inertiajs/react";
 import { useMemo, useState } from "react";
-import {
-	BiArrowToBottom,
-	BiArrowToRight,
-	BiChevronDown,
-	BiChevronRight,
-} from "react-icons/bi";
-import { BsArrowDown, BsArrowRight } from "react-icons/bs";
+import { BiChevronDown, BiChevronRight } from "react-icons/bi";
 
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-function pad(n) {
-	return String(n).padStart(2, "0");
+function colLabel(n) {
+	// n is 0-indexed
+	let label = "";
+	n += 1; // convert to 1-indexed
+	while (n > 0) {
+		n--;
+		label = String.fromCharCode(65 + (n % 26)) + label;
+		n = Math.floor(n / 26);
+	}
+	return label;
 }
 
 function SlotGrid({ shelves }) {
-	const rowKeys = Object.keys(shelves).sort();
-	const colCount = (shelves[rowKeys[0]] ?? []).length;
+	const entries = Object.entries(shelves);
+	const slotCount = entries[0]?.[1]?.length ?? 0;
 
 	return (
-		<div>
-			{/* Header: Letters */}
-			<div className="flex gap-1 mb-1 ml-8">
-				{Array.from({ length: colCount }, (_, i) => (
-					<div key={i} className="w-10 text-center text-[10px] opacity-50">
-						{LETTERS[i]}
-					</div>
-				))}
-			</div>
-
-			{rowKeys.map((rowNumber) => (
-				<div key={rowNumber} className="flex gap-1 mb-1">
-					<div className="w-6 text-[10px] font-bold flex items-center justify-center bg-base-300 rounded">
-						{rowNumber}
-					</div>
-					{shelves[rowNumber].map((slot) => (
+		<div className="overflow-x-auto">
+			<div className="min-w-max">
+				{/* Header row */}
+				<div className="flex">
+					{entries.map(([rowLabel]) => (
 						<div
-							key={slot.label}
-							className={[
-								"w-10 py-1 rounded text-[10px] font-mono flex-shrink-0 border text-center",
-								slot.is_active
-									? "bg-base-100 text-base-content border-base-content/50"
-									: "bg-rose-500 text-base-content border-base-content/50 line-through",
-							].join(" ")}
+							key={rowLabel}
+							className="w-10 text-center text-xs font-bold text-base-content/60"
 						>
-							{slot.label}
+							{rowLabel}
 						</div>
 					))}
 				</div>
-			))}
+
+				{/* Slot rows */}
+				{Array.from({ length: slotCount }, (_, i) => (
+					<div key={i} className="flex items-center">
+						{entries.map(([rowLabel, rowSlots]) => {
+							const slot = rowSlots[i];
+							return (
+								<div
+									key={slot.id}
+									className="w-10 text-center text-xs border border-base-300 rounded p-1"
+								>
+									{slot.label}
+								</div>
+							);
+						})}
+					</div>
+				))}
+			</div>
 		</div>
 	);
 }
@@ -233,7 +234,6 @@ function RackRow({ rack }) {
 }
 
 export default function RackConfigurator({ racks, plines }) {
-	console.log("🚀 ~ RackConfigurator ~ racks:", racks);
 	const toast = useToast();
 
 	const [rackName, setRackName] = useState("");
@@ -249,7 +249,9 @@ export default function RackConfigurator({ racks, plines }) {
 		for (let r = 1; r <= appliedLayers; r++) {
 			const row = [];
 			for (let c = 0; c < appliedCols; c++) {
-				row.push(`${LETTERS[c]}${pad(r)}`);
+				const label = `${colLabel(c)}${r}`;
+
+				row.push(label);
 			}
 			rows.push(row);
 		}
@@ -361,18 +363,13 @@ export default function RackConfigurator({ racks, plines }) {
 
 				<div className="flex flex-col gap-1">
 					<label className="text-xs font-medium text-base-content uppercase tracking-wide">
-						Layers (A–Z)
+						Layers
 					</label>
 					<input
 						type="number"
 						min={1}
-						max={26}
 						value={layerCount}
-						onChange={(e) =>
-							setLayerCount(
-								Math.min(26, Math.max(1, parseInt(e.target.value) || 1)),
-							)
-						}
+						onChange={(e) => setLayerCount(parseInt(e.target.value))}
 						className="input"
 					/>
 				</div>
@@ -384,13 +381,8 @@ export default function RackConfigurator({ racks, plines }) {
 					<input
 						type="number"
 						min={1}
-						max={99}
 						value={colCount}
-						onChange={(e) =>
-							setColCount(
-								Math.min(99, Math.max(1, parseInt(e.target.value) || 1)),
-							)
-						}
+						onChange={(e) => setColCount(parseInt(e.target.value))}
 						className="input"
 					/>
 				</div>
@@ -413,7 +405,7 @@ export default function RackConfigurator({ racks, plines }) {
 								key={i}
 								className="w-10 text-center text-xs font-bold opacity-50"
 							>
-								{LETTERS[i]}
+								{colLabel(i)}
 							</div>
 						))}
 					</div>

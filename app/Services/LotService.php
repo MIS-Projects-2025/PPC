@@ -92,7 +92,7 @@ class LotService
                 );
             }
 
-            return $lot->load('activePositions.rackSlot');
+            return $lot->fresh();
         });
     }
 
@@ -137,7 +137,6 @@ class LotService
      * Frees all slots and flips status to released.
      *
      * @param  string  $lotId
-     * @param  string  $partname
      * @param  string  $releasedBy
      * @return Lot
      */
@@ -160,7 +159,11 @@ class LotService
 
             $this->positions->releaseByLot($lot->id, $releasedBy);
 
-            return $this->lots->update($lot->id, ['status' => 'released']);
+            return $this->lots->update($lot->id, [
+                'status'      => 'released',
+                'released_by' => $releasedBy,
+                'released_at' => Carbon::now('UTC'),
+            ])->fresh();
         });
     }
 

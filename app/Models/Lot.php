@@ -9,10 +9,11 @@ use Illuminate\Database\Eloquent\Collection;
 
 class Lot extends Model
 {
-    protected $appends = ['slot_ids', 'positions_map'];
-
+    protected $appends = ['slots', 'positions_map'];
     protected $with = [
         'activePositions.rackSlot',
+        'activePositions.rackSlot.rack',
+        'activePositions.rackSlot.rack.productionLine',
         'modifiedBy',
         'receivedBy',
         'releasedBy',
@@ -92,6 +93,13 @@ class Lot extends Model
     {
         return Attribute::make(
             get: fn() => $this->activePositions->pluck('rack_slot_id')->toArray(),
+        );
+    }
+
+    protected function slots(): Attribute
+    {
+        return Attribute::make(
+            get: fn() => $this->activePositions->pluck('rackSlot')->keyBy('id'),
         );
     }
 

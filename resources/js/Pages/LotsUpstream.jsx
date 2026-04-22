@@ -19,6 +19,7 @@ import SearchInput from "@/Components/SearchInput";
 import { useDownloadFile } from "@/Hooks/useDownload";
 import { parseLotScanInput } from "@/Lib/parseLotScanInput";
 import { router } from "@inertiajs/react";
+import { GrAscend, GrDescend } from "react-icons/gr";
 
 const RECEIVE = LOT_UPSTREAM_MODES.RECEIVE;
 const RELEASE = LOT_UPSTREAM_MODES.RELEASE;
@@ -87,7 +88,6 @@ function ScanPanel({ lotActions }) {
 		}
 
 		if (isEditMode) {
-			console.log("🚀 ~ handleConfirm ~ slotPendingLot:", slotPendingLot);
 			editLot({
 				...pendingLotToBeAdded,
 				qty: parseInt(pendingLotToBeAdded.qty) || 0,
@@ -121,7 +121,9 @@ function ScanPanel({ lotActions }) {
 			<div className="flex justify-between items-center mb-4">
 				<div>
 					<h2 className="text-[13px] font-bold tracking-wide">
-						{isEditMode ? `Edit lot: ${pendingLotToBeAdded?.lot_id}` : "Scan lot"}
+						{isEditMode
+							? `Edit lot: ${pendingLotToBeAdded?.lot_id}`
+							: "Scan lot"}
 						{pendingLotToBeAdded?.status && (
 							<span
 								className={clsx("badge", {
@@ -187,7 +189,7 @@ function ScanPanel({ lotActions }) {
 	);
 }
 
-function ReceivedList({ slots, onEdit, lotActions }) {
+function ReceivedList({ onEdit, lotActions }) {
 	const { lots, lastAddedId, recentUpdates, lotMutations } = useLotStore();
 	const { mutateLotCancel, isMutateLotLoading, releaseLot } = lotActions;
 	const [releaseConfirm, setReleaseConfirm] = useState(null);
@@ -243,20 +245,26 @@ function ReceivedList({ slots, onEdit, lotActions }) {
 											<span className="text-[10px] font-semibold rounded bg-base-200 text-base-content border border-base-300">
 												{lot.qty} units
 											</span>
-											{Object.entries(lot.positions_map).map(([slotId]) => (
-												<div
-													key={slotId}
-													className="text-[10px] pl-1 flex items-center gap-1 font-bold rounded bg-base-100 text-orange-700 border border-orange-500/30 tracking-wide"
-												>
-													{slots[slotId]?.rack?.label}
-													<div className="opacity-50">|</div>
-													{slots[slotId]?.label}
-													<div>
-														{" "}
-														({slots[slotId]?.rack?.production_line?.name})
+											{Object.values(lot.positions_map).map((position) => {
+												const deletedAt =
+													position.rack_slot?.deleted_at ||
+													position.rack_slot?.rack?.deleted_at;
+
+												return (
+													<div
+														key={position.rack_slot_id}
+														className="text-[10px] pl-1 flex items-center gap-1 font-bold rounded bg-base-100 text-orange-700 border border-orange-500/30 tracking-wide"
+													>
+														<span className="text-[8px] opacity-75">
+															{deletedAt && "DELETED"}
+															{/* at {formatLocalTime(deletedAt)} */}
+														</span>
+														{position.rack_slot.rack.label}
+														<div className="opacity-50">|</div>
+														{position.rack_slot.label}
 													</div>
-												</div>
-											))}
+												);
+											})}
 										</div>
 									</div>
 								</div>
@@ -332,8 +340,8 @@ function ReceivedList({ slots, onEdit, lotActions }) {
 export default function LotsUpstream({
 	lots: received,
 	totalEntries,
-	slots,
-	racks,
+	racks = null,
+	occupancy,
 	filters: serverFilters,
 	productionLine,
 	productionLineId,
@@ -415,13 +423,13 @@ export default function LotsUpstream({
 			released_date_to: "",
 			aging: false,
 			unslotted: false,
+			sort: "asc",
 		});
 	};
 
 	useEffect(() => {
 		initialize(received.data);
-		setSlots(slots);
-	}, [received, slots]);
+	}, [received]);
 
 	useEffect(() => {
 		if (mode === LOT_UPSTREAM_MODES.RECEIVE) {
@@ -432,7 +440,6 @@ export default function LotsUpstream({
 	}, [mode]);
 
 	useEffect(() => {
-		console.log("🚀 ~ LotsUpstream ~ scanResult:", scanResult);
 		if (!scanResult.status) return;
 
 		if (scanResult.status === LOT_UPSTREAM_MODES.OPEN) {
@@ -463,9 +470,8 @@ export default function LotsUpstream({
 		setEditingLot(lot);
 
 		clearSlotPendingLot();
-		lot.slot_ids.forEach((id) => {
-			const slot = Object.values(slots).find((s) => s.id === id);
-			if (slot) toggleSlotPendingLot(slot);
+		Object.values(lot.slots).forEach((slot) => {
+			toggleSlotPendingLot(slot);
 		});
 
 		document.getElementById(RACK_SELECTION_ID)?.showModal();
@@ -508,7 +514,6 @@ export default function LotsUpstream({
 		// const channel = window.Echo.channel("lot-updates");
 
 		channel.listen("LotChanged", (e) => {
-			console.log("⚡ Received (Plain):", e);
 			const action = e?.action ?? "did something on ";
 			const id = e?.id ?? null;
 			const data = e?.data ?? null;
@@ -556,16 +561,16 @@ export default function LotsUpstream({
 	const dialogRef = useRef(null);
 
 	useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
+		const dialog = dialogRef.current;
+		if (!dialog) return;
 
-    const handleClose = () => {
-        setIsEditMode(false);
-    };
+		const handleClose = () => {
+			setIsEditMode(false);
+		};
 
-    dialog.addEventListener('close', handleClose);
-    return () => dialog.removeEventListener('close', handleClose);
-}, []);
+		dialog.addEventListener("close", handleClose);
+		return () => dialog.removeEventListener("close", handleClose);
+	}, []);
 
 	return (
 		<div className="bg-base-200 font-mono">
@@ -579,6 +584,7 @@ export default function LotsUpstream({
 						<div className="w-8/12">
 							<RackManagement
 								racks={racks}
+								occupancy={occupancy}
 								selectedSlotIds={selectedSlotIds}
 								initialDetailedView={false}
 								multiSelect={true}
@@ -757,6 +763,9 @@ export default function LotsUpstream({
 									positionAnchor: "--anchor-status-select",
 								}}
 							>
+								<li onClick={() => set("status", null)}>
+									<a>All Status</a>
+								</li>
 								<li onClick={() => set("status", "staged")}>
 									<a>Staged</a>
 								</li>
@@ -784,6 +793,19 @@ export default function LotsUpstream({
 								/>
 								<span className="text-[12px]">Unslotted</span>
 							</label>
+						</div>
+
+						<div className="flex flex-col items-end">
+							<button
+								type="button"
+								className="btn btn-sm"
+								onClick={() =>
+									set("sort", filters.sort === "asc" ? "desc" : "asc")
+								}
+							>
+								{filters.sort === "asc" ? <GrAscend /> : <GrDescend />}
+								{filters.sort === "asc" ? "oldest first" : "newest first"}
+							</button>
 						</div>
 
 						<div className="flex flex-col gap-1 items-end ml-auto">
@@ -823,11 +845,7 @@ export default function LotsUpstream({
 						end={received?.to}
 						contentClassName={"m-0 p-0"}
 					/>
-					<ReceivedList
-						slots={slots}
-						onEdit={handleEdit}
-						lotActions={lotActions}
-					/>
+					<ReceivedList onEdit={handleEdit} lotActions={lotActions} />
 				</div>
 			</div>
 		</div>
