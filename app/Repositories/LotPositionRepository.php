@@ -57,8 +57,8 @@ class LotPositionRepository implements LotPositionRepositoryInterface
 
   public function getOccupancyByProductionLine(int $productionLineId): Collection
   {
-    return LotPosition::with('lot:id,lot_id,partname,qty,status')
-      ->whereNull('released_at')
+    return
+      LotPosition::whereNull('released_at')
       ->whereHas('rackSlot', fn($q) => $q->whereHas(
         'rack',
         fn($q) =>
