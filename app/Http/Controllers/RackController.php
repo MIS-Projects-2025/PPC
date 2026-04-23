@@ -81,7 +81,6 @@ class RackController extends Controller
     public function slotMap()
     {
         $slotMap = $this->repo->slotMap();
-
         return Inertia::render('RacksSlotMap', [
             'slotMap' => $slotMap,
         ]);

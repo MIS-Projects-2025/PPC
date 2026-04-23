@@ -45,7 +45,14 @@ class RackRepository implements RackRepositoryInterface
       ]),
     ])
       ->get()
-      ->makeHidden('shelves');
+      ->makeHidden('shelves')
+      ->each(function ($rack) {
+        $rack->slots->each(function ($slot) {
+          $slot->activePositions->each(function ($position) {
+            $position->lot?->setAppends([]);
+          });
+        });
+      });
   }
 
   public function existByLabel(string $label): bool

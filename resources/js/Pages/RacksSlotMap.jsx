@@ -30,7 +30,7 @@ function buildTransposedGrid(slots) {
 // --- sub-components ---
 function LotChip({ lot }) {
     return (
-        <span className="block font-mono text-[9px] leading-snug px-1 py-0.5 rounded bg-amber-100 text-amber-800 break-all">
+        <span className="block font-mono text-[9px] leading-snug px-1 py-0.5 rounded text-base-content break-all">
             {lot.lot_id}
         </span>
     );
@@ -40,18 +40,18 @@ function SlotCell({ slot }) {
     const lots = slot?.active_positions?.map((p) => p.lot).filter(Boolean) ?? [];
     const isFull = slot?.is_manually_full ?? false;
 
-    const fullClass = isFull ? "bg-amber-400" : "";
+    const fullClass = isFull ? "ring ring-red-500 bg-red-500" : "";
 
     if (!slot) {
-        return <div className={clsx("flex-1 min-h-7 rounded border border-dashed border-base-content/10 bg-base-200/30", fullClass)} />;
+        return <div className={clsx("w-17 min-h-7 rounded ring ring-dashed ring-base-content/10 bg-base-200/30", fullClass)} />;
     }
 
     if (lots.length === 0) {
-        return <div className={clsx("flex-1 min-h-7 rounded border border-base-content/10 bg-base-200/40", fullClass)} />;
+        return <div className={clsx("w-17 min-h-7 rounded ring ring-base-content/10 bg-base-200/40", fullClass)} />;
     }
 
     return (
-        <div className="flex-1 min-h-7 rounded border border-amber-400 bg-base-200 p-0.5 flex flex-col gap-0.5">
+        <div className={clsx("w-17 min-h-7 rounded ring ring-amber-400 bg-base-200 p-0.5 flex flex-col gap-0.5", fullClass)}>
             {lots.map((lot) => (
                 <LotChip key={lot.lot_id} lot={lot} />
             ))}
@@ -66,41 +66,45 @@ function RackCard({ rack }) {
     const totalLots = rack.slots.reduce((acc, s) => acc + s.active_positions.length, 0);
 
     return (
-        <div className="bg-base-100 border border-base-content/10 rounded-lg overflow-hidden">
+        <div className="bg-base-100 border border-base-content/10 rounded-lg">
             {/* header */}
-            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-base-content/10">
+            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-base-content/10 sticky top-0 z-20 bg-base-100">
                 <span className="font-mono text-sm font-medium">{rack.label}</span>
                 <span className="text-xs text-base-content/40">
                     {occupiedSlots}/{totalSlots} slots · {totalLots} lots
                 </span>
             </div>
 
-            {/* grid */}
-            <div className="p-2.5">
-                {/* column headers (letters) */}
-                <div className="flex gap-1 mb-1 pl-6">
-                    {rows.map((row) => (
-                        <div key={row} className="flex-1 text-center font-mono text-[10px] text-base-content/30">
-                            {row}
-                        </div>
-                    ))}
-                </div>
-
-                {/* rows (numbers) */}
-                {cols.map((colNum) => {
-                    const numLabel = String(colNum).padStart(2, "0");
-                    return (
-                        <div key={colNum} className="flex gap-1 mb-1 items-start">
-                            <span className="w-5 shrink-0 text-right font-mono text-[10px] text-base-content/30 pt-1.5">
-                                {numLabel}
-                            </span>
-                            {rows.map((row) => {
-                                const label = row + numLabel;
-                                return <SlotCell key={label} slot={slotMap[label]} />;
-                            })}
-                        </div>
-                    );
-                })}
+            <div className="overflow-auto max-h-[500px]">
+                <table className="border-separate border-spacing-1">
+                    <thead>
+                        <tr>
+                            <th className="sticky top-0 left-0 z-20 bg-base-100 w-5" />
+                            {rows.map((row) => (
+                                <th key={row} className="sticky top-0 z-10 bg-base-100 w-[3.75rem] font-mono text-lg text-base-content font-normal text-center">
+                                    {row}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {cols.map((colNum) => (
+                            <tr key={colNum}>
+                                <td className="sticky left-0 z-10 bg-base-100 w-5 font-mono text-lg text-base-content text-right align-top pt-1.5">
+                                    {colNum}
+                                </td>
+                                {rows.map((row) => {
+                                    const label = row + String(colNum);
+                                    return (
+                                        <td key={label} className="align-top">
+                                            <SlotCell slot={slotMap[label]} />
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
@@ -151,9 +155,9 @@ export default function RacksSlotMap({ slotMap: racks }) {
     );
 
     return (
-        <div className="min-h-screen bg-base-200">
+        <div className="min-h-screen">
             {/* toolbar */}
-            <div className="flex items-start justify-between mb-2 gap-4">
+            <div className="flex items-start justify-between gap-4">
                 <div className="fle w-50 flex-col items-center">
                     <div className="text-xl font-medium uppercase tracking-widest text-base-content">
                         Slot map
@@ -181,8 +185,7 @@ export default function RacksSlotMap({ slotMap: racks }) {
                 </div>
             </div>
 
-
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1">
                 {racks.map((rack) => (
                     <RackCard key={rack.id} rack={rack} />
                 ))}
