@@ -15,5 +15,7 @@ interface RackSlotRepositoryInterface
     public function update(int $id, array $data): RackSlot;
     public function delete(int $id): void;
     public function markFull(int $id, string $by): RackSlot;
+    public function markManyFull(array $id, string $by);
     public function clearFull(int $id): RackSlot;
+    public function clearManyFull(array $ids);
 }

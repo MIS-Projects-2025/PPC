@@ -159,11 +159,19 @@ class LotService
 
             $this->positions->releaseByLot($lot->id, $releasedBy);
 
-            return $this->lots->update($lot->id, [
+            $updated = $this->lots->update($lot->id, [
                 'status'      => 'released',
                 'released_by' => $releasedBy,
                 'released_at' => Carbon::now('UTC'),
-            ])->fresh();
+            ])->fresh(['activePositions']);
+
+            $rackSlotIds = $updated->activePositions->pluck('rack_slot_id')->filter()->all();
+
+            if (!empty($rackSlotIds)) {
+                $this->slots->clearManyFull($rackSlotIds);
+            }
+
+            return $updated->fresh();
         });
     }
 

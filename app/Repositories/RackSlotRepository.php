@@ -73,6 +73,15 @@ class RackSlotRepository implements RackSlotRepositoryInterface
     return $slot->fresh();
   }
 
+  public function markManyFull(array $ids, string $by): void
+  {
+    RackSlot::whereIn('id', $ids)->update([
+      'is_manually_full' => true,
+      'marked_full_by'   => $by,
+      'marked_full_at'   => now(),
+    ]);
+  }
+
   public function clearFull(int $id): RackSlot
   {
     $slot = $this->find($id);
@@ -82,5 +91,14 @@ class RackSlotRepository implements RackSlotRepositoryInterface
       'marked_full_at'   => null,
     ]);
     return $slot->fresh();
+  }
+
+  public function clearManyFull(array $ids)
+  {
+    RackSlot::whereIn('id', $ids)->update([
+      'is_manually_full' => false,
+      'marked_full_by'   => null,
+      'marked_full_at'   => null,
+    ]);
   }
 }
