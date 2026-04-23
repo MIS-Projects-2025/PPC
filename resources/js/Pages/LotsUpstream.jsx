@@ -259,9 +259,9 @@ function ReceivedList({ onEdit, lotActions }) {
 															{deletedAt && "DELETED"}
 															{/* at {formatLocalTime(deletedAt)} */}
 														</span>
-														{position.rack_slot.rack.label}
+														{position?.rack_slot?.rack?.label}
 														<div className="opacity-50">|</div>
-														{position.rack_slot.label}
+														{position?.rack_slot?.label}
 													</div>
 												);
 											})}
