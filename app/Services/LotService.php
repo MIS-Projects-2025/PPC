@@ -179,19 +179,21 @@ class LotService
     {
         $sheets = [
             'LOTS' => function () use ($filters, $productionLineId) {
-                return $this->lots->buildLotQuery($filters, $productionLineId)
+                return $this->lots->buildLotQuery($filters, null)
+                    ->whereHas('positions', fn($q) => $q->where('production_line_id', $productionLineId))
                     ->with(['positions' => function ($q) {
                         $q->orderBy('received_at');
                     }, 'positions.rackSlot.rack.productionLine'])
                     ->cursor()
                     ->flatMap(function ($lot) {
                         return $lot->positions
-                            ->whereNotNull('released_at')
                             ->map(function ($pos) use ($lot) {
                                 $slot = $pos->rackSlot;
-                                $releasedAt = Carbon::createFromFormat('Y-m-d H:i:s', $pos->getRawOriginal('released_at'), 'UTC')
+                                $releasedAt = $pos->getRawOriginal('released_at')
+                                    ? Carbon::createFromFormat('Y-m-d H:i:s', $pos->getRawOriginal('released_at'), 'UTC')
                                     ->setTimezone('Asia/Manila')
-                                    ->toDateTimeString();
+                                    ->toDateTimeString()
+                                    : null;
                                 $assignedAt = Carbon::createFromFormat('Y-m-d H:i:s', $pos->getRawOriginal('assigned_at'), 'UTC')
                                     ->setTimezone('Asia/Manila')
                                     ->toDateTimeString();
@@ -200,6 +202,7 @@ class LotService
                                     'Lot ID'      => $lot->lot_id,
                                     'Part Name'   => $lot->partname,
                                     'Line'        => $slot?->rack?->productionLine?->name,
+                                    'Status'      => $pos->getRawOriginal('released_at') ? 'Released' : 'Staged',
                                     'Rack'        => $slot?->rack?->label,
                                     'Slot'        => $slot?->label,
                                     'Received At' => $assignedAt,
