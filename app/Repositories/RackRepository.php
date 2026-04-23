@@ -12,7 +12,8 @@ class RackRepository implements RackRepositoryInterface
   {
     return Rack::with([
       'productionLine',
-      'slots.lots.lot',
+      'slots',
+      // 'slots.lots.lot',
     ])
       ->orderBy('label')
       ->get();
