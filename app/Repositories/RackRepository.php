@@ -27,6 +27,27 @@ class RackRepository implements RackRepositoryInterface
       ->get();
   }
 
+  public function slotMap()
+  {
+    return Rack::with([
+      'slots.activePositions' => fn($q) => $q->with([
+        'lot' => fn($q) => $q
+          ->without([
+            'activePositions',
+            'activePositions.rackSlot',
+            'activePositions.rackSlot.rack',
+            'activePositions.rackSlot.rack.productionLine',
+            'modifiedBy',
+            'receivedBy',
+            'releasedBy',
+          ])
+          ->select(['id', 'lot_id', 'partname', 'qty', 'status']),
+      ]),
+    ])
+      ->get()
+      ->makeHidden('shelves');
+  }
+
   public function existByLabel(string $label): bool
   {
     return Rack::where('label', $label)->exists();

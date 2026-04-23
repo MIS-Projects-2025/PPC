@@ -380,6 +380,7 @@ export default function LotsUpstream({
 		released_date_to: serverFilters.released_date_to ?? "",
 		aging: serverFilters.aging ?? false,
 		unslotted: serverFilters.unslotted ?? false,
+		sort: serverFilters.sort ?? "asc",
 	});
 
 	const set = (key, val) => setFilters((prev) => ({ ...prev, [key]: val }));

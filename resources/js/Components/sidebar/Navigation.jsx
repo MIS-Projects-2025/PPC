@@ -10,6 +10,7 @@ import {
 	LuPackage,
 } from "react-icons/lu";
 import { MdConveyorBelt } from "react-icons/md";
+import { PiTableLight } from "react-icons/pi";
 import { TbProgressCheck, TbResize, TbSettings } from "react-icons/tb";
 
 export default function NavLinks({ isCollapse = false }) {
@@ -86,6 +87,12 @@ export default function NavLinks({ isCollapse = false }) {
 						href: route("lot-upstream.index", { productionLine: "pl6" }),
 						label: "PL6 Lot Controller",
 						icon: <MdConveyorBelt className="w-4 h-4" />,
+						notification: false,
+					},
+					{
+						href: route("rack.slotMap"),
+						label: "Rack Slot Map",
+						icon: <PiTableLight className="w-4 h-4" />,
 						notification: false,
 					},
 					{

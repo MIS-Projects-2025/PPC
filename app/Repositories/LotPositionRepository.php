@@ -66,6 +66,17 @@ class LotPositionRepository implements LotPositionRepositoryInterface
       ))
       ->select('rack_slot_id', 'lot_id')
       ->get()
+      ->makeHidden(['created_at', 'updated_at', 'marked_full_by'])
       ->groupBy('rack_slot_id');
+    // LotPosition::with('lot:id,lot_id,partname,qty,status')
+    //   ->whereNull('released_at')
+    //   ->whereHas('rackSlot', fn($q) => $q->whereHas(
+    //     'rack',
+    //     fn($q) =>
+    //     $q->where('production_line_id', $productionLineId)
+    //   ))
+    //   ->select('rack_slot_id', 'lot_id')
+    //   ->get()
+    //   ->groupBy('rack_slot_id');
   }
 }

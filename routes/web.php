@@ -114,6 +114,7 @@ Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
 Route::prefix('/rack')->name('rack.')->group(function () {
     Route::get('/edit', [RackController::class, 'edit'])->name('edit');
     Route::patch('{id}/update', [RackController::class, 'update'])->name('update');
+    Route::get('/slot-map', [RackController::class, 'slotMap'])->name('slotMap');
     Route::get('/barcode', [RackController::class, 'all'])->name('barcode');
     Route::post('/', [RackController::class, 'store'])->name('store');
     Route::delete('{id}/delete', [RackController::class, 'destroy'])->name('destroy');
