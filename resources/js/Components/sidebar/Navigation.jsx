@@ -84,14 +84,20 @@ export default function NavLinks({ isCollapse = false }) {
 						notification: false,
 					},
 					{
+						href: route("rack.slotMap", { productionLine: "pl1"}),
+						label: "PL1 Rack Slot Map",
+						icon: <PiTableLight className="w-4 h-4" />,
+						notification: false,
+					},
+					{
 						href: route("lot-upstream.index", { productionLine: "pl6" }),
 						label: "PL6 Lot Controller",
 						icon: <MdConveyorBelt className="w-4 h-4" />,
 						notification: false,
 					},
 					{
-						href: route("rack.slotMap"),
-						label: "Rack Slot Map",
+						href: route("rack.slotMap", { productionLine: "pl6"}),
+						label: "PL6 Rack Slot Map",
 						icon: <PiTableLight className="w-4 h-4" />,
 						notification: false,
 					},

@@ -30,7 +30,7 @@ function buildTransposedGrid(slots) {
 // --- sub-components ---
 function LotChip({ lot }) {
     return (
-        <span className="block font-mono text-[9px] leading-snug px-1 py-0.5 rounded text-base-content break-all">
+        <span className="block font-mono text-md leading-snug px-1 py-0.5 rounded text-base-content break-all">
             {lot.lot_id}
         </span>
     );
@@ -43,15 +43,15 @@ function SlotCell({ slot }) {
     const fullClass = isFull ? "ring ring-red-500 bg-red-500" : "";
 
     if (!slot) {
-        return <div className={clsx("w-17 min-h-7 rounded ring ring-dashed ring-base-content/10 bg-base-200/30", fullClass)} />;
+        return <div className={clsx("w-32 min-h-7 rounded ring ring-dashed ring-base-content/10 bg-base-200/30", fullClass)} />;
     }
 
     if (lots.length === 0) {
-        return <div className={clsx("w-17 min-h-7 rounded ring ring-base-content/10 bg-base-200/40", fullClass)} />;
+        return <div className={clsx("w-32 min-h-7 rounded ring ring-base-content/10 bg-base-200/40", fullClass)} />;
     }
 
     return (
-        <div className={clsx("w-17 min-h-7 rounded ring ring-amber-400 bg-base-200 p-0.5 flex flex-col gap-0.5", fullClass)}>
+        <div className={clsx("w-32 min-h-7 rounded ring ring-amber-400 bg-base-200 p-0.5 flex flex-col gap-0.5", fullClass)}>
             {lots.map((lot) => (
                 <LotChip key={lot.lot_id} lot={lot} />
             ))}
@@ -130,7 +130,7 @@ const LiveTimeLabel = ({ timestamp }) => {
   return <span>{formatPastDateTimeLabel(timestamp)}</span>;
 };
 
-export default function RacksSlotMap({ slotMap: racks }) {
+export default function RacksSlotMap({ productionLine, slotMap: racks }) {
     const [lastRefreshTime, setLastRefreshTime] = useState(Date.now());
 
     const load = useCallback(async () => {
@@ -160,7 +160,7 @@ export default function RacksSlotMap({ slotMap: racks }) {
             <div className="flex items-start justify-between gap-4">
                 <div className="fle w-50 flex-col items-center">
                     <div className="text-xl font-medium uppercase tracking-widest text-base-content">
-                        Slot map
+                        <span>{productionLine?.name}</span> Slot map
                     </div>
                     <div className="flex flex-1 justify-between items-center gap-1">
                         {lastRefreshTime && (

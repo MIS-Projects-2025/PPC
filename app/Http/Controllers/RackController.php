@@ -78,11 +78,19 @@ class RackController extends Controller
         ]);
     }
 
-    public function slotMap()
+    public function slotMap(string $productionLine)
     {
-        $slotMap = $this->repo->slotMap();
+        $pl = $productionLine
+            ? ProductionLine::where('name', strtoupper($productionLine))->firstOrFail()
+            : ProductionLine::orderBy('id')->first();
+
+        abort_if(!$pl, 404);
+
+        $slotMap = $this->repo->slotMap($pl->id);
+
         return Inertia::render('RacksSlotMap', [
-            'slotMap' => $slotMap,
+            'slotMap'        => $slotMap,
+            'productionLine' => $pl,
         ]);
     }
 

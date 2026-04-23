@@ -27,7 +27,7 @@ class RackRepository implements RackRepositoryInterface
       ->get();
   }
 
-  public function slotMap()
+  public function slotMap(int $productionLineId)
   {
     return Rack::with([
       'slots.activePositions' => fn($q) => $q->with([
@@ -44,6 +44,7 @@ class RackRepository implements RackRepositoryInterface
           ->select(['id', 'lot_id', 'partname', 'qty', 'status']),
       ]),
     ])
+      ->where('production_line_id', $productionLineId)
       ->get()
       ->makeHidden('shelves')
       ->each(function ($rack) {

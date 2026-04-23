@@ -35,74 +35,6 @@ Route::redirect('/', "/$app_name");
 
 require __DIR__ . '/auth.php';
 
-function getRackInventoryData()
-{
-    $allSlots = collect([
-        ['id' => 101, 'rack_id' => 1, 'label' => "A1", 'is_manually_full' => 0],
-        ['id' => 104, 'rack_id' => 1, 'label' => "A4", 'is_manually_full' => 1],
-    ])->keyBy('id');
-
-    $racks = [];
-    $slotIdCounter = 1000;
-    $lotIdCounter = 500;
-
-    for ($i = 0; $i < 20; $i++) {
-        $rackId = 4 + $i;
-        $rackLabel = "RACK-" . chr(68 + $i);
-        $numSlots = rand(20, 30);
-        $currentRackSlots = [];
-
-        for ($s = 1; $s <= $numSlots; $s++) {
-            $label = chr(rand(65, 70)) . "-" . $s;
-            $isManuallyFull = (rand(1, 100) > 90) ? 1 : 0;
-
-            $slotId = $slotIdCounter++;
-            $allSlots[$slotId] = [
-                'id'              => $slotId,
-                'rack_id'         => $rackId,
-                'label'           => $label,
-                'is_manually_full' => $isManuallyFull,
-            ];
-
-            $lots = [];
-            if (rand(1, 100) > 10) {
-                $numLots = rand(1, 5);
-                for ($l = 0; $l < $numLots; $l++) {
-                    $lotId = "LOT-" . $lotIdCounter++;
-                    $lots[] = [
-                        'lot_id' => $lotId,
-                        'partname' => "Part-" . rand(100, 999),
-                        'qty' => rand(100, 1500),
-                        'received_at' => now()->toDateTimeString(),
-                        'slot_ids' => [$slotId],
-                        'has_exceeded_age_threshold' => (rand(1, 100) > 80)
-                    ];
-                }
-            }
-
-            $currentRackSlots[] = [
-                'id' => $slotId,
-                'lots' => $lots,
-                'label' => $label,
-                'is_manually_full' => $isManuallyFull,
-            ];
-        }
-
-        $shelves = collect($currentRackSlots)
-            ->groupBy(fn($slot) => substr($slot['label'], 0, 1))
-            ->toArray();
-
-        $racks[] = [
-            'id' => $rackId,
-            'label' => $rackLabel,
-            'slots' => $currentRackSlots,
-            'shelves' => $shelves,
-        ];
-    }
-
-    return ['slots' => $allSlots, 'racks' => $racks];
-}
-
 Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::get('/{productionLine}', [LotController::class, 'index'])
         ->name('index');
@@ -114,7 +46,7 @@ Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
 Route::prefix('/rack')->name('rack.')->group(function () {
     Route::get('/edit', [RackController::class, 'edit'])->name('edit');
     Route::patch('{id}/update', [RackController::class, 'update'])->name('update');
-    Route::get('/slot-map', [RackController::class, 'slotMap'])->name('slotMap');
+    Route::get('/slot-map/{productionLine?}', [RackController::class, 'slotMap'])->name('slotMap');
     Route::get('/barcode', [RackController::class, 'all'])->name('barcode');
     Route::post('/', [RackController::class, 'store'])->name('store');
     Route::delete('{id}/delete', [RackController::class, 'destroy'])->name('destroy');
@@ -289,7 +221,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
         Route::get('/downloadCapacityTemplate', [WipController::class,    'downloadCapacityTemplate'])->name('downloadCapacityTemplate');
         Route::get('/downloadPickUpTemplate',   [PickupController::class,  'downloadPickUpTemplate'])->name('downloadPickUpTemplate');
         Route::get('/downloadF3PickUpTemplate', [PickupController::class,  'downloadF3PickUpTemplate'])->name('downloadF3PickUpTemplate');
-        Route::get('/downloadLotsUpstream', [LotController::class,  'download'])->name('downloadLots');
+        Route::get('/downloadLotsUpstream/{productionLine}', [LotController::class,  'download'])->name('downloadLots');
     });
 });
 

@@ -340,6 +340,8 @@ function ReceivedList({ onEdit, lotActions }) {
 export default function LotsUpstream({
 	lots: received,
 	totalEntries,
+	totalReceived: serverTotalReceived,
+	totalReleased: serverTotalReleased,
 	racks = null,
 	occupancy,
 	filters: serverFilters,
@@ -352,6 +354,12 @@ export default function LotsUpstream({
 		initialize,
 		isScanning,
 		addPendingLot,
+		totalReceived,
+		totalReleased,
+		setTotalReleased,
+		setTotalReceived,
+		incrementTotalReceived,
+		incrementTotalReleased,
 		updateLot,
 		mode,
 		setMode,
@@ -411,7 +419,7 @@ export default function LotsUpstream({
 			Object.entries(filters).filter(([, v]) => v !== "" && v !== false),
 		);
 
-		downloadLots(route("api.download.downloadLots"), params);
+		downloadLots(route("api.download.downloadLots", {productionLine: productionLine}), params);
 	};
 
 	const resetFilters = () => {
@@ -430,6 +438,8 @@ export default function LotsUpstream({
 
 	useEffect(() => {
 		initialize(received.data);
+		setTotalReceived(serverTotalReceived);
+		setTotalReleased(serverTotalReleased);
 	}, [received]);
 
 	useEffect(() => {
@@ -529,10 +539,12 @@ export default function LotsUpstream({
 				receiveLot({
 					...e.data,
 				});
+				incrementTotalReceived();
 				appendRecentUpdate(e.id, mutator, action);
 				setTimeout(() => clearRecentUpdate(e.id), 5000);
 			} else if (action === "updated" || action === "released") {
 				mutator = action === "released" ? releasedBy : modifiedBy;
+				incrementTotalReleased();
 				updateLot(e.id, e.data);
 				appendRecentUpdate(e.id, mutator, action);
 				setTimeout(() => clearRecentUpdate(e.id), 5000);
@@ -836,16 +848,22 @@ export default function LotsUpstream({
 				</div>
 
 				<div className="flex-1 min-w-0 overflow-y-auto">
-					<Pagination
-						links={received.links}
-						currentPage={received?.current_page}
-						goToPage={goToPage}
-						filteredTotal={received?.total}
-						overallTotal={totalEntries}
-						start={received?.from}
-						end={received?.to}
-						contentClassName={"m-0 p-0"}
-					/>
+					<div className="flex gap-6">
+						<div className="flex gap-2 items-center">
+							<div className="flex gap-1"><span className="opacity-50">received</span> <span>{totalReceived}</span></div>
+							<div className="flex gap-1"><span className="opacity-50">released</span> <span>{totalReleased}</span></div>
+						</div>
+						<Pagination
+							links={received.links}
+							currentPage={received?.current_page}
+							goToPage={goToPage}
+							filteredTotal={received?.total}
+							overallTotal={totalEntries}
+							start={received?.from}
+							end={received?.to}
+							contentClassName={"m-0 p-0"}
+						/>
+					</div>
 					<ReceivedList onEdit={handleEdit} lotActions={lotActions} />
 				</div>
 			</div>

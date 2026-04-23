@@ -79,6 +79,7 @@ export function useLotActions() {
 			);
 
 			store.receiveLot(result?.data ?? {});
+			store.incrementTotalReceived();
 			store.resetAll();
 			store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);
 		} catch (error) {
@@ -165,14 +166,15 @@ export function useLotActions() {
 
 		try {
 			const result = await promise;
-			console.log("[release] result for", lotId, result?.data);
+			// console.log("[release] result for", lotId, result?.data);
 			store.updateLot(result?.data?.id, result?.data);
-			console.log(
-				"[release] lots after update:",
-				useLotStore
-					.getState()
-					.lots.map((l) => ({ id: l.id, status: l.status })),
-			);
+			store.incrementTotalReleased();
+			// console.log(
+			// 	"[release] lots after update:",
+			// 	useLotStore
+			// 		.getState()
+			// 		.lots.map((l) => ({ id: l.id, status: l.status })),
+			// );
 			store.resetAll();
 			store.setScanResult(LOT_UPSTREAM_MODES.SUCCESS);
 		} catch (error) {

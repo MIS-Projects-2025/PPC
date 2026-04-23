@@ -8,6 +8,8 @@ export const useLotStore = create((set, get) => ({
 	lots: [],
 	slots: [],
 	socketId: null,
+	totalReceived: 0,
+	totalReleased: 0,
 	pendingLotToBeAdded: EMPTY_FORM,
 	slotPendingLot: [],
 	lastAddedId: null,
@@ -51,6 +53,10 @@ export const useLotStore = create((set, get) => ({
 			return { lotMutations: next };
 		}),
 
+	setTotalReleased: (totalReleased) => set({ totalReleased }),
+	setTotalReceived: (totalReceived) => set({ totalReceived }),
+	incrementTotalReleased: () => set((state) => ({ totalReleased: state.totalReleased + 1 })),
+	incrementTotalReceived: () => set((state) => ({ totalReceived: state.totalReceived + 1 })),
 	setIsEditMode: (isEditMode) => set({ isEditMode }),
 	setMode: (mode) => set({ mode }),
 	setSlots: (slots) => set({ slots }),

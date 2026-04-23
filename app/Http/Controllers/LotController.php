@@ -55,6 +55,9 @@ class LotController extends Controller
             'sort'
         ]);
 
+        $todayStart = now('Asia/Manila')->startOfDay()->utc();
+        $todayEnd   = now('Asia/Manila')->endOfDay()->utc();
+
         return Inertia::render('LotsUpstream', [
             'lots' => Inertia::always(
                 fn() =>
@@ -70,6 +73,12 @@ class LotController extends Controller
                 fn($q) =>
                 $q->where('production_line_id', $pl->id)
             )->count(),
+            'totalReleased' => Lot::whereHas('positions', fn($q) => $q->where('production_line_id', $pl->id))
+                ->whereBetween('released_at', [$todayStart, $todayEnd])
+                ->count(),
+            'totalReceived' => Lot::whereHas('positions', fn($q) => $q->where('production_line_id', $pl->id))
+                ->whereBetween('received_at', [$todayStart, $todayEnd])
+                ->count(),
         ]);
     }
 
@@ -166,8 +175,11 @@ class LotController extends Controller
         ]);
     }
 
-    public function download()
+    public function download(string $productionLine)
     {
+        $pl = ProductionLine::where('name', strtoupper($productionLine))
+            ->firstOrFail();
+
         $filters = request()->only([
             'status',
             'search',
@@ -182,7 +194,8 @@ class LotController extends Controller
         ]);
 
         return $this->lotService->downloadFilteredExport(
-            $filters
+            $filters,
+            $pl->id,
         );
     }
 }

@@ -175,11 +175,11 @@ class LotService
         });
     }
 
-    public function downloadFilteredExport(array $filters)
+    public function downloadFilteredExport(array $filters, $productionLineId)
     {
         $sheets = [
-            'LOTS' => function () use ($filters) {
-                return $this->lots->buildLotQuery($filters, null)
+            'LOTS' => function () use ($filters, $productionLineId) {
+                return $this->lots->buildLotQuery($filters, $productionLineId)
                     ->with(['positions' => function ($q) {
                         $q->orderBy('received_at');
                     }, 'positions.rackSlot.rack.productionLine'])
@@ -202,41 +202,13 @@ class LotService
                                     'Line'        => $slot?->rack?->productionLine?->name,
                                     'Rack'        => $slot?->rack?->label,
                                     'Slot'        => $slot?->label,
-                                    'Assigned At' => $assignedAt,
-                                    'Assigned By' => $pos->assigned_by,
+                                    'Received At' => $assignedAt,
+                                    'Received By' => $pos->assigned_by,
                                     'Released At' => $releasedAt,
                                     'Released By' => $pos->released_by,
                                 ];
                             });
                     });
-                // ->map(function ($lot) {
-                //     $pos = $lot->latestPosition;
-                //     $slot = $pos?->rackSlot;
-                //     $receivedAt = $lot->getRawOriginal('received_at')
-                //         ? Carbon::createFromFormat('Y-m-d H:i:s', $lot->getRawOriginal('received_at'), 'UTC')
-                //         ->setTimezone('Asia/Manila')
-                //         ->toDateTimeString()
-                //         : 'N/A';
-                //     $releasedAt = $lot->getRawOriginal('released_at')
-                //         ? Carbon::createFromFormat('Y-m-d H:i:s', $lot->getRawOriginal('released_at'), 'UTC')
-                //         ->setTimezone('Asia/Manila')
-                //         ->toDateTimeString()
-                //         : 'N/A';
-
-                //     return [
-                //         'Lot ID'      => $lot->lot_id,
-                //         'Part Name'   => $lot->partname,
-                //         'Quantity'    => $lot->qty,
-                //         'Status'      => $lot->status,
-                //         'Released At' => $releasedAt,
-                //         'Released By' => $lot->released_by,
-                //         'Received At' => $receivedAt,
-                //         'Received By' => $lot->received_by,
-                //         'Line'        => $slot?->rack?->productionLine?->name,
-                //         'Rack'        => $slot?->rack?->label,
-                //         'Slot'        => $slot?->label,
-                //     ];
-                // });
             },
         ];
 

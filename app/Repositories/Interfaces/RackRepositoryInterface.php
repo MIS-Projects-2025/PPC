@@ -11,7 +11,7 @@ interface RackRepositoryInterface
     public function byProductionLine(int $productionLineId): Collection;
     public function getAllByProductionLine(int $productionLineId): Collection;
     public function existByLabel(string $label): bool;
-    public function slotMap();
+    public function slotMap(int $productionLineId);
     public function find(int $id): Rack;
     public function findWithSlots(int $id): Rack;
     public function create(array $data): Rack;
