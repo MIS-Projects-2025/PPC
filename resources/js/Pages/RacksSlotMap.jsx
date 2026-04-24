@@ -166,7 +166,7 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
                         {lastRefreshTime && (
                             <div className="flex text-xs text-base-content/30 font-mono flex-col">
                                 <div className="">
-                                    {new Date(lastRefreshTime).toLocaleTimeString()}
+                                    updated {new Date(lastRefreshTime).toLocaleTimeString()}
                                 </div>
                                 <LiveTimeLabel timestamp={lastRefreshTime} />
                             </div>

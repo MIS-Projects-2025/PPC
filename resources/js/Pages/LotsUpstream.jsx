@@ -850,6 +850,7 @@ export default function LotsUpstream({
 				<div className="flex-1 min-w-0 overflow-y-auto">
 					<div className="flex gap-6">
 						<div className="flex gap-2 items-center">
+							<div className="flex gap-1 opacity-50">Today</div>
 							<div className="flex gap-1"><span className="opacity-50">received</span> <span>{totalReceived}</span></div>
 							<div className="flex gap-1"><span className="opacity-50">released</span> <span>{totalReleased}</span></div>
 						</div>
