@@ -242,7 +242,13 @@ class LotService
                                     'Released By' => $pos->released_by,
                                 ];
                             });
-                    });
+                    })
+                    ->sortBy([
+                        ['Lot ID',       'asc'],
+                        ['Received At',  'asc'],
+                        ['Released At',  'asc'],
+                    ])
+                    ->values();
             },
         ];
 

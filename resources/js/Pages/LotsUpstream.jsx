@@ -307,7 +307,7 @@ function ReceivedList({ onEdit, lotActions }) {
 												{lot.partname}
 											</p>
 											<span className="text-[10px] font-semibold rounded bg-base-200 text-base-content border border-base-300">
-												{lot.qty} units
+												{Number(lot.qty ?? 0).toLocaleString()} quantity
 											</span>
 											{recentUpdate && (
 												<div className="flex items-center gap-0 ml-1">
