@@ -157,6 +157,8 @@ class LotService
                 ]);
             }
 
+            $rackSlotIds = $lot->activePositions->pluck('rack_slot_id')->filter()->all();
+
             $this->positions->releaseByLot($lot->id, $releasedBy);
 
             $updated = $this->lots->update($lot->id, [
@@ -164,8 +166,6 @@ class LotService
                 'released_by' => $releasedBy,
                 'released_at' => Carbon::now('UTC'),
             ])->fresh(['activePositions']);
-
-            $rackSlotIds = $updated->activePositions->pluck('rack_slot_id')->filter()->all();
 
             if (!empty($rackSlotIds)) {
                 $this->slots->clearManyFull($rackSlotIds);
