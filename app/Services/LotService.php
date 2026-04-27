@@ -12,6 +12,7 @@ use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use Carbon\Carbon;
 use App\Traits\ExportTrait;
+use Illuminate\Support\Facades\Cache;
 
 class LotService
 {
@@ -162,6 +163,16 @@ class LotService
      */
     public function release(string $lotId, string $releasedBy): Lot
     {
+        $cacheKey = "releasing_lot_{$lotId}";
+
+        if (Cache::has($cacheKey)) {
+            throw ValidationException::withMessages([
+                'lot' => 'Release already in progress for this lot.',
+            ]);
+        }
+
+        Cache::put($cacheKey, true, ttl: 4);
+
         return DB::transaction(function () use ($lotId, $releasedBy) {
             $lot = $this->lots->findLastStaged($lotId);
 
@@ -243,10 +254,10 @@ class LotService
                                 ];
                             });
                     })
-                    ->sortBy([
-                        ['Lot ID',       'asc'],
-                        ['Received At',  'asc'],
-                        ['Released At',  'asc'],
+                    ->sortBy(fn($row) => [
+                        strtolower($row['Lot ID'] ?? ''),
+                        strtolower($row['Received At'] ?? ''),
+                        strtolower($row['Released At'] ?? ''),
                     ])
                     ->values();
             },
