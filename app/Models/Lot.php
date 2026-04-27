@@ -34,7 +34,6 @@ class Lot extends Model
     ];
 
     protected $casts = [
-        // 'received_at' => 'datetime',
         'qty'         => 'integer',
     ];
 

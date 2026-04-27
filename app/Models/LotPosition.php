@@ -21,8 +21,8 @@ class LotPosition extends Model
     ];
 
     protected $casts = [
-        'assigned_at' => 'datetime',
-        'released_at' => 'datetime',
+        // 'assigned_at' => 'datetime',
+        // 'released_at' => 'datetime',
     ];
 
     public function lot(): BelongsTo

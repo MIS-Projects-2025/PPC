@@ -20,8 +20,6 @@ class LotStaging extends Model
     ];
 
     protected $casts = [
-        'staged_at'   => 'datetime',
-        'released_at' => 'datetime',
         'cycle'       => 'integer',
     ];
 
