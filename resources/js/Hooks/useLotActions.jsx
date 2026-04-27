@@ -72,13 +72,20 @@ export function useLotActions() {
 					...(socketId && { "X-Socket-ID": socketId }),
 				},
 			});
+			
+			const wasCreated = result?.data?.created;
 
 			toast.success(
-				`Added ${pendingLotToBeAdded.lot_id} → ${slotPendingLot.map((s) => s.label || s.name).join(", ")}`,
+				`${wasCreated ? "Added" : "Re-stocked"} ${pendingLotToBeAdded.lot_id} → ${slotPendingLot.map((s) => s.label || s.name).join(", ")}`,
 				toastOptions,
 			);
 
-			store.receiveLot(result?.data ?? {});
+			if (wasCreated) {
+					store.receiveLot(result?.data?.lot);
+			} else {
+					store.updateLot(result?.data?.lot?.id, result?.data?.lot);
+			}
+
 			store.incrementTotalReceived();
 			store.resetAll();
 			store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);

@@ -46,6 +46,7 @@ Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
 Route::prefix('/rack')->name('rack.')->group(function () {
     Route::get('/edit', [RackController::class, 'edit'])->name('edit');
     Route::patch('{id}/update', [RackController::class, 'update'])->name('update');
+    // Route::patch('{id}/staged-history', [RackController::class, 'getStagedHistory'])->name('getStagedHistory');
     Route::get('/slot-map/{productionLine?}', [RackController::class, 'slotMap'])->name('slotMap');
     Route::get('/barcode', [RackController::class, 'all'])->name('barcode');
     Route::post('/', [RackController::class, 'store'])->name('store');

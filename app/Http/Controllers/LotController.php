@@ -52,7 +52,8 @@ class LotController extends Controller
             'aging',
             'unslotted',
             'per_page',
-            'sort'
+            'sort',
+            'restocked'
         ]);
 
         $todayStart = now('Asia/Manila')->startOfDay()->utc();
@@ -73,8 +74,12 @@ class LotController extends Controller
                 fn($q) =>
                 $q->where('production_line_id', $pl->id)
             )->count(),
-            'totalReleased' => Lot::whereHas('positions', fn($q) => $q->where('production_line_id', $pl->id))
-                ->whereBetween('released_at', [$todayStart, $todayEnd])
+            'totalReleased' => Lot::whereHas(
+                'stagings',
+                fn($q) => $q
+                    ->whereBetween('released_at', [$todayStart, $todayEnd])
+            )
+                ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $pl->id))
                 ->count(),
             'totalReceived' => Lot::whereHas('positions', fn($q) => $q->where('production_line_id', $pl->id))
                 ->whereBetween('received_at', [$todayStart, $todayEnd])

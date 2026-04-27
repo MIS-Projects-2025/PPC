@@ -27,11 +27,12 @@ class LotPositionRepository implements LotPositionRepositoryInterface
       ->first();
   }
 
-  public function assign(int $lotId, int $rackSlotId, string $by, int $productionLineId): LotPosition
+  public function assign(int $lotId, int $rackSlotId, int $lotStagingId, string $by, int $productionLineId): LotPosition
   {
     return LotPosition::create([
       'lot_id'       => $lotId,
       'rack_slot_id' => $rackSlotId,
+      'lot_staging_id'   => $lotStagingId,
       'production_line_id' => $productionLineId,
       'assigned_at'  => now(),
       'assigned_by'  => $by,

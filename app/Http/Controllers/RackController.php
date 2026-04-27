@@ -50,7 +50,7 @@ class RackController extends Controller
     public function edit()
     {
         $plines = $this->productionLines->allActive();
-        $racksWithSlots = $this->repo->all();
+        $racksWithSlots = $this->repo->all()->each->append('shelves');
 
         return Inertia::render('RackConfigurator', [
             'racks' => $racksWithSlots,
@@ -60,7 +60,7 @@ class RackController extends Controller
 
     public function all()
     {
-        $racks = $this->repo->all();
+        $racks = $this->repo->all()->each->append('shelves');;
 
         return Inertia::render('RackBarcode', [
             'racks' => $racks

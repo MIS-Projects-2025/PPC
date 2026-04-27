@@ -12,7 +12,7 @@ class Rack extends Model
 {
     use SoftDeletes;
 
-    protected $appends = ['shelves'];
+    // protected $appends = ['shelves'];
 
     protected $fillable = [
         'production_line_id',

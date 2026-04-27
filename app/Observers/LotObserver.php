@@ -12,8 +12,11 @@ class LotObserver
     public function created(Lot $item): void
     {
         try {
-            // Eager load relationships for the broadcast payload
-            $item->load(['activePositions.rackSlot.rack', 'positions', 'modifiedBy', 'receivedBy']);
+            $item->load([
+                'stagings.positions.rackSlot.rack',
+                'modifiedBy',
+                'receivedBy',
+            ]);
 
             LotChanged::dispatch($item, 'created');
         } catch (Throwable $e) {
@@ -28,7 +31,12 @@ class LotObserver
                 ? 'released'
                 : 'updated';
 
-            $item->load(['activePositions.rackSlot.rack', 'positions', 'modifiedBy', 'receivedBy', 'releasedBy']);
+            $item->load([
+                'stagings.positions.rackSlot.rack',
+                'modifiedBy',
+                'receivedBy',
+                'releasedBy',
+            ]);
 
             LotChanged::dispatch($item, $action);
         } catch (Throwable $e) {

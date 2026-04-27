@@ -4,12 +4,14 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
 
 class Lot extends Model
 {
-    protected $appends = ['slots', 'positions_map'];
+    // protected $appends = ['slots', 'positions_map'];
+    protected $appends = ['slots'];
     protected $with = [
         'activePositions.rackSlot',
         'activePositions.rackSlot.rack',
@@ -41,9 +43,24 @@ class Lot extends Model
         return $this->hasMany(LotPosition::class);
     }
 
-    public function getPositionsMapAttribute(): Collection
+    public function scopeRestocked($query)
     {
-        return $this->activePositions->keyBy('rack_slot_id');
+        return $query->has('stagings', '>', 1);
+    }
+
+    // public function getPositionsMapAttribute(): Collection
+    // {
+    //     return $this->activePositions->keyBy('rack_slot_id');
+    // }
+
+    public function stagings(): HasMany
+    {
+        return $this->hasMany(LotStaging::class)->orderBy('cycle');
+    }
+
+    public function activeStaging(): HasOne
+    {
+        return $this->hasOne(LotStaging::class)->whereNull('released_at');
     }
 
     public function activePositions(): HasMany

@@ -252,6 +252,8 @@ const SlotButton = React.memo(function SlotButton({
 		<button
 			type="button"
 			onClick={() => {
+				if (isManuallyFull) return;
+
 				setSelectedSlot(slot);
 				handleSlotClick(slot);
 			}}
@@ -262,7 +264,7 @@ const SlotButton = React.memo(function SlotButton({
 				multiSelect && isSelected && "ring-2 ring-primary animate-pulse",
 				"rounded-none -ml-[1px] -mt-[1px]",
 				{
-					"bg-rose-500 border-rose-700 cursor-not-allowed": isManuallyFull,
+					"bg-rose-500 border-rose-700 cursor-not-allowed pointer": isManuallyFull,
 					"bg-black border-black": !isSlotEnabled,
 					"min-w-15 text-xs font-mono p-0": !isDetailedView,
 					"": isHighlighted || hasLots,
@@ -297,7 +299,7 @@ const SlotButton = React.memo(function SlotButton({
 				</button>
 			</div>
 
-			{multiSelect && (
+			{multiSelect && !isManuallyFull && (
 				<div className="absolute top-0 right-0">
 					<input
 						type="checkbox"

@@ -8,6 +8,7 @@ use App\Models\Lot;
 use App\Repositories\Interfaces\LotRepositoryInterface;
 use Carbon\Carbon;
 use App\Models\LotPosition;
+use App\Models\LotStaging;
 use App\Models\RackSlot;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
@@ -101,6 +102,10 @@ class LotRepository implements LotRepositoryInterface
       }
     }
 
+    if (!empty($filters['restocked'])) {
+      $query->restocked();
+    }
+
     if (!empty($filters['unslotted'])) {
       $query->whereDoesntHave('activePositions');
     }
@@ -113,14 +118,46 @@ class LotRepository implements LotRepositoryInterface
 
   public function paginate(array $filters, int $productionLineId): LengthAwarePaginator
   {
-    return $this->buildLotQuery($filters, $productionLineId)
-      ->latest('received_at')
+    return $this->buildLotQuery($filters, null)
+      ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $productionLineId))
+      ->with([
+        'stagings' => fn($q) => $q->orderBy('cycle'),
+        'stagings.positions.rackSlot.rack.productionLine',
+      ])
+      ->with(['positions' => function ($q) {
+        $q->orderBy('assigned_at');
+      }, 'positions.rackSlot.rack.productionLine'])
       ->paginate($filters['per_page'] ?? 20);
   }
 
   public function create(array $data): Lot
   {
     return Lot::create($data);
+  }
+
+  public function createStaging(Lot $lot, array $slotIds, string $actorEmployId, Carbon $now): void
+  {
+    $cycle = LotStaging::where('lot_id', $lot->id)->count() + 1;
+
+    $staging = LotStaging::create([
+      'lot_id'    => $lot->id,
+      'cycle'     => $cycle,
+      'staged_by' => $actorEmployId,
+      'staged_at' => $now,
+    ]);
+
+    foreach ($slotIds as $slotId) {
+      $slot = RackSlot::with('rack')->find($slotId);
+
+      LotPosition::create([
+        'lot_id'             => $lot->id,
+        'lot_staging_id'     => $staging->id,
+        'rack_slot_id'       => $slotId,
+        'production_line_id' => $slot->rack->production_line_id,
+        'assigned_at'        => $now,
+        'assigned_by'        => $actorEmployId,
+      ]);
+    }
   }
 
   public function update(int $id, array $data): Lot
@@ -134,51 +171,69 @@ class LotRepository implements LotRepositoryInterface
       $lot->update($data);
 
       if ($slotIds !== null) {
-        $currentlyOccupiedSlotIds = LotPosition::where('lot_id', $lot->id)
+        $activeStaging = LotStaging::where('lot_id', $lot->id)
           ->whereNull('released_at')
-          ->pluck('rack_slot_id')
-          ->all();
+          ->latest('staged_at')
+          ->first();
 
-        foreach ($slotIds as $slotId) {
-          if (in_array($slotId, $currentlyOccupiedSlotIds)) {
-            continue;
+        if ($activeStaging) {
+          $currentlyOccupiedSlotIds = LotPosition::where('lot_staging_id', $activeStaging->id)
+            ->whereNull('released_at')
+            ->pluck('rack_slot_id')
+            ->all();
+
+          foreach ($slotIds as $slotId) {
+            if (in_array($slotId, $currentlyOccupiedSlotIds)) {
+              continue;
+            }
+
+            $slot = RackSlot::with('rack')->find($slotId);
+
+            if (!$slot->isAvailable()) {
+              throw ValidationException::withMessages([
+                'slot_ids' => "Slot {$slot->label} is marked full.",
+              ]);
+            }
           }
 
-          $slot = RackSlot::with('rack')->find($slotId);
+          $now = Carbon::now('UTC');
 
-          if (!$slot->isAvailable()) {
-            throw ValidationException::withMessages([
-              'slot_ids' => "Slot {$slot->label} is marked full.",
+          // Remove positions no longer in the list
+          LotPosition::where('lot_staging_id', $activeStaging->id)
+            ->whereNull('released_at')
+            ->whereNotIn('rack_slot_id', $slotIds)
+            ->delete();
+
+          // Add new positions to the same staging
+          $activeSlotIds = LotPosition::where('lot_staging_id', $activeStaging->id)
+            ->whereNull('released_at')
+            ->pluck('rack_slot_id')
+            ->all();
+
+          foreach (array_diff($slotIds, $activeSlotIds) as $slotId) {
+            $slot = RackSlot::with('rack')->find($slotId);
+
+            LotPosition::create([
+              'lot_id'            => $lot->id,
+              'lot_staging_id'    => $activeStaging->id,  // key addition
+              'rack_slot_id'      => $slotId,
+              'production_line_id' => $slot->rack->production_line_id,
+              'assigned_at'       => $now,
+              'assigned_by'       => $modifiedBy,
             ]);
           }
-        }
-
-        $now = Carbon::now('UTC');
-
-        LotPosition::where('lot_id', $lot->id)
-          ->whereNull('released_at')
-          ->whereNotIn('rack_slot_id', $slotIds)
-          ->delete();
-
-        $activeSlotIds = LotPosition::where('lot_id', $lot->id)
-          ->whereNull('released_at')
-          ->pluck('rack_slot_id')
-          ->all();
-
-        foreach (array_diff($slotIds, $activeSlotIds) as $slotId) {
-          LotPosition::create([
-            'lot_id'       => $lot->id,
-            'rack_slot_id' => $slotId,
-            'production_line_id' => $slot->rack->production_line_id,
-            'assigned_at'  => $now,
-            'assigned_by'  => $modifiedBy,
+        } else {
+          $lot->update([
+            'status' => 'staged',
+            'released_at' => null,
+            'released_by' => null,
+            'modified_by' => $modifiedBy
           ]);
+          $this->createStaging($lot, $slotIds, $modifiedBy, Carbon::now('UTC'));
         }
       }
 
-      return $lot->fresh([
-        'modifiedBy',
-      ]);
+      return $lot->fresh(['stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
     });
   }
 }

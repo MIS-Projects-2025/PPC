@@ -5,6 +5,7 @@ namespace App\Repositories\Interfaces;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use App\Models\Lot;
+use Carbon\Carbon;
 
 interface LotRepositoryInterface
 {
@@ -19,4 +20,5 @@ interface LotRepositoryInterface
     public function paginate(array $filters, int $productionLineId): LengthAwarePaginator;
     public function create(array $data): Lot;
     public function update(int $id, array $data): Lot;
+    public function createStaging(Lot $lot, array $slotIds, string $actorEmployId, Carbon $now);
 }

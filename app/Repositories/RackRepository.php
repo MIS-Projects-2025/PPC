@@ -24,7 +24,8 @@ class RackRepository implements RackRepositoryInterface
     return Rack::with(['slots'])
       ->where('production_line_id', $productionLineId)
       ->orderBy('label')
-      ->get();
+      ->get()
+      ->each->append('shelves');
   }
 
   public function slotMap(int $productionLineId)

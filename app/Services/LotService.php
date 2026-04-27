@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use App\Models\Lot;
+use App\Models\LotStaging;
 use App\Repositories\Interfaces\LotRepositoryInterface;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
@@ -27,9 +28,9 @@ class LotService
      * Creates the lot record and assigns it to one or more rack slots.
      *
      * @param  array  $data  { lot_id, partname, qty, date_code, slot_ids[], received_by }
-     * @return Lot
+     * @return array
      */
-    public function receive(array $data): Lot
+    public function receive(array $data)
     {
         return DB::transaction(function () use ($data) {
             // 1. Validate each slot is available before writing anything
@@ -73,26 +74,45 @@ class LotService
             }
 
             // 2. Create the lot record
-            $lot = $this->lots->create([
-                'lot_id'      => $data['lot_id'],
-                'partname'   => $data['partname'],
-                'qty'         => $data['qty'],
-                'status'      => 'staged',
-                'received_by' => $data['received_by'],
-                'received_at' => Carbon::now('UTC'),
-            ]);
+            // $lot = $this->lots->create([
+            //     'lot_id'      => $data['lot_id'],
+            //     'partname'   => $data['partname'],
+            //     'qty'         => $data['qty'],
+            //     'status'      => 'staged',
+            //     'received_by' => $data['received_by'],
+            //     'received_at' => Carbon::now('UTC'),
+            // ]);
 
-            // 3. Assign all slots atomically
-            foreach ($data['slot_ids'] as $slotId) {
-                $this->positions->assign(
-                    $lot->id,
-                    $slotId,
-                    $data['received_by'],
-                    $productionLineId,
-                );
+            $wasCreated = false;
+
+            $lot = Lot::where('lot_id', $data['lot_id'])
+                ->where('partname', $data['partname'])
+                ->first();
+
+            if ($lot) {
+                $lot->update([
+                    'qty'         => $data['qty'],
+                    'status'      => 'staged',
+                    'received_by' => $data['received_by'],
+                    'received_at' => Carbon::now('UTC'),
+                    'released_at' => null,
+                    'released_by' => null,
+                ]);
+            } else {
+                $wasCreated = true;
+                $lot = $this->lots->create([
+                    'lot_id'      => $data['lot_id'],
+                    'partname'    => $data['partname'],
+                    'qty'         => $data['qty'],
+                    'status'      => 'staged',
+                    'received_by' => $data['received_by'],
+                    'received_at' => Carbon::now('UTC'),
+                ]);
             }
 
-            return $lot->fresh();
+            $this->lots->createStaging($lot, $data['slot_ids'], $data['received_by'], Carbon::now('UTC'));
+
+            return ['lot' => $lot->fresh(['stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
         });
     }
 
@@ -159,6 +179,15 @@ class LotService
 
             $rackSlotIds = $lot->activePositions->pluck('rack_slot_id')->filter()->all();
 
+            LotStaging::where('lot_id', $lot->id)
+                ->whereNull('released_at')
+                ->latest('staged_at')
+                ->first()
+                ?->update([
+                    'released_at' => Carbon::now('UTC'),
+                    'released_by' => $releasedBy,
+                ]);
+
             $this->positions->releaseByLot($lot->id, $releasedBy);
 
             $updated = $this->lots->update($lot->id, [
@@ -171,7 +200,7 @@ class LotService
                 $this->slots->clearManyFull($rackSlotIds);
             }
 
-            return $updated->fresh();
+            return $updated->fresh(['stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
         });
     }
 
@@ -180,10 +209,10 @@ class LotService
         $sheets = [
             'LOTS' => function () use ($filters, $productionLineId) {
                 return $this->lots->buildLotQuery($filters, null)
-                    ->whereHas('positions', fn($q) => $q->where('production_line_id', $productionLineId))
-                    ->with(['positions' => function ($q) {
-                        $q->orderBy('received_at');
-                    }, 'positions.rackSlot.rack.productionLine'])
+                    ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $productionLineId))
+                    ->with([
+                        'positions' => fn($q) => $q->with(['staging', 'rackSlot.rack.productionLine'])->orderBy('assigned_at'),
+                    ])
                     ->cursor()
                     ->flatMap(function ($lot) {
                         return $lot->positions
@@ -205,6 +234,7 @@ class LotService
                                     'Status'      => $pos->getRawOriginal('released_at') ? 'Released' : 'Staged',
                                     'Rack'        => $slot?->rack?->label,
                                     'Slot'        => $slot?->label,
+                                    'Cycle' => $pos->staging?->cycle,
                                     'Received At' => $assignedAt,
                                     'Received By' => $pos->assigned_by,
                                     'Released At' => $releasedAt,

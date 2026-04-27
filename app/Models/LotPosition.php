@@ -12,6 +12,7 @@ class LotPosition extends Model
     protected $fillable = [
         'lot_id',
         'rack_slot_id',
+        'lot_staging_id',
         'production_line_id',
         'assigned_at',
         'assigned_by',
@@ -41,6 +42,11 @@ class LotPosition extends Model
     {
         return $this->belongsTo(RackSlot::class)->withTrashed();
         // return $this->belongsTo(RackSlot::class);
+    }
+
+    public function staging(): BelongsTo
+    {
+        return $this->belongsTo(LotStaging::class, 'lot_staging_id');
     }
 
     public function isActive(): bool

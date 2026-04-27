@@ -177,6 +177,82 @@ function ScanPanel({ lotActions }) {
 
 			<SlotAssign />
 
+			{isEditMode && pendingLotToBeAdded?.stagings?.length > 0 && (
+					<div className="mt-4 mb-4 flex flex-col min-h-0">
+							<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-2">
+									Staging History
+							</label>
+							<div className="overflow-y-auto max-h-48 flex flex-col gap-2 pr-1">
+									{pendingLotToBeAdded.stagings.map((staging, index) => {
+											const isActive = !staging.released_at;
+											const isLast = index === pendingLotToBeAdded.stagings.length - 1;
+
+											const byRack = staging.positions.reduce((acc, pos) => {
+													let rackLabel = pos.rack_slot?.rack?.label ?? '?';
+													if (rackLabel.includes('__deleted__')) {
+															rackLabel = 'DELETED - ' + rackLabel.replace('__deleted__', '').trim();
+													}
+
+													if (!acc[rackLabel]) acc[rackLabel] = [];
+													acc[rackLabel].push(pos);
+													return acc;
+											}, {});
+
+											return (
+													<div key={staging.id} className="flex flex-col gap-1 flex-shrink-0">
+															<div className={clsx(
+																	'w-full flex flex-col gap-1 px-2 py-1.5 rounded border text-[10px] font-bold tracking-wide',
+																	isActive
+																			? 'bg-base-100 border-orange-500/30 text-orange-700'
+																			: 'bg-base-200 border-base-300 text-base-content/40'
+															)}>
+																	<div className="flex items-center justify-between">
+																			<span className="text-[10px] opacity-60">Cycle #{staging.cycle}</span>
+																			<span className={clsx(
+																					'text-[8px] px-1 rounded',
+																					isActive ? 'bg-orange-100 text-orange-600' : 'bg-base-300 text-base-content'
+																			)}>
+																					{isActive ? 'active' : 'released'}
+																			</span>
+																	</div>
+
+																	{Object.entries(byRack).map(([rackLabel, positions]) => (
+																			<div key={rackLabel} className="flex items-center gap-1">
+																					<span>{rackLabel}</span>
+																					<div className="opacity-50">|</div>
+																					<span>
+																							{positions.map((pos, i) => {
+																									// const deletedAt = pos.rack_slot?.deleted_at || pos.rack_slot?.rack?.deleted_at;
+																									return (
+																											<span key={pos.rack_slot_id}>
+																													{/* {deletedAt && <span className="text-[10px]">✕</span>} */}
+																													{pos.rack_slot?.label}
+																													{i < positions.length - 1 && ', '}
+																											</span>
+																									);
+																							})}
+																					</span>
+																			</div>
+																	))}
+
+																	<div className="border-t border-current/10 pt-1 mt-0.5 flex flex-col gap-0.5 font-normal text-[10px]">
+																			<span>Staged by {staging.staged_by} · {formatLocalTime(staging.staged_at)}</span>
+																			{staging.released_at && (
+																					<span>Released by {staging.released_by} · {formatLocalTime(staging.released_at)}</span>
+																			)}
+																	</div>
+															</div>
+
+															{!isLast && (
+																	<div className="text-base-content/30 text-[10px] text-center">↓</div>
+															)}
+													</div>
+											);
+									})}
+							</div>
+					</div>
+			)}
+
 			<CancellableActionButton
 				abort={mutateLotCancel}
 				refetch={handleConfirm}
@@ -230,6 +306,9 @@ function ReceivedList({ onEdit, lotActions }) {
 											<p className="text-[11px] antialiased font-jet-brains text-base-content truncate">
 												{lot.partname}
 											</p>
+											<span className="text-[10px] font-semibold rounded bg-base-200 text-base-content border border-base-300">
+												{lot.qty} units
+											</span>
 											{recentUpdate && (
 												<div className="flex items-center gap-0 ml-1">
 													{/* arrow */}
@@ -242,42 +321,75 @@ function ReceivedList({ onEdit, lotActions }) {
 											)}
 										</div>
 										<div className="flex gap-1.5 flex-wrap mt-1.5 items-center">
-											<span className="text-[10px] font-semibold rounded bg-base-200 text-base-content border border-base-300">
-												{lot.qty} units
-											</span>
-											{Object.values(lot.positions_map).map((position) => {
-												const deletedAt =
-													position.rack_slot?.deleted_at ||
-													position.rack_slot?.rack?.deleted_at;
+												{(lot.stagings ?? []).map((staging, index) => {
+														console.log("🚀 ~ ReceivedList ~ staging:", staging)
+														const isActive = !staging.released_at;
+														const isLast = index === lot.stagings.length - 1;
 
-												return (
-													<div
-														key={position.rack_slot_id}
-														className="text-[10px] pl-1 flex items-center gap-1 font-bold rounded bg-base-100 text-orange-700 border border-orange-500/30 tracking-wide"
-													>
-														<span className="text-[8px] opacity-75">
-															{deletedAt && "DELETED"}
-															{/* at {formatLocalTime(deletedAt)} */}
-														</span>
-														{position?.rack_slot?.rack?.label}
-														<div className="opacity-50">|</div>
-														{position?.rack_slot?.label}
-													</div>
-												);
-											})}
+														// Group positions by rack label
+														const byRack = staging.positions.reduce((acc, pos) => {
+																let rackLabel = pos.rack_slot?.rack?.label ?? '?';
+																if (rackLabel.includes('__deleted__')) {
+																		rackLabel = 'DELETED - ' + rackLabel.replace('__deleted__', '').trim();
+																}
+
+																if (!acc[rackLabel]) acc[rackLabel] = [];
+																acc[rackLabel].push({
+																	...pos,
+																	isDeleted: !!pos.rack_slot?.deleted_at
+																});
+																return acc;
+														}, {});
+														console.log("🚀 ~ ReceivedList ~ byRack:", byRack)
+
+														return (
+																<div key={staging.id} className="flex items-center gap-1">
+																		<div className={`flex flex-col gap-0.5 px-1.5 py-1 rounded border text-[10px] font-bold tracking-wide
+																				${isActive
+																						? 'bg-base-100 border-orange-500/30 text-orange-700'
+																						: 'bg-base-200 border-base-300 text-base-content/40'
+																				}`}
+																		>
+																				<span className="text-[8px] opacity-60">#{staging.cycle}</span>
+																				{Object.entries(byRack).map(([rackLabel, positions]) => (
+																						<div key={rackLabel} className="flex items-center gap-1">
+																								<span>{rackLabel}</span>
+																								<div className="opacity-50">|</div>
+																								<span>
+																										{positions.map((pos, i) => {
+																												// const deletedAt = pos.rack_slot?.deleted_at || pos.rack_slot?.rack?.deleted_at;
+																												return (
+																														<span key={pos.rack_slot_id}>
+																																{/* {deletedAt && <span className="text-[8px] opacity-75 text-rose-500">DELETED</span>} */}
+																																{pos.rack_slot?.label}
+																																{i < positions.length - 1 && ', '}
+																														</span>
+																												);
+																										})}
+																								</span>
+																						</div>
+																				))}
+																		</div>
+
+																		{!isLast && (
+																				<div className="text-base-content/30 text-[10px]">
+																					⮞
+																				</div>
+																		)}
+																</div>
+														);
+												})}
 										</div>
 									</div>
 								</div>
 
 								<div className="flex flex-col items-end gap-2 shrink-0">
 									<div className="flex flex-col items-end gap-1">
-										<div
-											className={clsx(
+										<div className={clsx(
 												"badge badge-xs",
-												lot.released_at ? "badge-success" : "badge-warning",
-											)}
-										>
-											{lot.released_at ? "released" : "staged"}
+												lot.status === "released" ? "badge-success" : "badge-warning",
+										)}>
+												{lot.status}
 										</div>
 										<span className="text-[10px] text-base-content font-mono">
 											{formatLocalTime(lot.released_at ?? lot.received_at)} by{" "}
@@ -348,6 +460,11 @@ export default function LotsUpstream({
 	productionLine,
 	productionLineId,
 }) {
+	console.log("🚀 ~ LotsUpstream ~ racks:", racks)
+	console.log("🚀 ~ LotsUpstream ~ occupancy:", occupancy)
+	console.log("🚀 ~ LotsUpstream ~ received:", received)
+
+	
 	const toast = useToast();
 	const lotActions = useLotActions();
 	const {
@@ -389,6 +506,7 @@ export default function LotsUpstream({
 		aging: serverFilters.aging ?? false,
 		unslotted: serverFilters.unslotted ?? false,
 		sort: serverFilters.sort ?? "asc",
+		restocked: serverFilters.restocked ?? false,
 	});
 
 	const set = (key, val) => setFilters((prev) => ({ ...prev, [key]: val }));
@@ -433,6 +551,7 @@ export default function LotsUpstream({
 			aging: false,
 			unslotted: false,
 			sort: "asc",
+			restocked: false,
 		});
 	};
 
@@ -757,6 +876,49 @@ export default function LotsUpstream({
 						</fieldset>
 
 						<div className="flex flex-col gap-1">
+							<label className="flex items-center gap-1.5 cursor-pointer select-none">
+								<input
+									type="checkbox"
+									className="checkbox checked:checkbox-primary checkbox-xs"
+									checked={filters.aging}
+									onChange={(e) => set("aging", e.target.checked)}
+								/>
+								<span className="text-[12px]">Aging ≥3d</span>
+							</label>
+
+							<label className="flex items-center gap-1.5 cursor-pointer select-none">
+								<input
+									type="checkbox"
+									className="checkbox checked:checkbox-primary checkbox-xs"
+									checked={filters.unslotted}
+									onChange={(e) => set("unslotted", e.target.checked)}
+								/>
+								<span className="text-[12px]">Unslotted</span>
+							</label>
+
+							<label className="flex items-center gap-1.5 cursor-pointer select-none">
+								<input
+									type="checkbox"
+									className="checkbox checked:checkbox-primary checkbox-xs"
+									checked={filters.restocked}
+									onChange={(e) => set("restocked", e.target.checked)}
+								/>
+								<span className="text-[12px]">Restocked</span>
+							</label>
+						</div>
+
+						<div className="flex flex-col items-end">
+							<button
+								type="button"
+								className="btn btn-sm"
+								onClick={() =>
+									set("sort", filters.sort === "asc" ? "desc" : "asc")
+								}
+							>
+								{filters.sort === "asc" ? <GrAscend /> : <GrDescend />}
+								{filters.sort === "asc" ? "oldest first" : "newest first"}
+							</button>
+
 							<button
 								type="button"
 								className="btn btn-sm"
@@ -786,39 +948,6 @@ export default function LotsUpstream({
 									<a>Released</a>
 								</li>
 							</ul>
-
-							<label className="flex items-center gap-1.5 cursor-pointer select-none">
-								<input
-									type="checkbox"
-									className="checkbox checked:checkbox-primary checkbox-xs"
-									checked={filters.aging}
-									onChange={(e) => set("aging", e.target.checked)}
-								/>
-								<span className="text-[12px]">Aging ≥3d</span>
-							</label>
-
-							<label className="flex items-center gap-1.5 cursor-pointer select-none">
-								<input
-									type="checkbox"
-									className="checkbox checked:checkbox-primary checkbox-xs"
-									checked={filters.unslotted}
-									onChange={(e) => set("unslotted", e.target.checked)}
-								/>
-								<span className="text-[12px]">Unslotted</span>
-							</label>
-						</div>
-
-						<div className="flex flex-col items-end">
-							<button
-								type="button"
-								className="btn btn-sm"
-								onClick={() =>
-									set("sort", filters.sort === "asc" ? "desc" : "asc")
-								}
-							>
-								{filters.sort === "asc" ? <GrAscend /> : <GrDescend />}
-								{filters.sort === "asc" ? "oldest first" : "newest first"}
-							</button>
 						</div>
 
 						<div className="flex flex-col gap-1 items-end ml-auto">
