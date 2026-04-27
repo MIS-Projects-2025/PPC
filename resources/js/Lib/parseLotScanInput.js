@@ -1,5 +1,9 @@
 import { LOT_UPSTREAM_MODES } from "@/Constants/lotUpstreamModes";
 
+const sanitizeFieldValue = (value) => {
+	return value.replace(/\([^)]*\)/g, "").trim();
+};
+
 export function parseLotScanInput(input) {
 	const normalized = input.trim().toUpperCase();
 
@@ -31,9 +35,9 @@ export function parseLotScanInput(input) {
 		if (parts.length >= 4) {
 			return {
 				type: LOT_UPSTREAM_MODES.TYPE_LOT,
-				lot_id: parts[0].trim(),
-				partname: parts[1].trim(),
-				qty: parts[3].trim(),
+				lot_id: sanitizeFieldValue(parts[0]),
+				partname: sanitizeFieldValue(parts[1]),
+				qty: sanitizeFieldValue(parts[3]),
 			};
 		}
 	}
@@ -43,9 +47,9 @@ export function parseLotScanInput(input) {
 		if (parts.length >= 3) {
 			return {
 				type: LOT_UPSTREAM_MODES.TYPE_LOT,
-				lot_id: parts[1].trim(),
-				partname: parts[0].trim(),
-				qty: parts[2].trim(),
+				lot_id: sanitizeFieldValue(parts[1]),
+				partname: sanitizeFieldValue(parts[0]),
+				qty: sanitizeFieldValue(parts[2]),
 			};
 		}
 	}

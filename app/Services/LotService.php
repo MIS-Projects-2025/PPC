@@ -230,6 +230,7 @@ class LotService
                                 return [
                                     'Lot ID'      => $lot->lot_id,
                                     'Part Name'   => $lot->partname,
+                                    'Quantity'    => $lot->qty,
                                     'Line'        => $slot?->rack?->productionLine?->name,
                                     'Status'      => $pos->getRawOriginal('released_at') ? 'Released' : 'Staged',
                                     'Rack'        => $slot?->rack?->label,
