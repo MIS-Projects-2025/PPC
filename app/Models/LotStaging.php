@@ -12,6 +12,8 @@ class LotStaging extends Model
 
     protected $fillable = [
         'lot_id',
+        'partname',
+        'qty',
         'cycle',
         'staged_by',
         'staged_at',

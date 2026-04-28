@@ -489,6 +489,7 @@ export default function LotsUpstream({
 		receiveLot,
 		appendRecentUpdate,
 		pendingLotToBeAdded,
+		removePendingLot,
 		clearSlotPendingLot,
 		clearRecentUpdate,
 		slotPendingLot,
@@ -803,6 +804,8 @@ export default function LotsUpstream({
 										: "border-transparent",
 								)}
 								onClick={() => {
+									removePendingLot();	
+									clearSlotPendingLot();
 									document.getElementById(RACK_SELECTION_ID)?.showModal();
 								}}
 							>

@@ -141,13 +141,17 @@ class LotRepository implements LotRepositoryInterface
 
     $staging = LotStaging::create([
       'lot_id'    => $lot->id,
+      'partname'  => $lot->partname,
+      'qty'       => $lot->qty,
       'cycle'     => $cycle,
       'staged_by' => $actorEmployId,
       'staged_at' => $now,
     ]);
 
+    $slots = RackSlot::with('rack')->whereIn('id', $slotIds)->get()->keyBy('id');
+
     foreach ($slotIds as $slotId) {
-      $slot = RackSlot::with('rack')->find($slotId);
+      $slot = $slots[$slotId];
 
       LotPosition::create([
         'lot_id'             => $lot->id,
@@ -169,6 +173,17 @@ class LotRepository implements LotRepositoryInterface
       $modifiedBy = $data['modified_by'] ?? null;
       unset($data['slot_ids']);
       $lot->update($data);
+
+      if (isset($data['partname']) || isset($data['qty'])) {
+        LotStaging::where('lot_id', $lot->id)
+          ->whereNull('released_at')
+          ->latest('staged_at')
+          ->first()
+          ?->update(array_filter([
+            'partname' => $data['partname'] ?? null,
+            'qty'      => $data['qty'] ?? null,
+          ], fn($v) => $v !== null));
+      }
 
       if ($slotIds !== null) {
         $activeStaging = LotStaging::where('lot_id', $lot->id)

@@ -13,6 +13,7 @@ use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use Carbon\Carbon;
 use App\Traits\ExportTrait;
 use Illuminate\Support\Facades\Cache;
+use Box\Spout\Writer\Common\Creator\Style\StyleBuilder;
 
 class LotService
 {
@@ -62,16 +63,14 @@ class LotService
             $productionLineId = $productionLineIds->first();
 
             $alreadyStaged = Lot::where('lot_id', $data['lot_id'])
-                ->where('partname', $data['partname'])
+                // ->where('partname', $data['partname'])
                 ->where('status', 'staged')
                 ->exists();
 
             if ($alreadyStaged) {
-                if ($alreadyStaged) {
-                    throw ValidationException::withMessages([
-                        'lot_id' => 'Lot is already staged.',
-                    ]);
-                }
+                throw ValidationException::withMessages([
+                    'lot_id' => 'Lot is already staged.',
+                ]);
             }
 
             // 2. Create the lot record
@@ -86,13 +85,15 @@ class LotService
 
             $wasCreated = false;
 
-            $lot = Lot::where('lot_id', $data['lot_id'])
-                ->where('partname', $data['partname'])
-                ->first();
+            $lot = Lot::where('lot_id', $data['lot_id'])->first();
+            // $lot = Lot::where('lot_id', $data['lot_id'])
+            //     ->where('partname', $data['partname'])
+            //     ->first();
 
             if ($lot) {
                 $lot->update([
                     'qty'         => $data['qty'],
+                    'partname'    => $data['partname'],
                     'status'      => 'staged',
                     'received_by' => $data['received_by'],
                     'received_at' => Carbon::now('UTC'),
@@ -222,47 +223,80 @@ class LotService
                 return $this->lots->buildLotQuery($filters, null)
                     ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $productionLineId))
                     ->with([
-                        'positions' => fn($q) => $q->with(['staging', 'rackSlot.rack.productionLine'])->orderBy('assigned_at'),
+                        'positions' => fn($q) => $q
+                            ->with(['staging', 'rackSlot.rack.productionLine'])
+                            ->orderBy('assigned_at'),
                     ])
                     ->cursor()
+                    ->sortBy(fn($lot) => strtolower($lot->lot_id))
                     ->flatMap(function ($lot) {
                         return $lot->positions
-                            ->map(function ($pos) use ($lot) {
-                                $slot = $pos->rackSlot;
-                                $releasedAt = $pos->getRawOriginal('released_at')
-                                    ? Carbon::createFromFormat('Y-m-d H:i:s', $pos->getRawOriginal('released_at'), 'UTC')
-                                    ->setTimezone('Asia/Manila')
-                                    ->toDateTimeString()
-                                    : null;
-                                $assignedAt = Carbon::createFromFormat('Y-m-d H:i:s', $pos->getRawOriginal('assigned_at'), 'UTC')
+                            ->groupBy(fn($pos) => $pos->staging?->cycle ?? '?')
+                            ->map(function ($cyclePositions, $cycle) use ($lot) {
+                                $first   = $cyclePositions->first();
+                                $staging = $first->staging;
+
+                                $slots = $cyclePositions
+                                    ->map(fn($p) => ($p->rackSlot?->rack?->label ?? '—') . '/' . ($p->rackSlot?->label ?? '—'))
+                                    ->join(', ');
+
+                                $assignedAt = Carbon::createFromFormat('Y-m-d H:i:s', $first->getRawOriginal('assigned_at'), 'UTC')
                                     ->setTimezone('Asia/Manila')
                                     ->toDateTimeString();
 
+                                $rawReleased = $first->getRawOriginal('released_at');
+                                $releasedAt  = $rawReleased
+                                    ? Carbon::createFromFormat('Y-m-d H:i:s', $rawReleased, 'UTC')
+                                    ->setTimezone('Asia/Manila')
+                                    ->toDateTimeString()
+                                    : null;
+
+                                $isFullyReleased     = $cyclePositions->every(fn($p) => $p->getRawOriginal('released_at'));
+                                $isPartiallyReleased = !$isFullyReleased && $cyclePositions->some(fn($p) => $p->getRawOriginal('released_at'));
+
                                 return [
                                     'Lot ID'      => $lot->lot_id,
-                                    'Part Name'   => $lot->partname,
-                                    'Quantity'    => $lot->qty,
-                                    'Line'        => $slot?->rack?->productionLine?->name,
-                                    'Status'      => $pos->getRawOriginal('released_at') ? 'Released' : 'Staged',
-                                    'Rack'        => $slot?->rack?->label,
-                                    'Slot'        => $slot?->label,
-                                    'Cycle' => $pos->staging?->cycle,
+                                    'Cycle'       => $cycle,
+                                    'Part Name'   => $staging?->partname ?? $lot->partname,
+                                    'Quantity'    => $staging?->qty ?? $lot->qty,
+                                    'Line'        => $first->rackSlot?->rack?->productionLine?->name,
+                                    'Slots'       => $slots,
                                     'Received At' => $assignedAt,
-                                    'Received By' => $pos->assigned_by,
+                                    'Received By' => $first->assigned_by,
                                     'Released At' => $releasedAt,
-                                    'Released By' => $pos->released_by,
+                                    'Released By' => $first->released_by,
+                                    'Status'      => $isFullyReleased ? 'Released' : ($isPartiallyReleased ? 'Partial' : 'Staged'),
                                 ];
-                            });
+                            })
+                            ->values();
                     })
-                    ->sortBy(fn($row) => [
-                        strtolower($row['Lot ID'] ?? ''),
-                        strtolower($row['Received At'] ?? ''),
-                        strtolower($row['Released At'] ?? ''),
-                    ])
                     ->values();
             },
         ];
 
-        return $this->downloadRawXlsx($sheets, 'lots_' . now()->format('Y-m-d'));
+        return $this->downloadRawXlsx(
+            $sheets,
+            'lots_' . now()->format('Y-m-d'),
+            function (array $row) {
+                return match ($row['Status'] ?? null) {
+                    'Released' => (new StyleBuilder())
+                        ->setShouldWrapText(false)
+                        ->setBackgroundColor('D8F0D8')
+                        ->setFontColor('1E6B1E')
+                        ->build(),
+                    'Staged' => (new StyleBuilder())
+                        ->setShouldWrapText(false)
+                        ->setBackgroundColor('FFF3CD')
+                        ->setFontColor('856404')
+                        ->build(),
+                    'Partial' => (new StyleBuilder())
+                        ->setShouldWrapText(false)
+                        ->setBackgroundColor('FFE0B2')
+                        ->setFontColor('7B3F00')
+                        ->build(),
+                    default => null,
+                };
+            }
+        );
     }
 }

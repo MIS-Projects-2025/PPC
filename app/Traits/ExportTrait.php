@@ -10,7 +10,7 @@ use Box\Spout\Writer\Common\Creator\Style\StyleBuilder;
 
 trait ExportTrait
 {
-  protected function downloadRawXlsx(array $sheets, string $filenamePrefix)
+  protected function downloadRawXlsx(array $sheets, string $filenamePrefix, ?callable $rowStyleFn = null)
   {
     $tempFile = tempnam(sys_get_temp_dir(), 'ppc_export_');
 
@@ -18,7 +18,7 @@ trait ExportTrait
     $writer->setShouldCreateNewSheetsAutomatically(false);
     $writer->openToFile($tempFile);
 
-    $style = (new StyleBuilder())
+    $defaultStyle = (new StyleBuilder())
       ->setShouldWrapText(false)
       ->build();
 
@@ -41,10 +41,12 @@ trait ExportTrait
 
       $firstRow = (array) $rows->first();
       $columns = array_keys($firstRow);
-      $writer->addRow(WriterEntityFactory::createRowFromArray($columns, $style));
+      $writer->addRow(WriterEntityFactory::createRowFromArray($columns, $defaultStyle));
 
       foreach ($rows as $row) {
-        $writer->addRow(WriterEntityFactory::createRowFromArray((array) $row, $style));
+        $rowArray = (array) $row;
+        $style = $rowStyleFn ? ($rowStyleFn($rowArray) ?? $defaultStyle) : $defaultStyle;
+        $writer->addRow(WriterEntityFactory::createRowFromArray($rowArray, $style));
       }
 
       unset($rows);
@@ -59,7 +61,7 @@ trait ExportTrait
     $filename = "{$filenamePrefix}_" . now()->format('Ymd_His') . ".xlsx";
 
     $headers = [
-      'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Type'        => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition' => 'attachment; filename="' . $filename . '"',
     ];
 
