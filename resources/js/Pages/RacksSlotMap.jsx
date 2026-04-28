@@ -32,7 +32,7 @@ function LotChip({ productionLine, lot }) {
     return (
         <button 
             type="button" 
-            className="btn h-full"
+            className="btn btn-ghost h-full font-medium"
             onClick={() => {
                 router.visit(route('lot-upstream.index', { productionLine: productionLine?.name }), {
                     data: { search: lot?.lot_id },
