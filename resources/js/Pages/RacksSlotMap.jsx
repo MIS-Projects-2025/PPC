@@ -28,15 +28,25 @@ function buildTransposedGrid(slots) {
 }
 
 // --- sub-components ---
-function LotChip({ lot }) {
+function LotChip({ productionLine, lot }) {
     return (
-        <span className="block font-mono text-md leading-snug px-1 py-0.5 rounded text-base-content break-all">
-            {lot.lot_id}
-        </span>
+        <button 
+            type="button" 
+            className="btn h-full"
+            onClick={() => {
+                router.visit(route('lot-upstream.index', { productionLine: productionLine?.name }), {
+                    data: { search: lot?.lot_id },
+                });
+            }}
+        >
+            <span className="block font-mono text-md leading-snug px-1 py-0.5 rounded text-base-content break-all">
+                {lot.lot_id}
+            </span>
+        </button>
     );
 }
 
-function SlotCell({ slot }) {
+function SlotCell({ productionLine, slot }) {
     const lots = slot?.active_positions?.map((p) => p.lot).filter(Boolean) ?? [];
     const isFull = slot?.is_manually_full ?? false;
 
@@ -53,13 +63,13 @@ function SlotCell({ slot }) {
     return (
         <div className={clsx("w-32 min-h-7 rounded ring ring-amber-400 bg-base-200 p-0.5 flex flex-col gap-0.5", fullClass)}>
             {lots.map((lot) => (
-                <LotChip key={lot.lot_id} lot={lot} />
+                <LotChip productionLine={productionLine} key={lot.lot_id} lot={lot} />
             ))}
         </div>
     );
 }
 
-function RackCard({ rack }) {
+function RackCard({ productionLine, rack }) {
     const { rows, cols, slotMap } = buildTransposedGrid(rack.slots);
     const totalSlots = rack.slots.length;
     const occupiedSlots = rack.slots.filter((s) => s.active_positions.length > 0).length;
@@ -97,7 +107,7 @@ function RackCard({ rack }) {
                                     const label = row + String(colNum);
                                     return (
                                         <td key={label} className="align-top">
-                                            <SlotCell slot={slotMap[label]} />
+                                            <SlotCell productionLine={productionLine} slot={slotMap[label]} />
                                         </td>
                                     );
                                 })}
@@ -187,7 +197,7 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
 
             <div className="grid grid-cols-1">
                 {racks.map((rack) => (
-                    <RackCard key={rack.id} rack={rack} />
+                    <RackCard productionLine={productionLine} key={rack.id} rack={rack} />
                 ))}
             </div>
         </div>

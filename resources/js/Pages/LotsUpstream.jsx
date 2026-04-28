@@ -322,7 +322,6 @@ function ReceivedList({ onEdit, lotActions }) {
 										</div>
 										<div className="flex gap-1.5 flex-wrap mt-1.5 items-center">
 												{(lot.stagings ?? []).map((staging, index) => {
-														console.log("🚀 ~ ReceivedList ~ staging:", staging)
 														const isActive = !staging.released_at;
 														const isLast = index === lot.stagings.length - 1;
 
@@ -340,7 +339,6 @@ function ReceivedList({ onEdit, lotActions }) {
 																});
 																return acc;
 														}, {});
-														console.log("🚀 ~ ReceivedList ~ byRack:", byRack)
 
 														return (
 																<div key={staging.id} className="flex items-center gap-1">
@@ -460,11 +458,6 @@ export default function LotsUpstream({
 	productionLine,
 	productionLineId,
 }) {
-	console.log("🚀 ~ LotsUpstream ~ racks:", racks)
-	console.log("🚀 ~ LotsUpstream ~ occupancy:", occupancy)
-	console.log("🚀 ~ LotsUpstream ~ received:", received)
-
-	
 	const toast = useToast();
 	const lotActions = useLotActions();
 	const {
