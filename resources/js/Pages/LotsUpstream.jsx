@@ -118,7 +118,7 @@ function ScanPanel({ lotActions }) {
 
 	return (
 		<div className="w-full flex flex-col h-full">
-			<div className="flex justify-between items-center mb-4">
+			<div className="flex justify-between items-center mb-2">
 				<div>
 					<h2 className="text-[13px] font-bold tracking-wide">
 						{isEditMode
@@ -126,7 +126,7 @@ function ScanPanel({ lotActions }) {
 							: "Scan lot"}
 						{pendingLotToBeAdded?.status && (
 							<span
-								className={clsx("badge", {
+								className={clsx("ml-2 badge", {
 									"badge-warning": pendingLotToBeAdded?.status === "staged",
 									"badge-success": pendingLotToBeAdded?.status === "released",
 								})}
@@ -178,7 +178,7 @@ function ScanPanel({ lotActions }) {
 			<SlotAssign />
 
 			{isEditMode && pendingLotToBeAdded?.stagings?.length > 0 && (
-					<div className="mt-4 mb-4 flex flex-col min-h-0">
+					<div className="mb-4 flex flex-col min-h-0">
 							<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-2">
 									Staging History
 							</label>
@@ -201,7 +201,7 @@ function ScanPanel({ lotActions }) {
 											return (
 													<div key={staging.id} className="flex flex-col gap-1 flex-shrink-0">
 															<div className={clsx(
-																	'w-full flex flex-col gap-1 px-2 py-1.5 rounded border text-[10px] font-bold tracking-wide',
+																	'w-full flex flex-col px-2 py-1.5 rounded border text-[10px] font-bold tracking-wide',
 																	isActive
 																			? 'bg-base-100 border-orange-500/30 text-orange-700'
 																			: 'bg-base-200 border-base-300 text-base-content/40'
@@ -235,7 +235,15 @@ function ScanPanel({ lotActions }) {
 																			</div>
 																	))}
 
-																	<div className="border-t border-current/10 pt-1 mt-0.5 flex flex-col gap-0.5 font-normal text-[10px]">
+																	{staging?.partname && (
+																		<div>partname: {staging.partname}</div>
+																	)}
+
+																	{staging?.qty && (
+																		<div>quantity: {staging.qty}</div>
+																	)}
+
+																	<div className="border-t border-current/10 flex flex-col pt-0.5 font-normal text-[10px]">
 																			<span>Staged by {staging.staged_by} · {formatLocalTime(staging.staged_at)}</span>
 																			{staging.released_at && (
 																					<span>Released by {staging.released_by} · {formatLocalTime(staging.released_at)}</span>
@@ -244,7 +252,7 @@ function ScanPanel({ lotActions }) {
 															</div>
 
 															{!isLast && (
-																	<div className="text-base-content/30 text-[10px] text-center">↓</div>
+																	<div className="text-base-content/60 text-[10px] text-center">↓</div>
 															)}
 													</div>
 											);
@@ -521,7 +529,7 @@ export default function LotsUpstream({
 
 	const {
 		download: downloadLots,
-		isLoading,
+		isLoading: isDownloading,
 		errorMessage,
 		abort: abortDownload,
 	} = useDownloadFile();
@@ -531,7 +539,12 @@ export default function LotsUpstream({
 			Object.entries(filters).filter(([, v]) => v !== "" && v !== false),
 		);
 
-		downloadLots(route("api.download.downloadLots", {productionLine: productionLine}), params);
+		try {
+			downloadLots(route("api.download.downloadLots", {productionLine: productionLine}), params);
+		} catch (error) {
+			toast.error(error?.message);
+			console.error(error);
+		}
 	};
 
 	const resetFilters = () => {
@@ -954,13 +967,15 @@ export default function LotsUpstream({
 							>
 								Apply filters
 							</button>
-							<button
-								type="button"
-								onClick={download}
-								className="btn w-40 rounded-sm btn-xs btn-primary text-[12px]"
-							>
-								Download this data <FaDownload />
-							</button>
+							<CancellableActionButton
+								abort={abortDownload}
+								refetch={download}
+								// disabled={!}
+								loading={isDownloading}
+								buttonText={"Download this data"}
+								loadingMessage={"Downloading..."}
+								buttonClassName="btn-sm btn-primary rounded-sm"
+							/>
 							<button
 								type="button"
 								onClick={resetFilters}

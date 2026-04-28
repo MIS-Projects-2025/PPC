@@ -16,6 +16,8 @@ const SearchInput = React.memo(function SearchInput({
 			return;
 		}
 
+		// can't clear the input on parent >:(
+
 		const handler = setTimeout(() => {
 			onSearchChange(searchInput);
 		}, 300);
