@@ -186,16 +186,9 @@ export function useLotActions() {
 		}
 	};
 
-	const releaseLotWithdrawerPrompt = async (lot) => {
-		const { mode } = store;
+	const releaseLotWithdrawerPrompt = (lot) => {
 		store.setLotToBeReleased(lot);
-		if (mode !== LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
-				// prompt user to input withdrawal id
-				store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
-				return;
-			} else {
-				// releaseLot(lot);
-		}
+		store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
 	};
 
 	const handleScanParsed = (parsed) => {
@@ -216,10 +209,11 @@ export function useLotActions() {
 
 				return mode === LOT_UPSTREAM_MODES.RECEIVE
 					? confirmLot()
-					: releaseLot(pendingLotToBeAdded);
+					: releaseLotWithdrawerPrompt(pendingLotToBeAdded);
 			}
 			if (command === LOT_UPSTREAM_MODES.RECEIVING) {
 				store.setMode(LOT_UPSTREAM_MODES.RECEIVE);
+				store.addPendingLot({});
 				store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
 				setFocusedField("lot_id");
 			}
@@ -260,8 +254,7 @@ export function useLotActions() {
 
 			if (mode === LOT_UPSTREAM_MODES.RELEASE) {
 				if (scanResult.status !== LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
-					store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
-					store.setLotToBeReleased(lot);
+					releaseLotWithdrawerPrompt(lot);
 					return;
 				}
 			}
@@ -281,13 +274,8 @@ export function useLotActions() {
 				// return;
 			}
 
-			if (mode === LOT_UPSTREAM_MODES.RELEASE) {
-				releaseLot({
-					lot_id: parsed.value,
-					partname: null,
-					qty: null,
-				});
-
+			if (mode === LOT_UPSTREAM_MODES.RELEASE) {				
+				releaseLotWithdrawerPrompt({lot_id: parsed.value});
 				return;
 			}
 
