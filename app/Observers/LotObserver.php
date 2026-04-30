@@ -14,6 +14,7 @@ class LotObserver
         try {
             $item->load([
                 'stagings.positions.rackSlot.rack',
+                'stagings.withdrawer',
                 'modifiedBy',
                 'receivedBy',
             ]);
@@ -33,6 +34,7 @@ class LotObserver
 
             $item->load([
                 'stagings.positions.rackSlot.rack',
+                'stagings.withdrawer',
                 'modifiedBy',
                 'receivedBy',
                 'releasedBy',

@@ -35,7 +35,12 @@ class LotService
     public function receive(array $data)
     {
         return DB::transaction(function () use ($data) {
-            // 1. Validate each slot is available before writing anything
+            if (empty($data['slot_ids'])) {
+                throw ValidationException::withMessages([
+                    'slot_ids' => 'At least one slot must be selected.',
+                ]);
+            }
+
             foreach ($data['slot_ids'] as $slotId) {
                 $slot = $this->slots->find($slotId);
 
@@ -162,7 +167,7 @@ class LotService
      * @param  string  $releasedBy
      * @return Lot
      */
-    public function release(string $lotId, string $releasedBy): Lot
+    public function release(string $lotId, string $withdrawerId, string $releasedBy): Lot
     {
         $cacheKey = "releasing_lot_{$lotId}";
 
@@ -174,7 +179,7 @@ class LotService
 
         Cache::put($cacheKey, true, ttl: 4);
 
-        return DB::transaction(function () use ($lotId, $releasedBy) {
+        return DB::transaction(function () use ($lotId, $withdrawerId, $releasedBy) {
             $lot = $this->lots->findLastStaged($lotId);
 
             if (!$lot) {
@@ -198,6 +203,7 @@ class LotService
                 ?->update([
                     'released_at' => Carbon::now('UTC'),
                     'released_by' => $releasedBy,
+                    'withdrawer_id' => $withdrawerId
                 ]);
 
             $this->positions->releaseByLot($lot->id, $releasedBy);
@@ -212,7 +218,7 @@ class LotService
                 $this->slots->clearManyFull($rackSlotIds);
             }
 
-            return $updated->fresh(['stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
+            return $updated->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
         });
     }
 

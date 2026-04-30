@@ -19,6 +19,7 @@ class LotStaging extends Model
         'staged_at',
         'released_by',
         'released_at',
+        'withdrawer_id',
     ];
 
     protected $casts = [
@@ -43,5 +44,11 @@ class LotStaging extends Model
     public function scopeActive($query)
     {
         return $query->whereNull('released_at');
+    }
+
+    public function withdrawer()
+    {
+        return $this->belongsTo(Employee::class, 'withdrawer_id', 'EMPLOYID')
+            ->select(['EMPLOYID', 'FIRSTNAME', 'LASTNAME', 'JOB_TITLE']);
     }
 }

@@ -13,6 +13,7 @@ import { FaDownload, FaPlus, FaUpload } from "react-icons/fa";
 import RackManagement from "./Rack";
 
 const RACK_SELECTION_ID = "lots_upstream_rack_selector_modal";
+const WITHDRAWER_SELECTION_ID = "lots_upstream_withdrawer_selector_modal";
 
 import Pagination from "@/Components/Pagination";
 import SearchInput from "@/Components/SearchInput";
@@ -20,6 +21,7 @@ import { useDownloadFile } from "@/Hooks/useDownload";
 import { parseLotScanInput } from "@/Lib/parseLotScanInput";
 import { router } from "@inertiajs/react";
 import { GrAscend, GrDescend } from "react-icons/gr";
+import { TiArrowDownThick } from "react-icons/ti";
 
 const RECEIVE = LOT_UPSTREAM_MODES.RECEIVE;
 const RELEASE = LOT_UPSTREAM_MODES.RELEASE;
@@ -28,27 +30,27 @@ function SlotAssign() {
 	const { slotPendingLot, removeSlotPendingLot } = useLotStore();
 
 	return (
-		<div className="mb-5 py-2">
-			<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1.5">
+		<div className="py-2">
+			<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase">
 				Rack slots
 			</label>
-			<div className="p-2 bg-base-200 border border-base-content/20 rounded-lg min-h-20 max-h-40 overflow-y-auto gap-2 flex flex-wrap">
+			<div className="bg-base-200 border border-base-content/20 rounded-lg min-h-7 overflow-y-auto flex flex-wrap">
 				{slotPendingLot.length === 0 && (
 					<div className="flex gap-2 w-full justify-center items-center opacity-50">
 						None assigned
 					</div>
 				)}
 				{slotPendingLot.map((s, i) => (
-					<div key={i} className="flex gap-2">
+					<div key={i} className="flex">
 						{s && (
 							<button
 								type="button"
 								onClick={() => removeSlotPendingLot(s.id)}
-								className="btn w-30 btn-ghost group relative flex items-center gap-2 overflow-hidden px-4 py-2 hover:border hover:border-rose-500 hover:text-rose-500"
+								className="btn btn-sm btn-ghost group relative flex items-center gap-2 overflow-hidden hover:border hover:border-rose-500 hover:text-rose-500"
 							>
 								<span>{s?.label}</span>
 								<span className="scale-0 opacity-0 transition-all duration-100 group-hover:max-w-[50px] group-hover:scale-100 group-hover:text-rose-500 group-hover:opacity-100">
-									remove
+									×
 								</span>
 							</button>
 						)}
@@ -122,11 +124,11 @@ function ScanPanel({ lotActions }) {
 				<div>
 					<h2 className="text-[13px] font-bold tracking-wide">
 						{isEditMode
-							? `Edit lot: ${pendingLotToBeAdded?.lot_id}`
+							? `Edit ${pendingLotToBeAdded?.lot_id}`
 							: "Scan lot"}
 						{pendingLotToBeAdded?.status && (
 							<span
-								className={clsx("ml-2 badge", {
+								className={clsx("ml-2 badge badge-sm", {
 									"badge-warning": pendingLotToBeAdded?.status === "staged",
 									"badge-success": pendingLotToBeAdded?.status === "released",
 								})}
@@ -178,14 +180,15 @@ function ScanPanel({ lotActions }) {
 			<SlotAssign />
 
 			{isEditMode && pendingLotToBeAdded?.stagings?.length > 0 && (
-					<div className="mb-4 flex flex-col min-h-0">
-							<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-2">
+					<div className="mb-4 flex flex-col flex-1 min-h-0">
+							<label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
 									Staging History
 							</label>
-							<div className="overflow-y-auto max-h-48 flex flex-col gap-2 pr-1">
+							<div className="overflow-y-auto flex flex-col gap-1 pr-1 min-h-0">
 									{pendingLotToBeAdded.stagings.map((staging, index) => {
 											const isActive = !staging.released_at;
 											const isLast = index === pendingLotToBeAdded.stagings.length - 1;
+											const withdrawer = staging.withdrawer;
 
 											const byRack = staging.positions.reduce((acc, pos) => {
 													let rackLabel = pos.rack_slot?.rack?.label ?? '?';
@@ -199,60 +202,76 @@ function ScanPanel({ lotActions }) {
 											}, {});
 
 											return (
-													<div key={staging.id} className="flex flex-col gap-1 flex-shrink-0">
+													<div key={staging.id} className="relative flex flex-col gap-1 flex-shrink-0">
 															<div className={clsx(
-																	'w-full flex flex-col px-2 py-1.5 rounded border text-[10px] font-bold tracking-wide',
+																	'w-full flex gap-2 px-2 py-1.5 rounded border text-[10px] font-bold tracking-wide',
 																	isActive
 																			? 'bg-base-100 border-orange-500/30 text-orange-700'
-																			: 'bg-base-200 border-base-300 text-base-content/40'
+																			: 'bg-base-200/50 border-base-300 text-base-content/40'
 															)}>
-																	<div className="flex items-center justify-between">
-																			<span className="text-[10px] opacity-60">Cycle #{staging.cycle}</span>
-																			<span className={clsx(
-																					'text-[8px] px-1 rounded',
-																					isActive ? 'bg-orange-100 text-orange-600' : 'bg-base-300 text-base-content'
-																			)}>
-																					{isActive ? 'active' : 'released'}
-																			</span>
+																	<div className="w-1/2">
+																		<div className="flex items-center">
+																				<span className={clsx(
+																						'text-[8px] rounded',
+																						isActive ? 'bg-orange-100 text-orange-600' : 'bg-base-300 text-base-content'
+																				)}>
+																						{isActive ? 'active' : 'released'}
+																				</span>
+																				<span className="ml-2 text-[10px]">#{staging.cycle}</span>
+																		</div>
+
+																		{Object.entries(byRack).map(([rackLabel, positions]) => (
+																				<div key={rackLabel} className="flex items-center gap-1">
+																						<span>{rackLabel}</span>
+																						<div className="opacity-50">|</div>
+																						<span>
+																								{positions.map((pos, i) => {
+																										// const deletedAt = pos.rack_slot?.deleted_at || pos.rack_slot?.rack?.deleted_at;
+																										return (
+																												<span key={pos.rack_slot_id}>
+																														{/* {deletedAt && <span className="text-[10px]">✕</span>} */}
+																														{pos.rack_slot?.label}
+																														{i < positions.length - 1 && ', '}
+																												</span>
+																										);
+																								})}
+																						</span>
+																				</div>
+																		))}
+
+																		{staging?.partname && (
+																			<div>partname: {staging.partname}</div>
+																		)}
+
+																		{staging?.qty && (
+																			<div>quantity: {staging.qty}</div>
+																		)}
 																	</div>
 
-																	{Object.entries(byRack).map(([rackLabel, positions]) => (
-																			<div key={rackLabel} className="flex items-center gap-1">
-																					<span>{rackLabel}</span>
-																					<div className="opacity-50">|</div>
-																					<span>
-																							{positions.map((pos, i) => {
-																									// const deletedAt = pos.rack_slot?.deleted_at || pos.rack_slot?.rack?.deleted_at;
-																									return (
-																											<span key={pos.rack_slot_id}>
-																													{/* {deletedAt && <span className="text-[10px]">✕</span>} */}
-																													{pos.rack_slot?.label}
-																													{i < positions.length - 1 && ', '}
-																											</span>
-																									);
-																							})}
-																					</span>
-																			</div>
-																	))}
-
-																	{staging?.partname && (
-																		<div>partname: {staging.partname}</div>
-																	)}
-
-																	{staging?.qty && (
-																		<div>quantity: {staging.qty}</div>
-																	)}
-
-																	<div className="border-t border-current/10 flex flex-col pt-0.5 font-normal text-[10px]">
-																			<span>Staged by {staging.staged_by} · {formatLocalTime(staging.staged_at)}</span>
-																			{staging.released_at && (
-																					<span>Released by {staging.released_by} · {formatLocalTime(staging.released_at)}</span>
-																			)}
-																	</div>
+																	<table className="w-1/2 text-[10px] font-normal">
+																			<tbody>
+																					<tr>
+																							<td>staged</td>
+																							<td className="text-right">{staging.staged_by} · {formatLocalTime(staging.staged_at)}</td>
+																					</tr>
+																					{staging.released_at && (
+																							<tr>
+																									<td>released</td>
+																									<td className="text-right">{staging.released_by} · {formatLocalTime(staging.released_at)}</td>
+																							</tr>
+																					)}
+																					{withdrawer && (
+																							<tr>
+																									<td>withdrawn</td>
+																									<td className="text-right">{withdrawer.FIRSTNAME} · {withdrawer.EMPLOYID}</td>
+																							</tr>
+																					)}
+																			</tbody>
+																	</table>
 															</div>
 
 															{!isLast && (
-																	<div className="text-base-content/60 text-[10px] text-center">↓</div>
+																	<div className="absolute -bottom-5 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-base-content/40 z-10 text-[20px] text-center leading-0"><TiArrowDownThick /></div>
 															)}
 													</div>
 											);
@@ -275,8 +294,7 @@ function ScanPanel({ lotActions }) {
 
 function ReceivedList({ onEdit, lotActions }) {
 	const { lots, lastAddedId, recentUpdates, lotMutations } = useLotStore();
-	const { mutateLotCancel, isMutateLotLoading, releaseLot } = lotActions;
-	const [releaseConfirm, setReleaseConfirm] = useState(null);
+	const { mutateLotCancel, isMutateLotLoading, releaseLotWithdrawerPrompt } = lotActions;
 
 	return (
 		<div className="bg-base-100 h-[calc(100vh-240px)] border shadow-md border-base-300 rounded-xl overflow-hidden flex flex-col">
@@ -291,7 +309,6 @@ function ReceivedList({ onEdit, lotActions }) {
 				) : (
 					lots.map((lot, idx) => {
 						const recentUpdate = recentUpdates[lot.id];
-						const isReleasingThisLot = releaseConfirm === lot.id;
 						return (
 							<div
 								key={lot.id}
@@ -333,7 +350,6 @@ function ReceivedList({ onEdit, lotActions }) {
 														const isActive = !staging.released_at;
 														const isLast = index === lot.stagings.length - 1;
 
-														// Group positions by rack label
 														const byRack = staging.positions.reduce((acc, pos) => {
 																let rackLabel = pos.rack_slot?.rack?.label ?? '?';
 																if (rackLabel.includes('__deleted__')) {
@@ -356,7 +372,9 @@ function ReceivedList({ onEdit, lotActions }) {
 																						: 'bg-base-200 border-base-300 text-base-content/40'
 																				}`}
 																		>
-																				<span className="text-[8px] opacity-60">#{staging.cycle}</span>
+																			<div className="flex justify-between">
+																				<div className="text-[8px] opacity-60">#{staging.cycle}</div>
+																			</div>
 																				{Object.entries(byRack).map(([rackLabel, positions]) => (
 																						<div key={rackLabel} className="flex items-center gap-1">
 																								<span>{rackLabel}</span>
@@ -404,28 +422,6 @@ function ReceivedList({ onEdit, lotActions }) {
 												: lot?.received_by?.FIRSTNAME}
 										</span>
 									</div>
-									{isReleasingThisLot ? (
-										<div className="absolute p-4 backdrop-blur-xs top-1/2 -translate-y-1/2 right-0 flex items-center gap-2">
-											<span>confirm release?</span>
-											<button
-												type="button"
-												className="btn btn-sm btn-ghost text-error"
-												onClick={() => setReleaseConfirm(null)}
-											>
-												cancel
-											</button>
-											<CancellableActionButton
-												abort={() => mutateLotCancel(lot.lot_id)}
-												refetch={() => {
-													releaseLot(lot);
-													setReleaseConfirm(null);
-												}}
-												loading={lotMutations[lot.lot_id]?.isLoading}
-												buttonText="Confirm Release"
-												loadingMessage="Releasing..."
-											/>
-										</div>
-									) : (
 										<div className="absolute p-3 backdrop-blur-xs top-1/2 -translate-y-1/2 right-0 hidden group-hover:flex gap-2">
 											<button
 												type="button"
@@ -434,17 +430,17 @@ function ReceivedList({ onEdit, lotActions }) {
 											>
 												Edit
 											</button>
-											{!lot.released_at && (
-												<button
-													type="button"
-													onClick={() => setReleaseConfirm(lot.id)}
-													className="btn btn-sm btn-primary"
-												>
-													Release
-												</button>
-											)}
+											{!lot.released_at && (<CancellableActionButton
+												abort={() => mutateLotCancel(lot.lot_id)}
+												refetch={() => {
+													releaseLotWithdrawerPrompt(lot);
+												}}
+												loading={lotMutations[lot.lot_id]?.isLoading}
+												buttonText="Release"
+												buttonClassName="btn-sm btn-primary"
+												loadingMessage="Releasing..."
+											/>)}
 										</div>
-									)}
 								</div>
 							</div>
 						);
@@ -482,7 +478,10 @@ export default function LotsUpstream({
 		mode,
 		setMode,
 		setEditingLot,
+		withdrawerId,
+		setWithdrawerId,
 		setSlots,
+		lotToBeReleased,
 		toggleSlotPendingLot,
 		setIsEditMode,
 		editPendingLot,
@@ -490,13 +489,12 @@ export default function LotsUpstream({
 		receiveLot,
 		appendRecentUpdate,
 		pendingLotToBeAdded,
+		lotMutations,
 		removePendingLot,
 		clearSlotPendingLot,
 		clearRecentUpdate,
 		slotPendingLot,
 	} = useLotStore();
-
-	// TODO: lot is missing on pl6
 
 	const [filters, setFilters] = useState({
 		search: serverFilters.search ?? "",
@@ -579,6 +577,11 @@ export default function LotsUpstream({
 	useEffect(() => {
 		if (!scanResult.status) return;
 
+		if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+			document.getElementById(WITHDRAWER_SELECTION_ID)?.showModal();
+			return;
+		}
+
 		if (scanResult.status === LOT_UPSTREAM_MODES.OPEN) {
 			document.getElementById(RACK_SELECTION_ID)?.showModal();
 			return;
@@ -592,6 +595,7 @@ export default function LotsUpstream({
 		if (scanResult.status === LOT_UPSTREAM_MODES.RECEIVE_SUCCESS) {
 			playNotification(LOT_UPSTREAM_MODES.SUCCESS);
 			document.getElementById(RACK_SELECTION_ID)?.close();
+			document.getElementById(WITHDRAWER_SELECTION_ID)?.close();
 			return;
 		}
 
@@ -714,6 +718,40 @@ export default function LotsUpstream({
 	return (
 		<div className="bg-base-200 font-mono">
 			<Toaster position="top-right" />
+
+			<dialog ref={dialogRef} id={WITHDRAWER_SELECTION_ID} className="modal z-50">
+				<div className="modal-box w-3/12 border border-base-content/50 max-w-[calc(100vw-4rem)]">
+					<h3 className="font-bold text-lg text-center mb-4">Scan or Enter Withdrawer ID</h3>
+					{/* <Toaster position="top-right" /> */}
+
+					<div className="flex flex-col w-full h-full justify-center items-center">
+						<div className="w-full mb-4">Releasing f</div>
+						<div className="flex gap-2 justify-between">
+						<input 
+							type="text" 
+							placeholder="Employee ID" 
+							className="input" 
+							value={withdrawerId}
+							onChange={(e) => setWithdrawerId(e.target.value)}
+						/>
+
+						<CancellableActionButton
+							abort={() => lotActions.mutateLotCancel(lotToBeReleased?.lot_id ?? null)}
+							refetch={() => {
+								lotActions.releaseLot(lotToBeReleased);
+							}}
+							loading={lotMutations[lotToBeReleased?.lot_id ?? null]?.isLoading}
+							buttonText="Release"
+							loadingMessage="Releasing..."
+						/>
+
+						</div>
+					</div>
+				</div>
+				<form method="dialog" className="modal-backdrop">
+					<button>close</button>
+				</form>
+			</dialog>
 
 			<dialog ref={dialogRef} id={RACK_SELECTION_ID} className="modal z-50">
 				<div className="modal-box w-11/12 border border-base-content/50 max-w-[calc(100vw-4rem)] h-[calc(100vh-4.5rem)] overflow-hidden p-0">

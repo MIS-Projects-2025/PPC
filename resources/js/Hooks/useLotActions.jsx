@@ -136,6 +136,7 @@ export function useLotActions() {
 	const releaseLot = async (lot) => {
 		const socketId = window.Echo?.socketId();
 		const lotId = lot.lot_id;
+		const withdrawerId = String(useLotStore.getState().withdrawerId)
 
 		if (store.lotMutations[lotId]?.isLoading) {
 			return;
@@ -155,7 +156,7 @@ export function useLotActions() {
 			cancelPrevious: true,
 			mutationKey: lotId,
 			method: "POST",
-			body: { lot_id: lotId },
+			body: { lot_id: lotId, withdrawer_id: withdrawerId },
 			additionalHeaders: {
 				...(socketId && { "X-Socket-ID": socketId }),
 			},
@@ -173,17 +174,10 @@ export function useLotActions() {
 
 		try {
 			const result = await promise;
-			// console.log("[release] result for", lotId, result?.data);
 			store.updateLot(result?.data?.id, result?.data);
 			store.incrementTotalReleased();
-			// console.log(
-			// 	"[release] lots after update:",
-			// 	useLotStore
-			// 		.getState()
-			// 		.lots.map((l) => ({ id: l.id, status: l.status })),
-			// );
 			store.resetAll();
-			store.setScanResult(LOT_UPSTREAM_MODES.SUCCESS);
+			store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);
 		} catch (error) {
 			store.setLotError(lotId, error?.message);
 			store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
@@ -192,8 +186,16 @@ export function useLotActions() {
 		}
 	};
 
-	const sanitizeFieldValue = (field, value) => {
-		return value.replace(/\([^)]*\)/g, "").trim();
+	const releaseLotWithdrawerPrompt = async (lot) => {
+		const { mode } = store;
+		store.setLotToBeReleased(lot);
+		if (mode !== LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+				// prompt user to input withdrawal id
+				store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
+				return;
+			} else {
+				// releaseLot(lot);
+		}
 	};
 
 	const handleScanParsed = (parsed) => {
@@ -201,14 +203,17 @@ export function useLotActions() {
 			toast.info("woah, hold on...", toastOptions);
 			return;
 		}
+
 		const type = parsed.type;
 		const command = parsed.command;
-		const { pendingLotToBeAdded, mode, slots } = store;
-
-		console.log("🚀 ~ handleScanParsed ~ parsed:", parsed);
+		const { lotToBeReleased, pendingLotToBeAdded, mode, slots, scanResult } = store;
 
 		if (type === LOT_UPSTREAM_MODES.TYPE_COMMAND) {
 			if (command === LOT_UPSTREAM_MODES.DONE) {
+				// TODO: MH id before releasing
+				// TODO: MH id before releasing
+				// TODO: MH id before releasing
+
 				return mode === LOT_UPSTREAM_MODES.RECEIVE
 					? confirmLot()
 					: releaseLot(pendingLotToBeAdded);
@@ -237,18 +242,28 @@ export function useLotActions() {
 			return;
 		}
 
+		if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+			store.setWithdrawerId(parsed.value.trim().replace(/^0+(?=\d)/, ''));
+			releaseLot(lotToBeReleased);
+			return;
+		}
+		
 		if (type === LOT_UPSTREAM_MODES.TYPE_LOT) {
 			const lot = {
 				lot_id: parsed.lot_id,
 				partname: parsed.partname,
 				qty: parsed.qty,
-			};
+			};	
 
 			store.addPendingLot(lot);
 			setFocusedField(null);
 
 			if (mode === LOT_UPSTREAM_MODES.RELEASE) {
-				releaseLot(lot);
+				if (scanResult.status !== LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+					store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
+					store.setLotToBeReleased(lot);
+					return;
+				}
 			}
 
 			if (mode === LOT_UPSTREAM_MODES.RECEIVE) {
@@ -266,8 +281,6 @@ export function useLotActions() {
 				// return;
 			}
 
-			const value = sanitizeFieldValue(focusedField, parsed.value);
-
 			if (mode === LOT_UPSTREAM_MODES.RELEASE) {
 				releaseLot({
 					lot_id: parsed.value,
@@ -282,7 +295,7 @@ export function useLotActions() {
 				store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
 			}
 
-			store.editPendingLot(focusedField, value);
+			store.editPendingLot(focusedField, parsed.value);
 
 			advanceFocus(focusedField);
 
@@ -325,6 +338,7 @@ export function useLotActions() {
 		releaseLot,
 		editLot,
 		handleScanParsed,
+		releaseLotWithdrawerPrompt,
 		isMutateLotLoading,
 		mutateLotErrorMessage,
 		mutateLotErrorData,

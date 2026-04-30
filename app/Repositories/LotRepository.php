@@ -121,7 +121,7 @@ class LotRepository implements LotRepositoryInterface
     return $this->buildLotQuery($filters, null)
       ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $productionLineId))
       ->with([
-        'stagings' => fn($q) => $q->orderBy('cycle'),
+        'stagings' => fn($q) => $q->with('withdrawer')->orderBy('cycle'),
         'stagings.positions.rackSlot.rack.productionLine',
       ])
       ->with(['positions' => function ($q) {

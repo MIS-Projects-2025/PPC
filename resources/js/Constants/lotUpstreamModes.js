@@ -20,6 +20,7 @@ export const LOT_UPSTREAM_MODES = {
 	SUCCESS: "success",
 	WRONG: "wrong",
 	OPEN: "open",
+	OPEN_WITHDRAWAL: "open_withdrawal",
 	CLOSE: "close",
 	DONE: "DONE",
 	LOTID: LOTID,

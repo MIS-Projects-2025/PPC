@@ -8,9 +8,11 @@ export const useLotStore = create((set, get) => ({
 	lots: [],
 	slots: [],
 	socketId: null,
+	withdrawerId: null,
 	totalReceived: 0,
 	totalReleased: 0,
 	pendingLotToBeAdded: EMPTY_FORM,
+	lotToBeReleased: null,
 	slotPendingLot: [],
 	lastAddedId: null,
 	isScanning: false,
@@ -20,6 +22,12 @@ export const useLotStore = create((set, get) => ({
 	recentUpdates: {},
 	scanResult: { status: null, at: 0 },
 	lotMutations: {},
+
+	setWithdrawerId: (id) => set({ withdrawerId: id }),
+	clearWithdrawerId: () => set({ withdrawerId: null }),
+
+	setLotToBeReleased: (id) => set({ lotToBeReleased: id }),
+	clearLotToBeReleased: () => set({ lotToBeReleased: null }),
 
 	setLotLoading: (lotId, isLoading) =>
 		set((state) => ({
