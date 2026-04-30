@@ -119,7 +119,7 @@ class LotService
 
             $this->lots->createStaging($lot, $data['slot_ids'], $data['received_by'], Carbon::now('UTC'));
 
-            return ['lot' => $lot->fresh(['stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
+            return ['lot' => $lot->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
         });
     }
 

@@ -309,6 +309,8 @@ function ReceivedList({ onEdit, lotActions }) {
 				) : (
 					lots.map((lot, idx) => {
 						const recentUpdate = recentUpdates[lot.id];
+						const lastStaging = lot.stagings?.[lot.stagings.length - 1];
+
 						return (
 							<div
 								key={lot.id}
@@ -418,6 +420,11 @@ function ReceivedList({ onEdit, lotActions }) {
 												? lot?.released_by?.FIRSTNAME
 												: lot?.received_by?.FIRSTNAME}
 										</span>
+										{(lot.released_at && lastStaging?.withdrawer) && (
+												<span className="text-[10px] text-base-content font-mono">
+														to {lastStaging.withdrawer.FIRSTNAME}
+												</span>
+										)}
 									</div>
 										<div className="absolute p-3 backdrop-blur-xs top-1/2 -translate-y-1/2 right-0 hidden group-hover:flex gap-2">
 											<button

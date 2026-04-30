@@ -248,7 +248,7 @@ class LotRepository implements LotRepositoryInterface
         }
       }
 
-      return $lot->fresh(['stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
+      return $lot->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
     });
   }
 }
