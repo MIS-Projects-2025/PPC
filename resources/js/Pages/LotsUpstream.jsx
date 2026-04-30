@@ -320,9 +320,6 @@ function ReceivedList({ onEdit, lotActions }) {
 								)}
 							>
 								<div className="flex items-start gap-3 min-w-0">
-									<span className="text-[10px] font-bold text-base-content w-5 pt-0.5 flex-shrink-0">
-										{lots.length - idx}
-									</span>
 									<div className="min-w-0">
 										<div className="flex items-center gap-2">
 											<p className="text-[13px] antialiased font-jet-brains font-bold truncate">
@@ -725,7 +722,7 @@ export default function LotsUpstream({
 					{/* <Toaster position="top-right" /> */}
 
 					<div className="flex flex-col w-full h-full justify-center items-center">
-						<div className="w-full mb-4">Releasing f</div>
+						<div className="w-full mb-4">Releasing <span className="badge badge-primary badge-sm">{lotToBeReleased?.lot_id}</span></div>
 						<div className="flex gap-2 justify-between">
 						<input 
 							type="text" 
