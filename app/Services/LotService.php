@@ -35,6 +35,8 @@ class LotService
     public function receive(array $data)
     {
         return DB::transaction(function () use ($data) {
+            $now = Carbon::now('UTC');
+
             if (empty($data['slot_ids'])) {
                 throw ValidationException::withMessages([
                     'slot_ids' => 'At least one slot must be selected.',
@@ -67,33 +69,17 @@ class LotService
 
             $productionLineId = $productionLineIds->first();
 
-            $alreadyStaged = Lot::where('lot_id', $data['lot_id'])
-                // ->where('partname', $data['partname'])
-                ->where('status', 'staged')
-                ->exists();
+            $wasCreated = false;
 
-            if ($alreadyStaged) {
+            $lot = Lot::where('lot_id', $data['lot_id'])
+                ->lockForUpdate()
+                ->first();
+
+            if ($lot && $lot->status === 'staged') {
                 throw ValidationException::withMessages([
                     'lot_id' => 'Lot is already staged.',
                 ]);
             }
-
-            // 2. Create the lot record
-            // $lot = $this->lots->create([
-            //     'lot_id'      => $data['lot_id'],
-            //     'partname'   => $data['partname'],
-            //     'qty'         => $data['qty'],
-            //     'status'      => 'staged',
-            //     'received_by' => $data['received_by'],
-            //     'received_at' => Carbon::now('UTC'),
-            // ]);
-
-            $wasCreated = false;
-
-            $lot = Lot::where('lot_id', $data['lot_id'])->first();
-            // $lot = Lot::where('lot_id', $data['lot_id'])
-            //     ->where('partname', $data['partname'])
-            //     ->first();
 
             if ($lot) {
                 $lot->update([
@@ -101,7 +87,7 @@ class LotService
                     'partname'    => $data['partname'],
                     'status'      => 'staged',
                     'received_by' => $data['received_by'],
-                    'received_at' => Carbon::now('UTC'),
+                    'received_at' => $now,
                     'released_at' => null,
                     'released_by' => null,
                 ]);
@@ -113,11 +99,11 @@ class LotService
                     'qty'         => $data['qty'],
                     'status'      => 'staged',
                     'received_by' => $data['received_by'],
-                    'received_at' => Carbon::now('UTC'),
+                    'received_at' => $now,
                 ]);
             }
 
-            $this->lots->createStaging($lot, $data['slot_ids'], $data['received_by'], Carbon::now('UTC'));
+            $this->lots->createStaging($lot, $data['slot_ids'], $data['received_by'], $now);
 
             return ['lot' => $lot->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
         });
@@ -169,57 +155,65 @@ class LotService
      */
     public function release(string $lotId, string $withdrawerId, string $releasedBy): Lot
     {
-        $cacheKey = "releasing_lot_{$lotId}";
+        $lock = Cache::lock("releasing_lot_{$lotId}", 10);
 
-        if (Cache::has($cacheKey)) {
+        if (!$lock->get()) {
             throw ValidationException::withMessages([
                 'lot' => 'Release already in progress for this lot.',
             ]);
         }
+        try {
+            return DB::transaction(function () use ($lotId, $withdrawerId, $releasedBy) {
+                $now = Carbon::now('UTC');
+                $lot = $this->lots->findLastStaged($lotId);
 
-        Cache::put($cacheKey, true, ttl: 4);
+                if (!$lot) {
+                    throw ValidationException::withMessages([
+                        'lot' => 'No staged lot found for this scan. It may have already been released.',
+                    ]);
+                }
 
-        return DB::transaction(function () use ($lotId, $withdrawerId, $releasedBy) {
-            $lot = $this->lots->findLastStaged($lotId);
+                if ($lot->status !== 'staged') {
+                    throw ValidationException::withMessages([
+                        'lot' => "Lot is not in staged status (current: {$lot->status}).",
+                    ]);
+                }
 
-            if (!$lot) {
-                throw ValidationException::withMessages([
-                    'lot' => 'No staged lot found for this scan. It may have already been released.',
-                ]);
-            }
+                $rackSlotIds = $lot->activePositions->pluck('rack_slot_id')->filter()->all();
 
-            if ($lot->status !== 'staged') {
-                throw ValidationException::withMessages([
-                    'lot' => "Lot is not in staged status (current: {$lot->status}).",
-                ]);
-            }
+                $staging = LotStaging::where('lot_id', $lot->id)
+                    ->whereNull('released_at')
+                    ->latest('staged_at')
+                    ->first();
 
-            $rackSlotIds = $lot->activePositions->pluck('rack_slot_id')->filter()->all();
+                if (!$staging) {
+                    throw ValidationException::withMessages([
+                        'lot' => 'No active staging record found for this lot.',
+                    ]);
+                }
 
-            LotStaging::where('lot_id', $lot->id)
-                ->whereNull('released_at')
-                ->latest('staged_at')
-                ->first()
-                ?->update([
-                    'released_at' => Carbon::now('UTC'),
+                $staging->update([
+                    'released_at' => $now,
                     'released_by' => $releasedBy,
                     'withdrawer_id' => $withdrawerId
                 ]);
 
-            $this->positions->releaseByLot($lot->id, $releasedBy);
+                $this->positions->releaseByLot($lot->id, $releasedBy);
+                $updated = $this->lots->update($lot->id, [
+                    'status'      => 'released',
+                    'released_by' => $releasedBy,
+                    'released_at' => $now,
+                ])->fresh(['activePositions']);
 
-            $updated = $this->lots->update($lot->id, [
-                'status'      => 'released',
-                'released_by' => $releasedBy,
-                'released_at' => Carbon::now('UTC'),
-            ])->fresh(['activePositions']);
+                if (!empty($rackSlotIds)) {
+                    $this->slots->clearManyFull($rackSlotIds);
+                }
 
-            if (!empty($rackSlotIds)) {
-                $this->slots->clearManyFull($rackSlotIds);
-            }
-
-            return $updated->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
-        });
+                return $updated->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
+            });
+        } finally {
+            $lock->release();
+        }
     }
 
     public function downloadFilteredExport(array $filters, $productionLineId)

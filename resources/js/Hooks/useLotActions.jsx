@@ -5,331 +5,345 @@ import { useState } from "react";
 import { useMutation } from "./useMutation";
 
 const toastOptions = {
-	// duration: 5000,
-	position: "top-center",
-	className: "text-[34px] font-bold w-[700px] p-6 leading-10",
+    // duration: 5000,
+    position: "top-left",
+    className: "text-[20px] font-bold w-[300px] p-2",
 };
 
 export function useLotActions() {
-	const store = useLotStore();
-	const toast = useToast();
-	const [focusedField, setFocusedField] = useState(
-		LOT_UPSTREAM_MODES.FIELD_ORDER[0],
-	);
+    const store = useLotStore();
+    const toast = useToast();
+    const [focusedField, setFocusedField] = useState(
+        LOT_UPSTREAM_MODES.FIELD_ORDER[0],
+    );
 
-	const {
-		mutate: mutateLot,
-		isLoading: isMutateLotLoading,
-		errorMessage: mutateLotErrorMessage,
-		errorData: mutateLotErrorData,
-		cancel: mutateLotCancel,
-	} = useMutation();
+    const {
+        mutate: mutateLot,
+        isLoading: isMutateLotLoading,
+        errorMessage: mutateLotErrorMessage,
+        errorData: mutateLotErrorData,
+        cancel: mutateLotCancel,
+    } = useMutation();
 
-	const advanceFocus = (currentField) => {
-		const next =
-			LOT_UPSTREAM_MODES.FIELD_ORDER[
-				LOT_UPSTREAM_MODES.FIELD_ORDER.indexOf(currentField) + 1
-			];
-		setFocusedField(next ?? LOT_UPSTREAM_MODES.FIELD_ORDER[0]);
-	};
+    const advanceFocus = (currentField) => {
+        const next =
+            LOT_UPSTREAM_MODES.FIELD_ORDER[
+                LOT_UPSTREAM_MODES.FIELD_ORDER.indexOf(currentField) + 1
+            ];
+        setFocusedField(next ?? LOT_UPSTREAM_MODES.FIELD_ORDER[0]);
+    };
 
-	const confirmLot = async () => {
-		const socketId = window.Echo?.socketId();
-		const { pendingLotToBeAdded, slotPendingLot } = store;
+    const resetFocus = () => {
+        setFocusedField(LOT_UPSTREAM_MODES.FIELD_ORDER[0]);
+    };
 
-		if (!pendingLotToBeAdded?.lot_id) {
-			toast.error(
-				`Error: No lot scanned. Please scan a lot and try again.`,
-				toastOptions,
-			);
-			store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-			return;
-		}
+    const confirmLot = async () => {
+        const socketId = window.Echo?.socketId();
+        const { pendingLotToBeAdded, slotPendingLot } = store;
 
-		if (store.lotMutations[pendingLotToBeAdded.lot_id]?.isLoading) {
-			return;
-		}
+        if (!pendingLotToBeAdded?.lot_id) {
+            toast.error(
+                `Error: No lot scanned. Please scan a lot and try again.`,
+                toastOptions,
+            );
+            store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+            return;
+        }
 
-		store.setLotLoading(pendingLotToBeAdded.lot_id, true);
-		// if (slotPendingLot.length === 0) {
-		// 	toast.error(
-		// 		`Error: No rack slots selected. Please select at least one rack slot and try again.`,
-		// 		toastOptions,
-		// 	);
-		// 	store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-		// 	return;
-		// }
+        if (store.lotMutations[pendingLotToBeAdded.lot_id]?.isLoading) {
+            return;
+        }
 
-		try {
-			const result = await mutateLot(route("lot-upstream.store"), {
-				cancelPrevious: true,
-				method: "POST",
-				body: {
-					...pendingLotToBeAdded,
-					slot_ids: slotPendingLot.map((s) => s.id),
-				},
-				additionalHeaders: {
-					...(socketId && { "X-Socket-ID": socketId }),
-				},
-			});
-			
-			const wasCreated = result?.data?.created;
+        store.setLotLoading(pendingLotToBeAdded.lot_id, true);
+        // if (slotPendingLot.length === 0) {
+        // 	toast.error(
+        // 		`Error: No rack slots selected. Please select at least one rack slot and try again.`,
+        // 		toastOptions,
+        // 	);
+        // 	store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+        // 	return;
+        // }
 
-			toast.success(
-				`${wasCreated ? "Added" : "Re-stocked"} ${pendingLotToBeAdded.lot_id} → ${slotPendingLot.map((s) => s.label || s.name).join(", ")}`,
-				toastOptions,
-			);
+        try {
+            const result = await mutateLot(route("lot-upstream.store"), {
+                cancelPrevious: true,
+                method: "POST",
+                body: {
+                    ...pendingLotToBeAdded,
+                    slot_ids: slotPendingLot.map((s) => s.id),
+                },
+                additionalHeaders: {
+                    ...(socketId && { "X-Socket-ID": socketId }),
+                },
+            });
 
-			if (wasCreated) {
-					store.receiveLot(result?.data?.lot);
-			} else {
-					store.updateLot(result?.data?.lot?.id, result?.data?.lot);
-			}
+            const wasCreated = result?.data?.created;
 
-			store.incrementTotalReceived();
-			store.resetAll();
-			store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);
-		} catch (error) {
-			store.setLotError(pendingLotToBeAdded.lot_id, error);
-			toast.error(error?.message || "Something went wrong", toastOptions);
-			store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-		} finally {
-			store.setLotLoading(pendingLotToBeAdded.lot_id, false);
-		}
-	};
+            toast.success(
+                `${wasCreated ? "Added" : "Re-stocked"} ${pendingLotToBeAdded.lot_id} → ${slotPendingLot.map((s) => s.label || s.name).join(", ")}`,
+                toastOptions,
+            );
 
-	const editLot = async (updatedData) => {
-		const socketId = window.Echo?.socketId();
-		try {
-			store.setLotLoading(updatedData.lot_id, true);
+            if (wasCreated) {
+                store.receiveLot(result?.data?.lot);
+            } else {
+                store.updateLot(result?.data?.lot?.id, result?.data?.lot);
+            }
 
-			if (store.lotMutations[updatedData.lot_id]?.isLoading) {
-				return;
-			}
+            store.incrementTotalReceived();
+            store.resetAll();
+            store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);
+        } catch (error) {
+            store.setLotError(pendingLotToBeAdded.lot_id, error);
+            toast.error(error?.message || "Something went wrong", toastOptions);
+            store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+        } finally {
+            store.setLotLoading(pendingLotToBeAdded.lot_id, false);
+        }
+    };
 
-			const result = await mutateLot(
-				route("lot-upstream.update", encodeURIComponent(updatedData.id)),
-				{
-					cancelPrevious: true,
-					method: "PATCH",
-					body: updatedData,
-					additionalHeaders: {
-						...(socketId && { "X-Socket-ID": socketId }),
-					},
-				},
-			);
+    const editLot = async (updatedData) => {
+        const socketId = window.Echo?.socketId();
+        try {
+            store.setLotLoading(updatedData.lot_id, true);
 
-			toast.success(`You edited ${result.data?.lot_id}`, toastOptions);
+            if (store.lotMutations[updatedData.lot_id]?.isLoading) {
+                return;
+            }
 
-			store.updateLot(result.data.id, result.data);
-			store.resetAll();
-		} catch (error) {
-			store.setLotError(updatedData.lot_id, error);
-			toast.error(error?.message || "Something went wrong", toastOptions);
-			console.error(error);
-		} finally {
-			store.setLotLoading(updatedData.lot_id, false);
-			store.setScanResult(LOT_UPSTREAM_MODES.CLOSE);
-		}
-	};
+            const result = await mutateLot(
+                route(
+                    "lot-upstream.update",
+                    encodeURIComponent(updatedData.id),
+                ),
+                {
+                    cancelPrevious: true,
+                    method: "PATCH",
+                    body: updatedData,
+                    additionalHeaders: {
+                        ...(socketId && { "X-Socket-ID": socketId }),
+                    },
+                },
+            );
 
-	const releaseLot = async (lot) => {
-		const socketId = window.Echo?.socketId();
-		const lotId = lot.lot_id;
-		const withdrawerId = String(useLotStore.getState().withdrawerId)
+            toast.success(`You edited ${result.data?.lot_id}`, toastOptions);
 
-		if (store.lotMutations[lotId]?.isLoading) {
-			return;
-		}
+            store.updateLot(result.data.id, result.data);
+            store.resetAll();
+        } catch (error) {
+            store.setLotError(updatedData.lot_id, error);
+            toast.error(error?.message || "Something went wrong", toastOptions);
+            console.error(error);
+        } finally {
+            store.setLotLoading(updatedData.lot_id, false);
+            store.setScanResult(LOT_UPSTREAM_MODES.CLOSE);
+        }
+    };
 
-		if (!lotId) {
-			toast.error(
-				`Error: No lot scanned. Please scan a lot and try again.`,
-				toastOptions,
-			);
-			store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-			return;
-		}
+    const releaseLot = async (lot) => {
+        const socketId = window.Echo?.socketId();
+        const lotId = lot.lot_id;
+        const withdrawerId = String(useLotStore.getState().withdrawerId);
 
-		store.setLotLoading(lotId, true);
-		const promise = mutateLot(route("lot-upstream.release"), {
-			cancelPrevious: true,
-			mutationKey: lotId,
-			method: "POST",
-			body: { lot_id: lotId, withdrawer_id: withdrawerId },
-			additionalHeaders: {
-				...(socketId && { "X-Socket-ID": socketId }),
-			},
-		});
+        if (store.lotMutations[lotId]?.isLoading) {
+            return;
+        }
 
-		toast.promise(
-			promise,
-			{
-				loading: "Releasing...",
-				success: `Released ${lotId}`,
-				error: (err) => err?.message || "Something went wrong",
-			},
-			toastOptions,
-		);
+        if (!lotId) {
+            toast.error(
+                `Error: No lot scanned. Please scan a lot and try again.`,
+                toastOptions,
+            );
+            store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+            return;
+        }
 
-		try {
-			const result = await promise;
-			store.updateLot(result?.data?.id, result?.data);
-			store.incrementTotalReleased();
-			store.resetAll();
-			store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);
-		} catch (error) {
-			store.setLotError(lotId, error?.message);
-			store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-		} finally {
-			store.setLotLoading(lotId, false);
-		}
-	};
+        store.setLotLoading(lotId, true);
+        const promise = mutateLot(route("lot-upstream.release"), {
+            cancelPrevious: true,
+            mutationKey: lotId,
+            method: "POST",
+            body: { lot_id: lotId, withdrawer_id: withdrawerId },
+            additionalHeaders: {
+                ...(socketId && { "X-Socket-ID": socketId }),
+            },
+        });
 
-	const releaseLotWithdrawerPrompt = (lot) => {
-		store.setLotToBeReleased(lot);
-		store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
-	};
+        toast.promise(
+            promise,
+            {
+                loading: "Releasing...",
+                success: `Released ${lotId}`,
+                error: (err) => err?.message || "Something went wrong",
+            },
+            toastOptions,
+        );
 
-	const handleScanParsed = (parsed) => {
-		if (isMutateLotLoading) {
-			toast.info("woah, hold on...", toastOptions);
-			return;
-		}
+        try {
+            const result = await promise;
+            store.updateLot(result?.data?.id, result?.data);
+            store.incrementTotalReleased();
+            store.resetAll();
+            store.setScanResult(LOT_UPSTREAM_MODES.RECEIVE_SUCCESS);
+        } catch (error) {
+            store.setLotError(lotId, error?.message);
+            store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+        } finally {
+            store.setLotLoading(lotId, false);
+        }
+    };
 
-		const type = parsed.type;
-		const command = parsed.command;
-		const { lotToBeReleased, pendingLotToBeAdded, mode, slots, scanResult } = store;
+    const releaseLotWithdrawerPrompt = (lot) => {
+        store.setLotToBeReleased(lot);
+        store.setScanResult(LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL);
+    };
 
-		if (type === LOT_UPSTREAM_MODES.TYPE_COMMAND) {
-			if (command === LOT_UPSTREAM_MODES.DONE) {
-				// TODO: MH id before releasing
-				// TODO: MH id before releasing
-				// TODO: MH id before releasing
+    const handleScanParsed = (parsed) => {
+        if (isMutateLotLoading) {
+            toast.info("woah, hold on...", toastOptions);
+            return;
+        }
 
-				return mode === LOT_UPSTREAM_MODES.RECEIVE
-					? confirmLot()
-					: releaseLotWithdrawerPrompt(pendingLotToBeAdded);
-			}
-			if (command === LOT_UPSTREAM_MODES.RECEIVING) {
-				store.setMode(LOT_UPSTREAM_MODES.RECEIVE);
-				store.addPendingLot({});
-				store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
-				setFocusedField("lot_id");
-			}
-			if (command === LOT_UPSTREAM_MODES.RELEASING) {
-				store.setMode(LOT_UPSTREAM_MODES.RELEASE);
-				// setFocusedField(null);
-				setFocusedField("lot_id");
-			}
-			return;
-		}
+        const type = parsed.type;
+        const command = parsed.command;
+        const {
+            lotToBeReleased,
+            pendingLotToBeAdded,
+            mode,
+            slots,
+            scanResult,
+        } = store;
 
-		if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_SELECT) {
-			// Option B: explicit field targeting — repositions cursor, no value written
-			setFocusedField(parsed.field);
-			toast.info(
-				`Scanning into: ${parsed.field.replace("_", " ")}`,
-				toastOptions,
-			);
-			store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
-			return;
-		}
+        if (type === LOT_UPSTREAM_MODES.TYPE_COMMAND) {
+            if (command === LOT_UPSTREAM_MODES.DONE) {
+                // TODO: MH id before releasing
+                // TODO: MH id before releasing
+                // TODO: MH id before releasing
 
-		if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
-			store.setWithdrawerId(parsed.value.trim().replace(/^0+(?=\d)/, ''));
-			releaseLot(lotToBeReleased);
-			return;
-		}
-		
-		if (type === LOT_UPSTREAM_MODES.TYPE_LOT) {
-			const lot = {
-				lot_id: parsed.lot_id,
-				partname: parsed.partname,
-				qty: parsed.qty,
-			};	
+                return mode === LOT_UPSTREAM_MODES.RECEIVE
+                    ? confirmLot()
+                    : releaseLotWithdrawerPrompt(pendingLotToBeAdded);
+            }
+            if (command === LOT_UPSTREAM_MODES.RECEIVING) {
+                store.setMode(LOT_UPSTREAM_MODES.RECEIVE);
+                store.addPendingLot({});
+                store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
+                setFocusedField("lot_id");
+            }
+            if (command === LOT_UPSTREAM_MODES.RELEASING) {
+                store.setMode(LOT_UPSTREAM_MODES.RELEASE);
+                // setFocusedField(null);
+                setFocusedField("lot_id");
+            }
+            return;
+        }
 
-			store.addPendingLot(lot);
-			setFocusedField(null);
+        if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_SELECT) {
+            // Option B: explicit field targeting — repositions cursor, no value written
+            setFocusedField(parsed.field);
+            toast.info(
+                `Scanning into: ${parsed.field.replace("_", " ")}`,
+                toastOptions,
+            );
+            store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
+            return;
+        }
 
-			if (mode === LOT_UPSTREAM_MODES.RELEASE) {
-				if (scanResult.status !== LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
-					releaseLotWithdrawerPrompt(lot);
-					return;
-				}
-			}
+        if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+            store.setWithdrawerId(parsed.value.trim().replace(/^0+(?=\d)/, ""));
+            releaseLot(lotToBeReleased);
+            return;
+        }
 
-			if (mode === LOT_UPSTREAM_MODES.RECEIVE) {
-				store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
-			}
+        if (type === LOT_UPSTREAM_MODES.TYPE_LOT) {
+            const lot = {
+                lot_id: parsed.lot_id,
+                partname: parsed.partname,
+                qty: parsed.qty,
+            };
 
-			store.setIsScanning(true);
-			setTimeout(() => store.setIsScanning(false), 200);
-		}
+            store.addPendingLot(lot);
+            setFocusedField(null);
 
-		if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE) {
-			if (!focusedField) {
-				advanceFocus(LOT_UPSTREAM_MODES.FIELD_ORDER[2]);
-				// store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-				// return;
-			}
+            if (mode === LOT_UPSTREAM_MODES.RELEASE) {
+                if (scanResult.status !== LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+                    releaseLotWithdrawerPrompt(lot);
+                    return;
+                }
+            }
 
-			if (mode === LOT_UPSTREAM_MODES.RELEASE) {				
-				releaseLotWithdrawerPrompt({lot_id: parsed.value});
-				return;
-			}
+            if (mode === LOT_UPSTREAM_MODES.RECEIVE) {
+                store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
+            }
 
-			if (mode !== LOT_UPSTREAM_MODES.RELEASE) {
-				store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
-			}
+            store.setIsScanning(true);
+            setTimeout(() => store.setIsScanning(false), 200);
+        }
 
-			store.editPendingLot(focusedField, parsed.value);
+        if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE) {
+            if (!focusedField) {
+                advanceFocus(LOT_UPSTREAM_MODES.FIELD_ORDER[2]);
+                // store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+                // return;
+            }
 
-			advanceFocus(focusedField);
+            if (mode === LOT_UPSTREAM_MODES.RELEASE) {
+                releaseLotWithdrawerPrompt({ lot_id: parsed.value });
+                return;
+            }
 
-			store.setIsScanning(true);
-			setTimeout(() => store.setIsScanning(false), 200);
-			return;
-		}
+            if (mode !== LOT_UPSTREAM_MODES.RELEASE) {
+                store.setScanResult(LOT_UPSTREAM_MODES.OPEN);
+            }
 
-		if (type === LOT_UPSTREAM_MODES.TYPE_SLOT) {
-			if (Object.keys(pendingLotToBeAdded).length === 0) {
-				toast.error(
-					`Error: No lot scanned. Please scan a lot and try again.`,
-					toastOptions,
-				);
-				store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-				return;
-			}
+            store.editPendingLot(focusedField, parsed.value);
 
-			const slot = slots[parsed.slotId];
-			if (slot) {
-				store.toggleSlotPendingLot(slot);
-				store.setScanResult(LOT_UPSTREAM_MODES.SUCCESS);
-			} else {
-				toast.error(
-					`Error: No slot scanned. Please scan a slot and try again.`,
-					toastOptions,
-				);
-				store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
-			}
+            advanceFocus(focusedField);
 
-			setFocusedField(null);
-		}
-	};
+            store.setIsScanning(true);
+            setTimeout(() => store.setIsScanning(false), 200);
+            return;
+        }
 
-	return {
-		advanceFocus,
-		focusedField,
-		setFocusedField,
-		confirmLot,
-		releaseLot,
-		editLot,
-		handleScanParsed,
-		releaseLotWithdrawerPrompt,
-		isMutateLotLoading,
-		mutateLotErrorMessage,
-		mutateLotErrorData,
-		mutateLotCancel,
-	};
+        if (type === LOT_UPSTREAM_MODES.TYPE_SLOT) {
+            if (Object.keys(pendingLotToBeAdded).length === 0) {
+                toast.error(
+                    `Error: No lot scanned. Please scan a lot and try again.`,
+                    toastOptions,
+                );
+                store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+                return;
+            }
+
+            const slot = slots[parsed.slotId];
+            if (slot) {
+                store.toggleSlotPendingLot(slot);
+                store.setScanResult(LOT_UPSTREAM_MODES.SUCCESS);
+            } else {
+                toast.error(
+                    `Error: No slot scanned. Please scan a slot and try again.`,
+                    toastOptions,
+                );
+                store.setScanResult(LOT_UPSTREAM_MODES.WRONG);
+            }
+
+            setFocusedField(null);
+        }
+    };
+
+    return {
+        advanceFocus,
+        focusedField,
+        setFocusedField,
+        confirmLot,
+        releaseLot,
+        resetFocus,
+        editLot,
+        handleScanParsed,
+        releaseLotWithdrawerPrompt,
+        isMutateLotLoading,
+        mutateLotErrorMessage,
+        mutateLotErrorData,
+        mutateLotCancel,
+    };
 }

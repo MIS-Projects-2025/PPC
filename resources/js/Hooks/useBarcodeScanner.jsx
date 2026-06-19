@@ -1,61 +1,64 @@
 import { useEffect, useRef } from "react";
 
-const SCANNER_TIMEOUT_MS = 100;
+const SCANNER_MAX_INTERVAL_MS = 30; // tune against your actual scanner — most HID scanners are <20ms/char
+const IDLE_RESET_MS = 1000; // a pause this long means "new sequence," not "slow scan"
+const MIN_SCAN_LENGTH = 1; // tune to your shortest real barcode payload
 
 const useBarcodeScanner = (onScan) => {
-	const buffer = useRef("");
-	const lastKeyTime = useRef(Date.now());
-	const onScanRef = useRef(onScan);
-	const bufferStartTime = useRef(null);
+    const buffer = useRef("");
+    const lastKeyTime = useRef(0);
+    const looksLikeScan = useRef(true);
+    const onScanRef = useRef(onScan);
 
-	useEffect(() => {
-		onScanRef.current = onScan;
-	}, [onScan]);
+    useEffect(() => {
+        onScanRef.current = onScan;
+    }, [onScan]);
 
-	useEffect(() => {
-		const handleKeyDown = (e) => {
-				if (e.key === "Enter") {
-						const currentBuffer = buffer.current;
-						const elapsed = Date.now() - (bufferStartTime.current ?? Date.now());
-						buffer.current = "";
-						bufferStartTime.current = null;
+    useEffect(() => {
+        const reset = () => {
+            buffer.current = "";
+            looksLikeScan.current = true;
+        };
 
-						if (currentBuffer.length > 2 && elapsed < SCANNER_TIMEOUT_MS * currentBuffer.length) {
-								onScanRef.current(currentBuffer, e);
-						}
-				} else if (e.key.length === 1) {
-						if (buffer.current === "") {
-								bufferStartTime.current = Date.now();
-						}
-						buffer.current += e.key;
-				}
-		};
-		// const handleKeyDown = (e) => {
-		// 	const now = Date.now();
-		// 	const timeDiff = now - lastKeyTime.current;
-		// 	lastKeyTime.current = now;
+        const handleKeyDown = (e) => {
+            const now = Date.now();
+            const gap = now - lastKeyTime.current;
+            lastKeyTime.current = now;
 
-		// 	if (e.key === "Enter") {
-		// 		const currentBuffer = buffer.current;
-		// 		buffer.current = "";
+            if (e.key === "Enter") {
+                const candidate = buffer.current;
+                const wasScan =
+                    looksLikeScan.current &&
+                    candidate.length >= MIN_SCAN_LENGTH;
+                reset();
 
-		// 		if (currentBuffer.length > 2) {
-		// 			onScanRef.current(currentBuffer, e);
-		// 		}
-		// 	} else if (e.key.length === 1) {
-		// 		if (timeDiff > SCANNER_TIMEOUT_MS) {
-		// 			buffer.current = "";
-		// 		} else {
-		// 			// Chars 2+ arriving fast = definitely a scanner, block from input
-		// 			e.preventDefault();
-		// 		}
-		// 		buffer.current += e.key;
-		// 	}
-		// };
+                if (wasScan) {
+                    e.preventDefault(); // only ever swallow the terminating Enter
+                    onScanRef.current(candidate, e);
+                }
+                // not a scan -> let Enter do whatever it would normally do
+                return;
+            }
 
-		window.addEventListener("keydown", handleKeyDown, true);
-		return () => window.removeEventListener("keydown", handleKeyDown, true);
-	}, []);
+            if (e.key.length === 1) {
+                if (buffer.current.length > 0) {
+                    if (gap > IDLE_RESET_MS) {
+                        reset(); // long pause: treat as a brand new sequence
+                    } else if (gap > SCANNER_MAX_INTERVAL_MS) {
+                        looksLikeScan.current = false; // one slow gap disqualifies this run
+                    }
+                }
+                buffer.current += e.key;
+                // never preventDefault here — the character always reaches
+                // whatever element is actually focused, same as if this
+                // hook didn't exist
+            }
+        };
+
+        document.addEventListener("keydown", handleKeyDown, true);
+        return () =>
+            document.removeEventListener("keydown", handleKeyDown, true);
+    }, []);
 };
 
 export default useBarcodeScanner;

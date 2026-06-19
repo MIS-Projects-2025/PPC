@@ -28,8 +28,12 @@ class LotRepository implements LotRepositoryInterface
   public function findLastStaged(string $lotId): ?Lot
   {
     $lot = Lot::where('lot_id', $lotId)
-      ->where('status', 'staged')
+      ->lockForUpdate()
       ->first();
+
+    if (!$lot || $lot->status !== 'staged') {
+      return null;
+    }
 
     return $lot;
   }
