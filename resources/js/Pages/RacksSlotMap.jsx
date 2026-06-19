@@ -47,28 +47,31 @@ function LotChip({ productionLine, lot }) {
     const isLoading = useLotStore((s) => s.lotMutations[lot.lot_id]?.isLoading);
 
     return (
-        <button
-            type="button"
-            className="relative btn btn-ghost h-full font-medium"
-            onClick={() => {
-                router.visit(
-                    route("lot-upstream.index", {
-                        productionLine: productionLine?.name,
-                    }),
-                    {
-                        data: { search: lot?.lot_id },
-                    },
-                );
-            }}
+        <div
+            className="relative h-full"
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
-            <span className="block font-mono text-md leading-snug px-1 py-0.5 rounded text-base-content break-all">
-                {lot.lot_id}
-            </span>
+            <button
+                type="button"
+                className="btn btn-ghost w-full h-full font-medium"
+                onClick={() => {
+                    router.visit(
+                        route("lot-upstream.index", {
+                            productionLine: productionLine?.name,
+                        }),
+                        {
+                            data: { search: lot?.lot_id },
+                        },
+                    );
+                }}
+            >
+                <span className="block font-mono text-md leading-snug px-1 py-0.5 rounded text-base-content break-all">
+                    {lot.lot_id}
+                </span>
+            </button>
 
             <div
-                onClick={(e) => e.stopPropagation()}
                 className={clsx(
                     "absolute left-full z-20 top-1/2 -translate-y-1/2 flex transition-all duration-200 ease-out",
                     {
@@ -81,13 +84,20 @@ function LotChip({ productionLine, lot }) {
             >
                 <CancellableActionButton
                     abort={() => mutateLotCancel(lot?.lot_id ?? null)}
-                    refetch={() => releaseLot(lot)}
+                    refetch={async () => {
+                        await releaseLot(lot);
+                        router.reload({
+                            preserveState: true,
+                            preserveScroll: true,
+                        });
+                    }}
+                    buttonClassName="btn btn-sm btn-primary"
                     loading={isLoading}
                     buttonText="Release"
                     loadingMessage="Releasing..."
                 />
             </div>
-        </button>
+        </div>
     );
 }
 
