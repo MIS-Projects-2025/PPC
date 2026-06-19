@@ -840,7 +840,9 @@ export default function LotsUpstream({
 
     useBarcodeScanner((currentBuffer, e) => {
         console.log("🚀 ~ LotsUpstream ~ currentBuffer:", currentBuffer);
-        const parsed = parseLotScanInput(currentBuffer);
+        const text = currentBuffer.replace(/^\([^)]*\)/gm, "");
+        console.log("🚀 ~ LotsUpstream ~ regex:", text);
+        const parsed = parseLotScanInput(text);
         const type = parsed.type;
 
         if (
