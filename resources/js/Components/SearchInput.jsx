@@ -9,6 +9,7 @@ const SearchInput = React.memo(function SearchInput({
     initialSearchInput,
     onSearchChange,
     onEnter,
+    ...props
 }) {
     const [searchInput, setSearchInput] = useState(initialSearchInput);
 
@@ -49,6 +50,7 @@ const SearchInput = React.memo(function SearchInput({
                         onEnter({ search: searchInput });
                     }
                 }}
+                {...props}
             />
             {searchInput && (
                 <button

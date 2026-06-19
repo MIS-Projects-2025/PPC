@@ -249,11 +249,12 @@ export function useLotActions() {
             return;
         }
 
-        if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
-            store.setWithdrawerId(parsed.value.trim().replace(/^0+(?=\d)/, ""));
-            releaseLot(lotToBeReleased);
-            return;
-        }
+        // if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
+        //     console.log("TRIGGER RELEASE");
+        //     store.setWithdrawerId(parsed.value.trim().replace(/^0+(?=\d)/, ""));
+        //     releaseLot(lotToBeReleased);
+        //     return;
+        // }
 
         if (type === LOT_UPSTREAM_MODES.TYPE_LOT) {
             const lot = {

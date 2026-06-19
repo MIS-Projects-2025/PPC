@@ -686,6 +686,7 @@ export default function LotsUpstream({
         setIsEditMode,
         editPendingLot,
         scanResult,
+        setScanResult,
         receiveLot,
         appendRecentUpdate,
         pendingLotToBeAdded,
@@ -839,7 +840,8 @@ export default function LotsUpstream({
     };
 
     useBarcodeScanner((currentBuffer, e) => {
-        console.log("🚀 ~ LotsUpstream ~ currentBuffer:", currentBuffer);
+        if (e.target?.dataset?.noScanner !== undefined) return;
+
         const text = currentBuffer.replace(/^\([^)]*\)/gm, "");
         console.log("🚀 ~ LotsUpstream ~ regex:", text);
         const parsed = parseLotScanInput(text);
@@ -942,6 +944,7 @@ export default function LotsUpstream({
 
         const handleClose = () => {
             lotActions.resetFocus();
+            setScanResult(LOT_UPSTREAM_MODES.CLOSE);
             setIsEditMode(false);
         };
 
@@ -980,14 +983,12 @@ export default function LotsUpstream({
                                 className="input"
                                 value={withdrawerId}
                                 onChange={(e) =>
-                                    setWithdrawerId(e.target.value)
+                                    setWithdrawerId(
+                                        e.target.value.replace(/^0+/, ""),
+                                    )
                                 }
-                                // Listen for the Enter key press
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                        lotActions.releaseLot(lotToBeReleased);
-                                    }
-                                }}
+                                data-no-scanner
+                                onFocus={(e) => e.target.select()}
                             />
 
                             <CancellableActionButton
@@ -1141,6 +1142,8 @@ export default function LotsUpstream({
                                 }
                                 onEnter={apply}
                                 inputClassName="w-30 ml-0 rounded-sm"
+                                data-no-scanner
+                                onFocus={(e) => e.target.select()}
                             />
                         </div>
 
