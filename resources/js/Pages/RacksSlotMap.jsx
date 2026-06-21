@@ -42,7 +42,8 @@ function buildTransposedGrid(slots) {
 function LotChip({ productionLine, lot }) {
     console.log("🚀 ~ LotChip ~ lot:", lot);
     const [hovered, setHovered] = useState(false);
-    const { releaseLot, mutateLotCancel } = useContext(LotActionsContext);
+    const { openReleaseDialog, mutateLotCancel } =
+        useContext(LotActionsContext);
     const { lotMutations } = useLotStore();
     const isLoading = useLotStore((s) => s.lotMutations[lot.lot_id]?.isLoading);
 
@@ -85,11 +86,7 @@ function LotChip({ productionLine, lot }) {
                 <CancellableActionButton
                     abort={() => mutateLotCancel(lot?.lot_id ?? null)}
                     refetch={async () => {
-                        await releaseLot(lot);
-                        router.reload({
-                            preserveState: true,
-                            preserveScroll: true,
-                        });
+                        openReleaseDialog(lot); // ← instead of releaseLot + router.reload
                     }}
                     buttonClassName="btn btn-sm btn-primary"
                     loading={isLoading}
@@ -240,6 +237,11 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
     const [lastRefreshTime, setLastRefreshTime] = useState(Date.now());
     const lotActions = useLotActions();
     const { releaseLot, mutateLotCancel } = useLotActions();
+    const [lotToBeReleased, setLotToBeReleased] = useState(null);
+    const [withdrawerId, setWithdrawerId] = useState("");
+    const withdrawerIdInputRef = useRef(null);
+    const dialogRef = useRef(null);
+    const { lotMutations } = useLotStore();
 
     const load = useCallback(async () => {
         setLastRefreshTime(Date.now());
@@ -262,8 +264,23 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
         { slots: 0, occupied: 0, lots: 0 },
     );
 
+    const openReleaseDialog = useCallback((lot) => {
+        setLotToBeReleased(lot);
+        dialogRef.current?.showModal();
+        setTimeout(() => withdrawerIdInputRef.current?.focus(), 50);
+    }, []);
+
+    const handleRelease = useCallback(async () => {
+        setWithdrawerId("");
+        await releaseLot(lotToBeReleased);
+        dialogRef.current?.close();
+        router.reload({ preserveState: true, preserveScroll: true });
+    }, [lotToBeReleased, withdrawerId]);
+
     return (
-        <LotActionsContext.Provider value={{ releaseLot, mutateLotCancel }}>
+        <LotActionsContext.Provider
+            value={{ openReleaseDialog, mutateLotCancel }}
+        >
             <div className="min-h-screen">
                 {/* toolbar */}
                 <div className="flex items-start justify-between gap-4">
@@ -311,6 +328,42 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
                         />
                     ))}
                 </div>
+
+                <dialog ref={dialogRef} className="modal z-50">
+                    <div className="modal-box w-3/12 border border-base-content/50 max-w-[calc(100vw-4rem)]">
+                        <h3 className="font-bold text-lg text-center mb-4">
+                            Scan or Enter Withdrawer ID
+                        </h3>
+                        <div className="flex flex-col w-full h-full justify-center items-center">
+                            <div className="w-full mb-4">
+                                Releasing{" "}
+                                <span className="badge badge-primary badge-sm">
+                                    {lotToBeReleased?.lot_id}
+                                </span>
+                            </div>
+                            <div className="flex gap-2 justify-between">
+                                <CancellableActionButton
+                                    abort={() =>
+                                        mutateLotCancel(
+                                            lotToBeReleased?.lot_id ?? null,
+                                        )
+                                    }
+                                    refetch={handleRelease}
+                                    loading={
+                                        lotMutations[
+                                            lotToBeReleased?.lot_id ?? null
+                                        ]?.isLoading
+                                    }
+                                    buttonText="Release"
+                                    loadingMessage="Releasing..."
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop">
+                        <button>close</button>
+                    </form>
+                </dialog>
             </div>
         </LotActionsContext.Provider>
     );
