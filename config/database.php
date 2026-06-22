@@ -62,6 +62,29 @@ return [
             ]) : [],
         ],
 
+        'output_monitoring' => [
+            'driver'      => 'mysql',
+            'host'        => env('DB_HOST', '127.0.0.1'),
+            'port'        => env('DB_PORT', '3306'),
+            'database'    => env('DB_OUTPUT_MONITORING_DATABASE', 'output_monitoring'),
+            'username'    => env('DB_USERNAME', 'forge'),
+            'password'    => env('DB_PASSWORD', ''),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset'     => 'utf8mb4',
+            'collation'   => 'utf8mb4_unicode_ci',
+            'prefix'      => '',
+            'strict'      => true,
+            'engine'      => null,
+
+            // Keep connection timeouts short — this is a secondary/optional data
+            // source per the "system can still go on" requirement. We don't want
+            // a hung connection here blocking the main page for the default
+            // 60s+ that PDO might otherwise wait.
+            'options' => [
+                \PDO::ATTR_TIMEOUT => 4, // seconds
+            ],
+        ],
+
         'masterlist' => [
             'driver' => 'mysql',
             'url' => env('ADB_URL'),

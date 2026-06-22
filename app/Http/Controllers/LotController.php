@@ -11,6 +11,7 @@ use App\Repositories\Interfaces\LotRepositoryInterface;
 use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
+use App\Repositories\Interfaces\LotRunRepositoryInterface;
 use Illuminate\Support\Facades\Log;
 
 class LotController extends Controller
@@ -20,7 +21,8 @@ class LotController extends Controller
         protected LotRepositoryInterface  $lotRepo,
         protected LotPositionRepositoryInterface  $lotPositionRepo,
         protected RackRepositoryInterface $rackRepo,
-        protected RackSlotRepositoryInterface $rackSlotRepo
+        protected RackSlotRepositoryInterface $rackSlotRepo,
+        protected LotRunRepositoryInterface $lotRunRepo,
     ) {}
 
     public function receive(): Response
@@ -35,6 +37,7 @@ class LotController extends Controller
     {
         return $this->lotRepo->all();
     }
+
 
     public function index(string $productionLine): Response
     {
@@ -53,17 +56,31 @@ class LotController extends Controller
             'unslotted',
             'per_page',
             'sort',
-            'restocked'
+            'restocked',
         ]);
 
         $todayStart = now('Asia/Manila')->startOfDay()->utc();
         $todayEnd   = now('Asia/Manila')->endOfDay()->utc();
 
         return Inertia::render('LotsUpstream', [
-            'lots' => Inertia::always(
-                fn() =>
-                $this->lotRepo->paginate($filters, $pl->id)
-            ),
+            'lots' => Inertia::always(function () use ($filters, $pl) {
+                $lots = $this->lotRepo->paginate($filters, $pl->id);
+
+                // Separate data source (different DB schema, may be
+                // unavailable) — attach AFTER pagination, never inside the
+                // main lots query, so a failure here can't affect $lots.
+                $lotIds = collect($lots->items())->pluck('lot_id')->all();
+                $runs   = $this->lotRunRepo->latestForLots($lotIds);
+
+                foreach ($lots->items() as $lot) {
+                    $lot->setAttribute(
+                        'latest_run',
+                        $runs->get(\Illuminate\Support\Str::lower($lot->lot_id))
+                    );
+                }
+
+                return $lots;
+            }),
             'racks' => fn() => $this->rackRepo->getAllByProductionLine($pl->id),
             'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByProductionLine($pl->id),
             'filters' => $filters,

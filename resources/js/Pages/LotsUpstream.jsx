@@ -7,6 +7,7 @@ import { playNotification } from "@/Service/AudioService";
 import { useLotStore } from "@/Store/useLotStore";
 import formatLocalTime from "@/Utils/formatLocalTime";
 import clsx from "clsx";
+import { format, formatDistanceToNow } from "date-fns";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "react-hot-toast";
 import { FaDownload, FaPlus, FaUpload } from "react-icons/fa";
@@ -15,6 +16,7 @@ import RackManagement from "./Rack";
 const RACK_SELECTION_ID = "lots_upstream_rack_selector_modal";
 const WITHDRAWER_SELECTION_ID = "lots_upstream_withdrawer_selector_modal";
 
+import LotRunTooltip from "@/Components/LotRunTooltip";
 import Pagination from "@/Components/Pagination";
 import SearchInput from "@/Components/SearchInput";
 import { useDownloadFile } from "@/Hooks/useDownload";
@@ -372,6 +374,24 @@ function ScanPanel({ lotActions }) {
     );
 }
 
+function LastRunBadge({ latestRun }) {
+    if (!latestRun?.end_time) return null;
+
+    const absolute = format(new Date(latestRun.end_time), "MMM d, yyyy h:mm a");
+
+    return (
+        <>
+            <span
+                data-tooltip-id={`run-${latestRun.id}`}
+                className="cursor-pointer text-[10px] font-semibold rounded bg-primary text-base-content border border-primary px-1.5 py-0.5 cursor-default"
+            >
+                ✓ Completed: {absolute}
+            </span>
+            <LotRunTooltip id={`run-${latestRun.id}`} latestRun={latestRun} />
+        </>
+    );
+}
+
 function ReceivedList({ onEdit, lotActions }) {
     const { lots, lastAddedId, recentUpdates, lotMutations, setMode } =
         useLotStore();
@@ -420,6 +440,11 @@ function ReceivedList({ onEdit, lotActions }) {
                                                 ).toLocaleString()}{" "}
                                                 quantity
                                             </span>
+                                            <LastRunBadge
+                                                latestRun={
+                                                    lot?.latest_run || null
+                                                }
+                                            />
                                             {recentUpdate && (
                                                 <div className="flex items-center gap-0 ml-1">
                                                     {/* arrow */}
@@ -717,6 +742,14 @@ export default function LotsUpstream({
     const set = (key, val) => setFilters((prev) => ({ ...prev, [key]: val }));
 
     const apply = (overrides = {}) => {
+        if (
+            overrides instanceof Event ||
+            typeof overrides !== "object" ||
+            Array.isArray(overrides)
+        ) {
+            overrides = {};
+        }
+
         const merged = { ...filters, ...overrides };
         const params = Object.fromEntries(
             Object.entries(merged).filter(([, v]) => v !== "" && v !== false),
@@ -1141,7 +1174,7 @@ export default function LotsUpstream({
                                     set("search", searchInput)
                                 }
                                 onEnter={apply}
-                                inputClassName="w-30 ml-0 rounded-sm"
+                                inputClassName="w-50 ml-0 rounded-sm"
                                 data-no-scanner
                                 onFocus={(e) => e.target.select()}
                             />
@@ -1320,7 +1353,7 @@ export default function LotsUpstream({
                         <div className="flex flex-col gap-1 items-end ml-auto">
                             <button
                                 type="button"
-                                onClick={apply}
+                                onClick={() => apply()}
                                 className="btn w-36 rounded-sm btn-xs btn-primary text-[12px]"
                             >
                                 Apply filters

@@ -8,11 +8,13 @@ use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use App\Repositories\Interfaces\LotRepositoryInterface;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
+use App\Repositories\Interfaces\LotRunRepositoryInterface;
 use App\Repositories\ProductionLineRepository;
 use App\Repositories\RackRepository;
 use App\Repositories\RackSlotRepository;
 use App\Repositories\LotRepository;
 use App\Repositories\LotPositionRepository;
+use App\Repositories\LotRunRepository;
 
 class RepositoryServiceProvider extends ServiceProvider
 {
@@ -41,6 +43,11 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             LotPositionRepositoryInterface::class,
             LotPositionRepository::class,
+        );
+
+        $this->app->bind(
+            LotRunRepositoryInterface::class,
+            LotRunRepository::class,
         );
     }
 }
