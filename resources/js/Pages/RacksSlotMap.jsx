@@ -12,7 +12,6 @@ import {
     useRef,
     useState,
 } from "react";
-import { HiChevronLeft } from "react-icons/hi";
 
 // --- helpers ---
 function parseLabel(label) {
@@ -44,7 +43,6 @@ function LotChip({ productionLine, lot }) {
     const [hovered, setHovered] = useState(false);
     const { openReleaseDialog, mutateLotCancel } =
         useContext(LotActionsContext);
-    const { lotMutations } = useLotStore();
     const isLoading = useLotStore((s) => s.lotMutations[lot.lot_id]?.isLoading);
 
     return (
@@ -235,13 +233,11 @@ const LotActionsContext = createContext(null);
 
 export default function RacksSlotMap({ productionLine, slotMap: racks }) {
     const [lastRefreshTime, setLastRefreshTime] = useState(Date.now());
-    const lotActions = useLotActions();
     const { releaseLot, mutateLotCancel } = useLotActions();
     const [lotToBeReleased, setLotToBeReleased] = useState(null);
-    const [withdrawerId, setWithdrawerId] = useState("");
     const withdrawerIdInputRef = useRef(null);
     const dialogRef = useRef(null);
-    const { lotMutations } = useLotStore();
+    const { lotMutations, setWithdrawerId, withdrawerId } = useLotStore();
 
     const load = useCallback(async () => {
         setLastRefreshTime(Date.now());
@@ -271,7 +267,6 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
     }, []);
 
     const handleRelease = useCallback(async () => {
-        setWithdrawerId("");
         await releaseLot(lotToBeReleased);
         dialogRef.current?.close();
         router.reload({ preserveState: true, preserveScroll: true });
@@ -335,13 +330,32 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
                             Scan or Enter Withdrawer ID
                         </h3>
                         <div className="flex flex-col w-full h-full justify-center items-center">
-                            <div className="w-full mb-4">
+                            <div className="w-full">
                                 Releasing{" "}
                                 <span className="badge badge-primary badge-sm">
                                     {lotToBeReleased?.lot_id}
                                 </span>
                             </div>
+                            <div className="w-full mb-4">
+                                Leave the withdrawer id empty if you forgot it.
+                            </div>
                             <div className="flex gap-2 justify-between">
+                                <input
+                                    type="text"
+                                    ref={withdrawerIdInputRef}
+                                    autoFocus
+                                    placeholder="Employee ID"
+                                    className="input"
+                                    value={withdrawerId}
+                                    onChange={(e) =>
+                                        setWithdrawerId(
+                                            e.target.value.replace(/^0+/, ""),
+                                        )
+                                    }
+                                    data-no-scanner
+                                    onFocus={(e) => e.target.select()}
+                                />
+
                                 <CancellableActionButton
                                     abort={() =>
                                         mutateLotCancel(

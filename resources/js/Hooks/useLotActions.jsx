@@ -143,7 +143,8 @@ export function useLotActions() {
     const releaseLot = async (lot) => {
         const socketId = window.Echo?.socketId();
         const lotId = lot.lot_id;
-        const withdrawerId = String(useLotStore.getState().withdrawerId);
+        const raw = useLotStore.getState().withdrawerId;
+        const withdrawerId = raw != null && raw !== "" ? String(raw) : "";
 
         if (store.lotMutations[lotId]?.isLoading) {
             return;

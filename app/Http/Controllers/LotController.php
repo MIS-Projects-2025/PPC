@@ -143,10 +143,10 @@ class LotController extends Controller
 
         $data = request()->validate([
             'lot_id'    => 'required|string|max:50',
-            'withdrawer_id' => 'sometimes|string|max:50',
+            'withdrawer_id' => 'sometimes|nullable|string|max:50',
         ]);
 
-        $releasedLot = $this->lotService->release($data['lot_id'], $data['withdrawer_id'], $releasedBy);
+        $releasedLot = $this->lotService->release($data['lot_id'], $data['withdrawer_id'] ?? "", $releasedBy);
 
         return response()->json([
             'status'  => 'success',
