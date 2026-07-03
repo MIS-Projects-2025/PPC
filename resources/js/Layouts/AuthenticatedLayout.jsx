@@ -9,45 +9,35 @@ import { usePage } from "@inertiajs/react";
 import { useEffect, useState } from "react";
 
 export default function AuthenticatedLayout({ header, children }) {
-	const { fetchPackages } = useF1F2PackagesStore();
-	const { fetchWip } = useWipStore();
-	const { fetchWorkweek } = useWorkweekStore();
-	const { fetchAllImports } = useImportTraceStore();
+    const { fetchPackages } = useF1F2PackagesStore();
+    const { fetchWip } = useWipStore();
+    const { fetchWorkweek } = useWorkweekStore();
+    const { fetchAllImports } = useImportTraceStore();
 
-	const [hasUserFetched, setHasUserFetched] = useState(false);
-	const { emp_data } = usePage().props;
+    const [hasUserFetched, setHasUserFetched] = useState(false);
+    const { emp_data } = usePage().props;
 
-	useEffect(() => {
-		if (!emp_data || hasUserFetched) return;
+    useEffect(() => {
+        if (!emp_data || hasUserFetched) return;
 
-		fetchPackages();
-		fetchWip();
-		fetchWorkweek();
-		fetchAllImports();
+        fetchPackages();
+        fetchWip();
+        fetchWorkweek();
+        fetchAllImports();
 
-		setHasUserFetched(true);
-	}, [emp_data, hasUserFetched]);
+        setHasUserFetched(true);
+    }, [emp_data, hasUserFetched]);
 
-	return (
-		<div className="flex bg-base-200 h-screen text-sm">
-			<Sidebar />
-			<div className="h-full flex flex-col flex-1 overflow-y-hidden">
-				<NavBar />
-				<div className="px-4 flex-1 w-full relative overflow-y-auto">
-					<div className="w-full">{children}</div>
-				</div>
-				<Footer />
-			</div>
-		</div>
-		// <div className="flex bg-base-200 h-screen text-sm">
-		// 	<Sidebar />
-		// 	<div className="h-full flex flex-col flex-1 overflow-y-hidden">
-		// 		<NavBar />
-		// 		<div className="p-4 z-10 flex-1 relative w-full overflow-y-auto">
-		// 			<div className="w-full">{children}</div>
-		// 		</div>
-		// 		<Footer />
-		// 	</div>
-		// </div>
-	);
+    return (
+        <div className="flex bg-base-200 h-screen text-sm">
+            <Sidebar />
+            <div className="px-4 flex flex-col flex-1 min-w-0 h-full">
+                {" "}
+                {/* ← was: flex bg-base-200 h-screen */}
+                <NavBar />
+                <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
+                <Footer />
+            </div>
+        </div>
+    );
 }

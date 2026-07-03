@@ -1,181 +1,198 @@
 @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700&display=swap");
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap");
 
 @import "tailwindcss";
 @plugin "daisyui" {
-     themes: "lofi", "lofi-dark";
+    themes: "lofi", "lofi-dark";
 }
 
 @theme {
-  --animate-hehe: hehe .8s ease-in-out infinite;
-  --animate-new-item: slideInHighlight 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-  --animate-updated: highlight-glow 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    --animate-hehe: hehe 0.8s ease-in-out infinite;
+    --animate-new-item: slideInHighlight 0.8s cubic-bezier(0.4, 0, 0.2, 1)
+        forwards;
+    --animate-updated: highlight-glow 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    --animate-flash-grow: flash-grow 1s ease-in-out;
 
-  @keyframes hehe {
-    50% {
-      opacity: .1
+    @keyframes hehe {
+        50% {
+            opacity: 0.1;
+        }
     }
-  }
 
-  @keyframes highlight-glow {
-    0% { background-color: var(--color-accent); shadow: 0 0 15px var(--color-accent); }
-    100% { background-color: transparent; shadow: none; }
-  }
-
-  @keyframes slideInHighlight {
-    0% { 
-      opacity: 0; 
-      transform: translateY(-10px); 
-      background-color: var(--color-success);
+    @keyframes highlight-glow {
+        0% {
+            background-color: var(--color-accent);
+            shadow: 0 0 15px var(--color-accent);
+        }
+        100% {
+            background-color: transparent;
+            shadow: none;
+        }
     }
-    100% { 
-      opacity: 1; 
-      transform: translateY(0); 
-      background-color: transparent; 
+
+    @keyframes flash-grow {
+        0% {
+            font-size: 1.15em;
+        }
+        100% {
+            font-size: 1em;
+        }
     }
-  }
 
-  --font-jet-brains: "JetBrains Mono";
-  
-  --font-sans: "Inter", sans-serif;
-  
-  /* default custom values */
-  --color-base-100: #000000;
-  --color-base-200: #080808;
-  --color-base-300: #101010;
-  --color-base-content: #d6d6d6;
-  --color-base-content-dim: #d6d6d630;
+    @keyframes slideInHighlight {
+        0% {
+            opacity: 0;
+            transform: translateY(-10px);
+            background-color: var(--color-success);
+        }
+        100% {
+            opacity: 1;
+            transform: translateY(0);
+            background-color: transparent;
+        }
+    }
 
-  --color-f1color: #FF6A83;
-  --color-f1color-15: #ff766a;
-  --color-f1color-30: #ff9b6a;
-  --color-f1color-dim: #EE86B880;
-  --color-f1color-pl1: #FF6AB4;        /* shift hue → magenta */
-  --color-f1color-pl1-dim: #FF6AB480;
-  --color-f1color-pl6: #FF9B6A;        /* shift hue → orange */
-  --color-f1color-pl6-dim: #FF9B6A80;
+    --font-jet-brains: "JetBrains Mono";
 
-  --color-f2color: #B987F5;
-  --color-f2color-15: #d486f5;
-  --color-f2color-30: #f086f5;
-  --color-f2color-dim: #B987F580;
-  --color-f2color-pl1: #87B4F5;        /* shift hue → blue */
-  --color-f2color-pl1-dim: #87B4F580;
-  --color-f2color-pl6: #F587C8;        /* shift hue → pink */
-  --color-f2color-pl6-dim: #F587C880;
+    --font-sans: "Inter", sans-serif;
 
-  --color-f3color: #A6BFF7;
-  --color-f3color-15: #a5aaf7;
-  --color-f3color-30: #b5a5f7;
-  --color-f3color-dim: #A6BFF780;
-  --color-f3color-pl1: #A6EAF7;        /* shift hue → cyan */
-  --color-f3color-pl1-dim: #A6EAF780;
-  --color-f3color-pl6: #C4A6F7;        /* shift hue → violet */
-  --color-f3color-pl6-dim: #C4A6F780;
-  
-  --color-info: #5AA9FA;         
-  --color-info-content: #192532; 
-  --color-success: #4CCB83;      
-  --color-success-content: #101f0d;
-  --color-warning: #FACC57;       
-  --color-warning-content: #332710;
-  --color-error: #E4474B;         
-  --color-error-content: #fceae8;
+    /* default custom values */
+    --color-base-100: #000000;
+    --color-base-200: #080808;
+    --color-base-300: #101010;
+    --color-base-content: #d6d6d6;
+    --color-base-content-dim: #d6d6d630;
+
+    --color-f1color: #ff6a83;
+    --color-f1color-15: #ff766a;
+    --color-f1color-30: #ff9b6a;
+    --color-f1color-dim: #ee86b880;
+    --color-f1color-pl1: #ff6ab4; /* shift hue → magenta */
+    --color-f1color-pl1-dim: #ff6ab480;
+    --color-f1color-pl6: #ff9b6a; /* shift hue → orange */
+    --color-f1color-pl6-dim: #ff9b6a80;
+
+    --color-f2color: #b987f5;
+    --color-f2color-15: #d486f5;
+    --color-f2color-30: #f086f5;
+    --color-f2color-dim: #b987f580;
+    --color-f2color-pl1: #87b4f5; /* shift hue → blue */
+    --color-f2color-pl1-dim: #87b4f580;
+    --color-f2color-pl6: #f587c8; /* shift hue → pink */
+    --color-f2color-pl6-dim: #f587c880;
+
+    --color-f3color: #a6bff7;
+    --color-f3color-15: #a5aaf7;
+    --color-f3color-30: #b5a5f7;
+    --color-f3color-dim: #a6bff780;
+    --color-f3color-pl1: #a6eaf7; /* shift hue → cyan */
+    --color-f3color-pl1-dim: #a6eaf780;
+    --color-f3color-pl6: #c4a6f7; /* shift hue → violet */
+    --color-f3color-pl6-dim: #c4a6f780;
+
+    --color-info: #5aa9fa;
+    --color-info-content: #192532;
+    --color-success: #4ccb83;
+    --color-success-content: #101f0d;
+    --color-warning: #facc57;
+    --color-warning-content: #332710;
+    --color-error: #e4474b;
+    --color-error-content: #fceae8;
 }
 
 @plugin "daisyui/theme" {
-  name: "lofi";
-  color-scheme: "light";
-  --color-base-100: #ffffff; /* pure white */
-  --color-base-200: #f0f2f5; /* cool light gray */
-  --color-base-300: #e4e7eb; /* medium-light gray */
-  --color-base-content: #161616;
-  --color-base-content-dim: #16161630;
-  --color-primary: #FF6A83;
-  --color-primary-content: #3A000B;
-  --color-secondary: #6BD3FF;
-  --color-secondary-content: #002B38;
-  --color-accent: #FFB86B;
-  --color-accent-content: #2C2A00;
-  --color-neutral: #1C1B22;      
-  --color-neutral-content: #d9dfe5;
+    name: "lofi";
+    color-scheme: "light";
+    --color-base-100: #ffffff; /* pure white */
+    --color-base-200: #f0f2f5; /* cool light gray */
+    --color-base-300: #e4e7eb; /* medium-light gray */
+    --color-base-content: #161616;
+    --color-base-content-dim: #16161630;
+    --color-primary: #ff6a83;
+    --color-primary-content: #3a000b;
+    --color-secondary: #6bd3ff;
+    --color-secondary-content: #002b38;
+    --color-accent: #ffb86b;
+    --color-accent-content: #2c2a00;
+    --color-neutral: #1c1b22;
+    --color-neutral-content: #d9dfe5;
 
-  --color-utilization: #EEA1FF;
+    --color-utilization: #eea1ff;
 
-  --radius-selector: 0.5rem;
-  --radius-field: 0.5rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.2075rem;
-  --size-field: 0.2075rem;
-  --border: 0.1px;
-  --noise: 1;
+    --radius-selector: 0.5rem;
+    --radius-field: 0.5rem;
+    --radius-box: 0.5rem;
+    --size-selector: 0.2075rem;
+    --size-field: 0.2075rem;
+    --border: 0.1px;
+    --noise: 1;
 }
 
 @plugin "daisyui/theme" {
-  name: "lofi-dark";
-  default: true;
-  color-scheme: "dark";
-  --color-base-100: #000000;
-  --color-base-200: #080808;
-  --color-base-300: #101010;
-  --color-base-content: #d6d6d6;
-  --color-base-content-dim: #d6d6d630;
-  --color-primary: #FF6A83;
-  --color-primary-content: #3A000B;
-  --color-secondary: #6BD3FF;
-  --color-secondary-content: #002B38;
-  --color-accent: #FFB86B;
-  --color-accent-content: #2C2A00;
-  --color-neutral: #1C1B22;      
-  --color-neutral-content: #d9dfe5;
+    name: "lofi-dark";
+    default: true;
+    color-scheme: "dark";
+    --color-base-100: #000000;
+    --color-base-200: #080808;
+    --color-base-300: #101010;
+    --color-base-content: #d6d6d6;
+    --color-base-content-dim: #d6d6d630;
+    --color-primary: #ff6a83;
+    --color-primary-content: #3a000b;
+    --color-secondary: #6bd3ff;
+    --color-secondary-content: #002b38;
+    --color-accent: #ffb86b;
+    --color-accent-content: #2c2a00;
+    --color-neutral: #1c1b22;
+    --color-neutral-content: #d9dfe5;
 
-  --color-utilization: #EEA1FF;
+    --color-utilization: #eea1ff;
 
-  --radius-selector: 0.5rem;
-  --radius-field: 0.5rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.2075rem;
-  --size-field: 0.2075rem;
-  --border: 0.1px;
-  --noise: 1;
+    --radius-selector: 0.5rem;
+    --radius-field: 0.5rem;
+    --radius-box: 0.5rem;
+    --size-selector: 0.2075rem;
+    --size-field: 0.2075rem;
+    --border: 0.1px;
+    --noise: 1;
 }
 
 .custom-tooltip {
-  border-radius: 0.4rem !important; /* Adjust as needed */
-  z-index: 50 !important;
-  max-width: 200px !important;
-  padding: 4px 4px !important;
+    border-radius: 0.4rem !important; /* Adjust as needed */
+    z-index: 50 !important;
+    max-width: 200px !important;
+    padding: 4px 4px !important;
 }
 
 .opacity {
-  opacity: 50%;
+    opacity: 50%;
 }
 
 html {
-  font-family: var(--font-sans);
+    font-family: var(--font-sans);
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator {
-  opacity: 0;
-  position: absolute;
-  right: 0;
-  width: 100%;
-  height: 100%;
-  cursor: pointer;
+    opacity: 0;
+    position: absolute;
+    right: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
 }
 
 /* Chrome, Safari, Edge */
 .no-spinner::-webkit-outer-spin-button,
 .no-spinner::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+    -webkit-appearance: none;
+    margin: 0;
 }
 
 /* Firefox */
 .no-spinner {
-  -moz-appearance: textfield;
-  appearance: textfield;
+    -moz-appearance: textfield;
+    appearance: textfield;
 }
 
 /* @media print {
@@ -189,29 +206,41 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
 } */
 
 body.print-mode-active > :not(#print-sheet-wrapper) {
-  display: none !important;
+    display: none !important;
 }
 
 @media print {
-  /* 1. Hide UI noise */
-  nav, footer, aside, .navbar, button {
-    display: none !important;
-  }
+    /* 1. Hide UI noise */
+    nav,
+    footer,
+    aside,
+    .navbar,
+    button {
+        display: none !important;
+    }
 
-  /* 2. CRITICAL: Neutralize the Fixed Portal */
-  #print-sheet, 
-  #print-sheet > div {
-    position: static !important; /* Removes 'fixed' */
-    overflow: visible !important; /* Removes 'scrollbar' behavior */
-    height: auto !important;
-    width: auto !important;
-    padding: 0 !important;
-    margin: 0 !important;
-  }
+    /* 2. CRITICAL: Neutralize the Fixed Portal */
+    #print-sheet,
+    #print-sheet > div {
+        position: static !important; /* Removes 'fixed' */
+        overflow: visible !important; /* Removes 'scrollbar' behavior */
+        height: auto !important;
+        width: auto !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
 
-  /* 3. Ensure the body allows long content */
-  html, body {
-    height: auto !important;
-    overflow: visible !important;
-  }
+    /* 3. Ensure the body allows long content */
+    html,
+    body {
+        height: auto !important;
+        overflow: visible !important;
+    }
+}
+
+.scrollbar-none::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-none {
+    scrollbar-width: none;
 }

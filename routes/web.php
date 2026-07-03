@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware};
 use App\Http\Controllers\{
+    LoadingPlanController,
     AutoImportController,
     BodySizeController,
     DashboardController,
@@ -34,6 +35,9 @@ $app_name = env('APP_NAME', '');
 Route::redirect('/', "/$app_name");
 
 require __DIR__ . '/auth.php';
+
+Route::get('/loading-plan', [LoadingPlanController::class, 'index'])
+    ->name('index');
 
 Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::get('/{productionLine}', [LotController::class, 'index'])
