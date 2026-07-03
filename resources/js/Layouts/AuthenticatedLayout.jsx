@@ -1,6 +1,6 @@
 import Footer from "@/Components/Footer";
 import NavBar from "@/Components/NavBar";
-import Sidebar from "@/Components/Sidebar/SideBar";
+import Sidebar from "@/Components/sidebar/SideBar";
 import { useF1F2PackagesStore } from "@/Store/f1f2PackageListStore";
 import { useImportTraceStore } from "@/Store/importTraceStore";
 import { useWipStore } from "@/Store/overallDailyWipTrendStore";
