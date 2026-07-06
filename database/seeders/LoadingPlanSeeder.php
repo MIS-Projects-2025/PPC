@@ -239,7 +239,7 @@ class LoadingPlanSeeder extends Seeder
     // ------------------------------------------------------------------
     // customer_data_wip
     // ------------------------------------------------------------------
-    private function seedCustomerDataWip(int $count = 100): array
+    private function seedCustomerDataWip(int $count = 20): array
     {
         $today = Carbon::today();
         $rows = [];

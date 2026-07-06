@@ -35,55 +35,39 @@ class LoadingPlanEntryService
     // Sequence-touching operations
     // ------------------------------------------------------------------
 
-    /** Reorder a lot within its current machine, placing it between
-     *  $beforeLotId and $afterLotId (either may be null for start/end). */
-    public function moveLot(string $lotId, ?string $beforeLotId, ?string $afterLotId, string $machine, string $date): LoadingPlanEntry
+    /** Resolve the entry being moved/transferred, given the same discriminated
+     *  identifier the controller validates: lot_id for lots, entry id for blocks. */
+    private function resolveEntry(string $entryType, string|int|null $lotId, ?int $entryId, string $date): LoadingPlanEntry
     {
-        return DB::transaction(function () use ($lotId, $beforeLotId, $afterLotId, $machine, $date) {
+        return $entryType === 'block'
+            ? LoadingPlanEntry::where('id', $entryId)
+            ->where('entry_type', 'block')
+            ->where('scheduled_date', $date)
+            ->firstOrFail()
+            : LoadingPlanEntry::where('lot_id', $lotId)
+            ->where('scheduled_date', $date)
+            ->firstOrFail();
+    }
+
+    public function moveEntry(string $entryType, ?string $lotId, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine, string $date): LoadingPlanEntry
+    {
+        return DB::transaction(function () use ($entryType, $lotId, $entryId, $beforeEntryId, $afterEntryId, $machine, $date) {
+            Log::info("entry_type: $entryType, lot_id: $lotId, entry_id: $entryId, before_entry_id: $beforeEntryId, after_entry_id: $afterEntryId, machine: $machine, date: $date");
+
             $rows = $this->lockMachineRows([$machine], $date);
+            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
 
-            $newOrder = $this->resolveSequenceOrder($rows, $beforeLotId, $afterLotId, $machine, $date);
-
-            $entry = LoadingPlanEntry::where('lot_id', $lotId)
-                ->where('scheduled_date', $date)
-                ->firstOrFail();
-
+            $entry = $this->resolveEntry($entryType, $lotId, $entryId, $date);
             $entry->update(['sequence_order' => $newOrder, 'lock_version' => DB::raw('lock_version + 1')]);
 
             return $entry->fresh();
         });
     }
 
-    /** Same as moveLot, but for a block — blocks have no lot_id, only their
-     *  own entry id, so this is keyed by id instead. */
-    public function moveBlock(int $entryId, ?string $beforeLotId, ?string $afterLotId, string $machine, string $date): LoadingPlanEntry
+    public function transferEntry(string $entryType, ?string $lotId, ?int $entryId, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId, string $date): LoadingPlanEntry
     {
-        return DB::transaction(function () use ($entryId, $beforeLotId, $afterLotId, $machine, $date) {
-            $rows = $this->lockMachineRows([$machine], $date);
-
-            $newOrder = $this->resolveSequenceOrder($rows, $beforeLotId, $afterLotId, $machine, $date);
-
-            $entry = LoadingPlanEntry::where('id', $entryId)
-                ->where('entry_type', 'block')
-                ->where('scheduled_date', $date)
-                ->firstOrFail();
-
-            $entry->update(['sequence_order' => $newOrder, 'lock_version' => DB::raw('lock_version + 1')]);
-
-            return $entry->fresh();
-        });
-    }
-
-    /** Move a single lot to a different machine, placing it between the
-     *  given neighbors on the target. Locks both source and target
-     *  machines (sorted) so a concurrent read on the source can't compute
-     *  a midpoint against a row that's mid-transfer. */
-    public function transferLot(string $lotId, string $targetMachine, ?string $beforeLotId, ?string $afterLotId, string $date): LoadingPlanEntry
-    {
-        return DB::transaction(function () use ($lotId, $targetMachine, $beforeLotId, $afterLotId, $date) {
-            $entry = LoadingPlanEntry::where('lot_id', $lotId)
-                ->where('scheduled_date', $date)
-                ->firstOrFail();
+        return DB::transaction(function () use ($entryType, $lotId, $entryId, $targetMachine, $beforeEntryId, $afterEntryId, $date) {
+            $entry = $this->resolveEntry($entryType, $lotId, $entryId, $date);
 
             $machinesToLock = collect([$entry->machine, $targetMachine])
                 ->filter()
@@ -96,45 +80,8 @@ class LoadingPlanEntryService
 
             $newOrder = $this->resolveSequenceOrder(
                 $rows->where('machine', $targetMachine),
-                $beforeLotId,
-                $afterLotId,
-                $targetMachine,
-                $date,
-            );
-
-            $entry->update([
-                'machine'        => $targetMachine,
-                'sequence_order' => $newOrder,
-                'lock_version'   => DB::raw('lock_version + 1'),
-            ]);
-
-            return $entry->fresh();
-        });
-    }
-
-    /** Same as transferLot, but for a block — keyed by entry id instead of
-     *  lot_id, since blocks have no lot_id. */
-    public function transferBlock(int $entryId, string $targetMachine, ?string $beforeLotId, ?string $afterLotId, string $date): LoadingPlanEntry
-    {
-        return DB::transaction(function () use ($entryId, $targetMachine, $beforeLotId, $afterLotId, $date) {
-            $entry = LoadingPlanEntry::where('id', $entryId)
-                ->where('entry_type', 'block')
-                ->where('scheduled_date', $date)
-                ->firstOrFail();
-
-            $machinesToLock = collect([$entry->machine, $targetMachine])
-                ->filter()
-                ->unique()
-                ->sort()
-                ->values()
-                ->all();
-
-            $rows = $this->lockMachineRows($machinesToLock, $date);
-
-            $newOrder = $this->resolveSequenceOrder(
-                $rows->where('machine', $targetMachine),
-                $beforeLotId,
-                $afterLotId,
+                $beforeEntryId,
+                $afterEntryId,
                 $targetMachine,
                 $date,
             );
@@ -152,12 +99,12 @@ class LoadingPlanEntryService
     /** Insert a non-lot block (Preventative Maintenance, Changeover, etc.)
      *  onto a machine, between the given neighbors (or appended if both
      *  are null). */
-    public function addBlock(string $machine, string $date, string $label, int $durationMinutes, ?string $beforeLotId, ?string $afterLotId): LoadingPlanEntry
+    public function addBlock(string $machine, string $date, string $label, int $durationMinutes, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
     {
-        return DB::transaction(function () use ($machine, $date, $label, $durationMinutes, $beforeLotId, $afterLotId) {
+        return DB::transaction(function () use ($machine, $date, $label, $durationMinutes, $beforeEntryId, $afterEntryId) {
             $rows = $this->lockMachineRows([$machine], $date);
             Log::info("rows", $rows->toArray());
-            $newOrder = $this->resolveSequenceOrder($rows, $beforeLotId, $afterLotId, $machine, $date);
+            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
 
             return LoadingPlanEntry::create([
                 'entry_type'      => 'block',
@@ -429,12 +376,12 @@ class LoadingPlanEntryService
     }
 
     /** Given the already-locked rows for a machine, compute the
-     *  sequence_order to place a new/moved row between $beforeLotId and
-     *  $afterLotId. Rebalances and retries once if the gap is exhausted. */
-    private function resolveSequenceOrder(Collection $machineRows, ?string $beforeLotId, ?string $afterLotId, string $machine, string $date): float
+     *  sequence_order to place a new/moved row between $beforeEntryId and
+     *  $afterEntryId. Rebalances and retries once if the gap is exhausted. */
+    private function resolveSequenceOrder(Collection $machineRows, ?int $beforeEntryId, ?int $afterEntryId, string $machine, string $date): float
     {
-        $before = $beforeLotId ? $machineRows->firstWhere('lot_id', $beforeLotId)?->sequence_order : null;
-        $after = $afterLotId ? $machineRows->firstWhere('lot_id', $afterLotId)?->sequence_order : null;
+        $before = $beforeEntryId ? $machineRows->firstWhere('id', $beforeEntryId)?->sequence_order : null;
+        $after  = $afterEntryId ? $machineRows->firstWhere('id', $afterEntryId)?->sequence_order : null;
 
         // Both null means "no specific position requested" — that should
         // mean "append to the end of whatever's already there," not "use
@@ -459,8 +406,8 @@ class LoadingPlanEntryService
         } catch (SequenceExhaustedException) {
             $rebalanced = $this->rebalance($machine, $date);
 
-            $before = $beforeLotId ? $rebalanced->firstWhere('lot_id', $beforeLotId)?->sequence_order : null;
-            $after = $afterLotId ? $rebalanced->firstWhere('lot_id', $afterLotId)?->sequence_order : null;
+            $before = $beforeEntryId ? $rebalanced->firstWhere('id', $beforeEntryId)?->sequence_order : null;
+            $after = $afterEntryId ? $rebalanced->firstWhere('id', $afterEntryId)?->sequence_order : null;
 
             if ($before === null && $after === null) {
                 $currentMax = $rebalanced->max('sequence_order');
@@ -517,5 +464,129 @@ class LoadingPlanEntryService
         }
 
         return $rows->fresh();
+    }
+
+    /** Applies a heterogeneous batch of operations as one atomic unit — all
+     *  succeed or none do. Used for undo/redo sync, where several rows'
+     *  changes belong to a single logical user action and must not
+     *  partially apply if one operation in the batch fails.
+     *
+     *  Each operation is one of:
+     *    ['type' => 'move', 'entry_type' => 'lot'|'block', 'lot_id'?, 'entry_id'?,
+     *     'before_entry_id'?, 'after_entry_id'?, 'machine']
+     *    ['type' => 'transfer', ...same as move plus 'target_machine']
+     *    ['type' => 'create_lot', 'lot_id', 'fields', 'machine'?, 'before_entry_id'?, 'after_entry_id'?]
+     *    ['type' => 'create_block', 'machine', 'label', 'duration', 'before_entry_id'?, 'after_entry_id'?]
+     *    ['type' => 'delete', 'entry_id', 'machine'?]
+     *    ['type' => 'update_field', 'entry_type' => 'lot'|'block', 'lot_id'?, 'entry_id'?,
+     *     'fields', 'lock_version'?]
+     *
+     *  Returns one result per operation, in the same order, as plain arrays
+     *  (id, entry data, etc.) for the caller to sync back into local state. */
+    public function batchApply(array $operations, string $date): array
+    {
+        return DB::transaction(function () use ($operations, $date) {
+            // Lock every machine any operation in this batch touches, up
+            // front, sorted — one lock acquisition per machine for the whole
+            // batch, rather than each nested method re-locking independently
+            // in an uncoordinated order.
+            $machines = collect($operations)
+                ->flatMap(fn($op) => [$op['machine'] ?? null, $op['target_machine'] ?? null])
+                ->filter()
+                ->unique()
+                ->sort()
+                ->values()
+                ->all();
+
+            if (!empty($machines)) {
+                $this->lockMachineRows($machines, $date);
+            }
+
+            $results = [];
+
+            foreach ($operations as $op) {
+                Log::info("op op op op: move, entry_type: {$op['entry_type']}, lot_id: {$op['lot_id']}, entry_id: {$op['entry_id']}, before_entry_id: {$op['before_entry_id']}, after_entry_id: {$op['after_entry_id']}, machine: {$op['machine']}, date: $date");
+
+                $results[] = match ($op['type']) {
+                    'move' => $this->applyMove($op, $date),
+                    'transfer' => $this->applyTransfer($op, $date),
+                    'create_lot' => $this->applyCreateLot($op, $date),
+                    'create_block' => $this->addBlock(
+                        $op['machine'],
+                        $date,
+                        $op['label'],
+                        $op['duration'],
+                        $op['before_entry_id'] ?? null,
+                        $op['after_entry_id'] ?? null,
+                    ),
+                    'delete' => $this->applyDelete($op, $date),
+                    'update_field' => $this->applyUpdateField($op, $date),
+                    default => throw new \InvalidArgumentException("Unknown batch operation type: {$op['type']}"),
+                };
+            }
+
+            return $results;
+        });
+    }
+
+    private function applyMove(array $op, string $date)
+    {
+        Log::info("operation: move, entry_type: {$op['entry_type']}, lot_id: {$op['lot_id']}, entry_id: {$op['entry_id']}, before_entry_id: {$op['before_entry_id']}, after_entry_id: {$op['after_entry_id']}, machine: {$op['machine']}, date: $date");
+
+        $this->moveEntry(
+            $op['entry_type'],
+            $op['lot_id'] ?? null,
+            $op['entry_id'] ?? null,
+            $op['before_entry_id'] ?? null,
+            $op['after_entry_id'] ?? null,
+            $op['machine'],
+            $date,
+        );
+    }
+
+    private function applyTransfer(array $op, string $date)
+    {
+        $this->transferEntry(
+            $op['entry_type'],
+            $op['lot_id'] ?? null,
+            $op['entry_id'] ?? null,
+            $op['target_machine'],
+            $op['before_entry_id'] ?? null,
+            $op['after_entry_id'] ?? null,
+            $date,
+        );
+    }
+
+    private function applyCreateLot(array $op, string $date)
+    {
+        $entry = $this->editLotField($op['lot_id'], $date, $op['fields'], null);
+
+        if (!empty($op['machine'])) {
+            $entry = $this->moveEntry(
+                'lot',
+                $op['lot_id'],
+                null,
+                $op['before_entry_id'] ?? null,
+                $op['after_entry_id'] ?? null,
+                $op['machine'],
+                $date,
+            );
+        }
+
+        return $entry;
+    }
+
+    private function applyDelete(array $op, string $date)
+    {
+        $entry = LoadingPlanEntry::findOrFail($op['entry_id']);
+        $this->deleteEntry($op['entry_id'], $entry->machine, $date);
+        return ['deleted' => $op['entry_id']];
+    }
+
+    private function applyUpdateField(array $op, string $date)
+    {
+        return $op['entry_type'] === 'block'
+            ? $this->editField($op['entry_id'], $op['fields'], $op['lock_version'] ?? null)
+            : $this->editLotField($op['lot_id'], $date, $op['fields'], $op['lock_version'] ?? null);
     }
 }

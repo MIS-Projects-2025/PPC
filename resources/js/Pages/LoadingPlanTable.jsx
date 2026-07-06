@@ -312,23 +312,28 @@ function droppableTokenToMachine(token) {
 }
 
 /** Given the full data array (post-move) and a row's _dndId, find the
- *  Lot_Id of its immediate same-machine neighbors — what moveLot/transferLot
- *  need to compute the new sequence_order server-side. */
+ *  entryId of its immediate same-machine neighbors — what moveLot/moveBlock
+ *  need to compute the new sequence_order server-side. Works for both lot
+ *  and block rows, since sequence_order is a property of the row's
+ *  position, not its type. */
 function findMachineNeighbors(rows, dndId, machine) {
-    const machineRows = rows.filter(
-        (r) =>
-            (r.machine === machine && !isBlockRow(r)) ||
-            (isBlockRow(r) && r.machine === machine),
-    );
-    console.log("🚀 ~ findMachineNeighbors ~ machineRows:", machineRows);
+    const machineRows = rows.filter((r) => r.machine === machine);
+
     const idx = machineRows.findIndex((r) => r._dndId === dndId);
-    console.log("🚀 ~ findMachineNeighbors ~ idx:", idx);
-    if (idx === -1) return { beforeLotId: null, afterLotId: null };
-    const before = machineRows[idx - 1];
-    const after = machineRows[idx + 1];
+    if (idx === -1) return { beforeEntryId: null, afterEntryId: null };
+
+    // Skip neighbors that don't have a server-side id yet (a row just
+    // added locally via handleAddRow/handleAddBlock and not yet
+    // persisted) — walk outward to the nearest neighbor that does.
+    let beforeIdx = idx - 1;
+    while (beforeIdx >= 0 && !machineRows[beforeIdx].entryId) beforeIdx--;
+    let afterIdx = idx + 1;
+    while (afterIdx < machineRows.length && !machineRows[afterIdx].entryId)
+        afterIdx++;
+
     return {
-        beforeLotId: before && !isBlockRow(before) ? before.Lot_Id : null,
-        afterLotId: after && !isBlockRow(after) ? after.Lot_Id : null,
+        beforeEntryId: machineRows[beforeIdx]?.entryId ?? null,
+        afterEntryId: machineRows[afterIdx]?.entryId ?? null,
     };
 }
 
@@ -2157,6 +2162,193 @@ function GlobalTableHeader({ sorting, onSortingChange }) {
     );
 }
 
+/** After undo/redo swaps local state, diff the before/after snapshots
+ *  into a list of backend operations and apply them as ONE atomic batch
+ *  — either the whole undo persists, or none of it does. This replaces
+ *  firing N independent calls per changed row, which could partially
+ *  succeed/fail and leave local state and the DB disagreeing about which
+ *  of the undo's changes actually landed. */
+function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update) {
+    const prevById = new Map(prevRows.map((r) => [r._dndId, r]));
+    const nextById = new Map(nextRows.map((r) => [r._dndId, r]));
+
+    const removed = prevRows.filter((r) => !nextById.has(r._dndId));
+    const added = nextRows.filter((r) => !prevById.has(r._dndId));
+
+    // Per-machine position maps, keyed by _dndId — needed because a pure
+    // in-machine reorder (drag within the same machine, no field or
+    // machine change) wouldn't otherwise be detected as a "change" at all.
+    const buildPositions = (rows) => {
+        const byMachine = new Map();
+        rows.forEach((r) => {
+            if (r.machine === null) return; // Unassigned has no persisted order
+            if (!byMachine.has(r.machine)) byMachine.set(r.machine, []);
+            byMachine.get(r.machine).push(r._dndId);
+        });
+        const positions = new Map();
+        byMachine.forEach((ids) => {
+            ids.forEach((id, idx) => positions.set(id, idx));
+        });
+        return positions;
+    };
+
+    const prevPositions = buildPositions(prevRows);
+    const nextPositions = buildPositions(nextRows);
+
+    const changed = nextRows.filter((r) => {
+        const p = prevById.get(r._dndId);
+        if (!p) return false;
+        const positionChanged =
+            prevPositions.get(r._dndId) !== nextPositions.get(r._dndId);
+        return (
+            p.machine !== r.machine ||
+            p.status !== r.status ||
+            p.Remarks !== r.Remarks ||
+            p.tag !== r.tag ||
+            p.accuTime !== r.accuTime ||
+            p.Doable !== r.Doable ||
+            positionChanged
+        );
+    });
+
+    const operations = [];
+    // Track which _dndId each pushed operation corresponds to, so the
+    // single response array (same order as operations) can be mapped
+    // back onto local rows after the batch succeeds.
+    const opOwners = [];
+
+    // --- Undo of an add → delete it again ---
+    removed.forEach((r) => {
+        if (!r.entryId) return;
+        operations.push({
+            type: "delete",
+            entry_id: r.entryId,
+            machine: r.machine,
+        });
+        opOwners.push({ dndId: r._dndId, kind: "delete", snapshot: r });
+    });
+
+    // --- Undo of a delete → recreate it ---
+    added.forEach((r) => {
+        const isBlock = isBlockRow(r);
+        const { beforeEntryId, afterEntryId } = findMachineNeighbors(
+            nextRows,
+            r._dndId,
+            r.machine,
+        );
+
+        if (isBlock) {
+            operations.push({
+                type: "create_block",
+                machine: r.machine,
+                label: r.blockLabel,
+                duration: r.accuTime,
+                before_entry_id: beforeEntryId,
+                after_entry_id: afterEntryId,
+            });
+        } else {
+            operations.push({
+                type: "create_lot",
+                lot_id: r.Lot_Id,
+                fields: {
+                    status: r.status,
+                    remarks: r.Remarks,
+                    tag: r.tag,
+                    accu_time: r.accuTime,
+                    doable: r.Doable,
+                },
+                machine: r.machine,
+                before_entry_id: beforeEntryId,
+                after_entry_id: afterEntryId,
+            });
+        }
+        opOwners.push({ dndId: r._dndId, kind: "create" });
+    });
+
+    // --- Machine and/or position changed, and/or fields changed ---
+    changed.forEach((r) => {
+        const p = prevById.get(r._dndId);
+        const isBlock = isBlockRow(r);
+        const machineChanged = p.machine !== r.machine;
+        const positionChanged =
+            prevPositions.get(r._dndId) !== nextPositions.get(r._dndId);
+
+        if (machineChanged || positionChanged) {
+            const { beforeEntryId, afterEntryId } = findMachineNeighbors(
+                nextRows,
+                r._dndId,
+                r.machine,
+            );
+
+            operations.push({
+                type: machineChanged ? "transfer" : "move",
+                entry_type: isBlock ? "block" : "lot",
+                lot_id: isBlock ? null : r.Lot_Id,
+                entry_id: isBlock ? r.entryId : null,
+                target_machine: machineChanged ? r.machine : undefined,
+                machine: r.machine,
+                before_entry_id: beforeEntryId,
+                after_entry_id: afterEntryId,
+            });
+            opOwners.push({ dndId: r._dndId, kind: "reposition", snapshot: p });
+        }
+
+        const fields = {};
+        if (p.status !== r.status) fields.status = r.status;
+        if (p.Remarks !== r.Remarks) fields.remarks = r.Remarks;
+        if (p.tag !== r.tag) fields.tag = r.tag;
+        if (p.accuTime !== r.accuTime) fields.accu_time = r.accuTime;
+        if (p.Doable !== r.Doable) fields.doable = r.Doable;
+
+        if (Object.keys(fields).length > 0) {
+            operations.push({
+                type: "update_field",
+                entry_type: isBlock ? "block" : "lot",
+                lot_id: isBlock ? null : r.Lot_Id,
+                entry_id: isBlock ? r.entryId : null,
+                fields,
+                lock_version: r.lockVersion ?? null,
+            });
+            opOwners.push({ dndId: r._dndId, kind: "field", snapshot: p });
+        }
+    });
+
+    if (operations.length === 0) return;
+
+    mutate(route("loading-plan.batch-apply"), {
+        body: { operations, scheduled_date: date },
+    })
+        .then(({ results }) => {
+            // Sync every returned entry back into local state, matched by
+            // position in the array (same order operations were sent).
+            update((prev) =>
+                prev.map((row) => {
+                    const ownerIdx = opOwners.findIndex(
+                        (o) => o.dndId === row._dndId,
+                    );
+                    if (ownerIdx === -1) return row;
+                    const result = results[ownerIdx];
+                    if (!result || result.deleted) return row;
+                    return {
+                        ...row,
+                        entryId: result.id,
+                        lockVersion: result.lock_version,
+                        sequenceOrder:
+                            result.sequence_order ?? row.sequenceOrder,
+                    };
+                }),
+            );
+        })
+        .catch((err) => {
+            console.error("Undo/redo batch failed to persist:", err);
+            // Atomic on the backend means NOTHING in this batch applied —
+            // safe to revert the entire local diff back to prevRows in
+            // one shot, rather than reverting row-by-row.
+            update(() => prevRows);
+            toast?.error?.("That undo couldn't be saved and was reverted.");
+        });
+}
+
 // ---------------------------------------------------------------------------
 // LoadingPlanTable — root component
 // ---------------------------------------------------------------------------
@@ -2177,7 +2369,6 @@ export default function LoadingPlanTable({
         canUndo,
         canRedo,
     } = useLoadingPlanStore();
-    console.log("🚀 ~ LoadingPlanTable ~ data:", data);
 
     const toast = useToast();
     const { mutate } = useMutation();
@@ -2185,6 +2376,11 @@ export default function LoadingPlanTable({
     const resolvedData = initialData ?? _initialData;
     const [isDirty, setIsDirty] = useState(false);
     const [lastSaved, setLastSaved] = useState(null);
+
+    const isDirtyRef = useRef(isDirty);
+    useEffect(() => {
+        isDirtyRef.current = isDirty;
+    }, [isDirty]);
 
     // Package_Name (via groupOf) drives tabs — a tab represents a GROUP of
     // related packages, not a single Package_Name. See PACKAGE_GROUPS.
@@ -2201,12 +2397,13 @@ export default function LoadingPlanTable({
         [data],
     );
 
-    const [activePackage, setActivePackage] = useState(() => packages[0] ?? "");
+    // const [activePackage, setActivePackage] = useState(() => packages[0] ?? "");
+    const [activePackage, setActivePackage] = useState("LGA");
 
     const handleSave = useCallback(async () => {
         setIsDirty(false);
         setLastSaved(new Date());
-    }, [data]);
+    }, []); // was [data] — never used in the body
 
     // ── Selection state ──────────────────────────────────────────────────────
     const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -2286,20 +2483,23 @@ export default function LoadingPlanTable({
                 },
             })
                 .then(({ entries }) => {
-                    update((prev) =>
-                        prev.map((r) => {
-                            const match = entries?.find(
-                                (e) =>
-                                    e.id === r.entryId || e.lot_id === r.Lot_Id,
-                            );
-                            return match
-                                ? {
-                                      ...r,
-                                      entryId: match.id,
-                                      lockVersion: match.lock_version,
-                                  }
-                                : r;
-                        }),
+                    update(
+                        (prev) =>
+                            prev.map((r) => {
+                                const match = entries?.find(
+                                    (e) =>
+                                        e.id === r.entryId ||
+                                        e.lot_id === r.Lot_Id,
+                                );
+                                return match
+                                    ? {
+                                          ...r,
+                                          entryId: match.id,
+                                          lockVersion: match.lock_version,
+                                      }
+                                    : r;
+                            }),
+                        true,
                     );
                 })
                 .catch((err) => {
@@ -2333,19 +2533,22 @@ export default function LoadingPlanTable({
             },
         })
             .then(({ entries }) => {
-                update((prev) =>
-                    prev.map((r) => {
-                        const match = entries?.find(
-                            (e) => e.id === r.entryId || e.lot_id === r.Lot_Id,
-                        );
-                        return match
-                            ? {
-                                  ...r,
-                                  entryId: match.id,
-                                  lockVersion: match.lock_version,
-                              }
-                            : r;
-                    }),
+                update(
+                    (prev) =>
+                        prev.map((r) => {
+                            const match = entries?.find(
+                                (e) =>
+                                    e.id === r.entryId || e.lot_id === r.Lot_Id,
+                            );
+                            return match
+                                ? {
+                                      ...r,
+                                      entryId: match.id,
+                                      lockVersion: match.lock_version,
+                                  }
+                                : r;
+                        }),
+                    true,
                 );
             })
             .catch((err) => {
@@ -2383,19 +2586,21 @@ export default function LoadingPlanTable({
                 },
             })
                 .then(({ entries }) => {
-                    update((prev) =>
-                        prev.map((r) => {
-                            const match = entries?.find(
-                                (e) => e.lot_id === r.Lot_Id,
-                            );
-                            return match
-                                ? {
-                                      ...r,
-                                      entryId: match.id,
-                                      lockVersion: match.lock_version,
-                                  }
-                                : r;
-                        }),
+                    update(
+                        (prev) =>
+                            prev.map((r) => {
+                                const match = entries?.find(
+                                    (e) => e.lot_id === r.Lot_Id,
+                                );
+                                return match
+                                    ? {
+                                          ...r,
+                                          entryId: match.id,
+                                          lockVersion: match.lock_version,
+                                      }
+                                    : r;
+                            }),
+                        true,
                     );
                 })
                 .catch((err) => {
@@ -2441,7 +2646,32 @@ export default function LoadingPlanTable({
                         target_machine: targetMachine,
                         scheduled_date: date,
                     },
-                }).catch((err) => console.error("Bulk transfer failed:", err));
+                })
+                    .then((updatedEntries) => {
+                        update(
+                            (prev) =>
+                                prev.map((r) => {
+                                    const match = updatedEntries?.find((e) =>
+                                        isBlockRow(r)
+                                            ? e.id === r.entryId
+                                            : e.lot_id === r.Lot_Id,
+                                    );
+                                    return match
+                                        ? {
+                                              ...r,
+                                              entryId: match.id,
+                                              sequenceOrder:
+                                                  match.sequence_order,
+                                              lockVersion: match.lock_version,
+                                          }
+                                        : r;
+                                }),
+                            true, // skipHistory — server-sync bookkeeping, not a new user action
+                        );
+                    })
+                    .catch((err) =>
+                        console.error("Bulk transfer failed:", err),
+                    );
             }
         },
         [selectedIds, update, baseTimes, clearSelection, data, date],
@@ -2476,7 +2706,11 @@ export default function LoadingPlanTable({
         }
     }, [selectedIds, update, baseTimes, clearSelection, data, date, undo]);
 
-    // ── Keyboard shortcuts ───────────────────────────────────────────────────
+    const dataRef = useRef(data);
+    useEffect(() => {
+        dataRef.current = data;
+    }, [data]);
+
     useEffect(() => {
         const onKey = (e) => {
             if (e.key === "Escape") {
@@ -2485,25 +2719,45 @@ export default function LoadingPlanTable({
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === "z" && !e.shiftKey) {
                     e.preventDefault();
+                    const prevSnapshot = dataRef.current;
                     undo();
+                    const nextSnapshot = useLoadingPlanStore.getState().present;
+                    syncUndoRedoToServer(
+                        prevSnapshot,
+                        nextSnapshot,
+                        date,
+                        mutate,
+                        update,
+                    );
                 }
                 if (e.key === "y" || (e.key === "z" && e.shiftKey)) {
                     e.preventDefault();
+                    const prevSnapshot = dataRef.current;
                     redo();
+                    const nextSnapshot = useLoadingPlanStore.getState().present;
+                    syncUndoRedoToServer(
+                        prevSnapshot,
+                        nextSnapshot,
+                        date,
+                        mutate,
+                        update,
+                    );
                 }
                 if (e.key === "s") {
                     e.preventDefault();
-                    if (isDirty) handleSave();
+                    if (isDirtyRef.current) handleSave();
                 }
                 if (e.key === "a") {
                     e.preventDefault();
-                    setSelectedIds(new Set(data.map((r) => r._dndId)));
+                    setSelectedIds(
+                        new Set(dataRef.current.map((r) => r._dndId)),
+                    );
                 }
             }
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [undo, redo, isDirty, handleSave, clearSelection, data]);
+    }, [undo, redo, clearSelection, handleSave]); // handleSave now stable ([] deps), so this only re-subscribes if undo/redo/clearSelection identity changes
 
     // NOTE: now that `machines` (below) is driven entirely by the MACHINES
     // config rather than by scanning data, this ref is write-only — nothing
@@ -2605,16 +2859,18 @@ export default function LoadingPlanTable({
                 },
             )
                 .then((entry) => {
-                    update((prev) =>
-                        prev.map((r) =>
-                            r._dndId === dndId
-                                ? {
-                                      ...r,
-                                      entryId: entry.id,
-                                      lockVersion: entry.lock_version,
-                                  }
-                                : r,
-                        ),
+                    update(
+                        (prev) =>
+                            prev.map((r) =>
+                                r._dndId === dndId
+                                    ? {
+                                          ...r,
+                                          entryId: entry.id,
+                                          lockVersion: entry.lock_version,
+                                      }
+                                    : r,
+                            ),
+                        true,
                     );
                 })
                 .catch((err) => {
@@ -2842,6 +3098,16 @@ export default function LoadingPlanTable({
 
     const handleDragEnd = useCallback(
         ({ active, over }) => {
+            console.log(
+                `[dragend #${++window.__dragEndCounter || (window.__dragEndCounter = 1)}]`,
+                {
+                    activeId: active?.id,
+                    overId: over?.id,
+                    time: performance.now(),
+                },
+            );
+            console.trace();
+
             setActiveId(null);
             setOverMachine(undefined);
 
@@ -2849,8 +3115,8 @@ export default function LoadingPlanTable({
 
             // Track what needs recomputing + callbacks, set during the move update
             let pendingRecompute = null;
+            let finalRows = null;
 
-            // ✅ First update: just move the row — no recomputeMachine
             update((prev) => {
                 const next = prev.map((r) => ({ ...r }));
                 const fromIdx = next.findIndex((r) => r._dndId === active.id);
@@ -2858,50 +3124,58 @@ export default function LoadingPlanTable({
 
                 if (fromIdx === -1) return prev;
 
+                let moved, fromMachine, toMachine, isTransfer;
+
                 if (toIdx === -1) {
                     const fallbackMachine = dndOverMachineRef.current;
                     if (fallbackMachine === undefined) return prev;
 
-                    const [moved] = next.splice(fromIdx, 1);
-                    const fromMachine = moved.machine;
-                    const isTransfer = fromMachine !== fallbackMachine;
-                    if (isTransfer) moved.machine = fallbackMachine;
-                    addSeenPair(fallbackMachine, moved.Package_Name);
+                    [moved] = next.splice(fromIdx, 1);
+                    fromMachine = moved.machine;
+                    toMachine = fallbackMachine;
+                    isTransfer = fromMachine !== toMachine;
+                    if (isTransfer) moved.machine = toMachine;
+                    addSeenPair(toMachine, moved.Package_Name);
 
                     let insertAt = next.length;
                     for (let i = next.length - 1; i >= 0; i--) {
-                        if (next[i].machine === fallbackMachine) {
+                        if (next[i].machine === toMachine) {
                             insertAt = i + 1;
                             break;
                         }
                     }
                     next.splice(insertAt, 0, moved);
+                } else {
+                    fromMachine = next[fromIdx].machine;
+                    toMachine = next[toIdx].machine;
+                    isTransfer = fromMachine !== toMachine;
+                    const draggingDown = fromIdx < toIdx;
 
-                    pendingRecompute = {
+                    [moved] = next.splice(fromIdx, 1);
+                    if (isTransfer) moved.machine = toMachine;
+                    addSeenPair(toMachine, moved.Package_Name);
+
+                    let insertAt = next.findIndex((r) => r._dndId === over.id);
+                    if (insertAt === -1) insertAt = next.length;
+                    else if (draggingDown) insertAt += 1;
+                    next.splice(insertAt, 0, moved);
+                }
+
+                // Recompute in the SAME pass — one update(), one undo entry
+                recomputeMachine(next, toMachine, baseTimes);
+                if (isTransfer) recomputeMachine(next, fromMachine, baseTimes);
+
+                onReorder?.(
+                    toMachine,
+                    next.filter((r) => r.machine === toMachine),
+                );
+                if (isTransfer) {
+                    onReorder?.(
                         fromMachine,
-                        toMachine: fallbackMachine,
-                        isTransfer,
-                        moved,
-                    };
-                    return next;
+                        next.filter((r) => r.machine === fromMachine),
+                    );
+                    onLotTransfer?.(moved.Lot_Id, fromMachine, toMachine);
                 }
-
-                const fromMachine = next[fromIdx].machine;
-                const toMachine = next[toIdx].machine;
-                const isTransfer = fromMachine !== toMachine;
-                const draggingDown = fromIdx < toIdx;
-
-                const [moved] = next.splice(fromIdx, 1);
-                if (isTransfer) moved.machine = toMachine;
-                addSeenPair(toMachine, moved.Package_Name);
-
-                let insertAt = next.findIndex((r) => r._dndId === over.id);
-                if (insertAt === -1) {
-                    insertAt = next.length;
-                } else if (draggingDown) {
-                    insertAt += 1;
-                }
-                next.splice(insertAt, 0, moved);
 
                 pendingRecompute = {
                     fromMachine,
@@ -2909,91 +3183,61 @@ export default function LoadingPlanTable({
                     isTransfer,
                     moved,
                 };
+                finalRows = next;
                 return next;
             });
 
             setIsDirty(true);
 
-            // ✅ Second update: recompute + callbacks — deferred past the paint
-            setTimeout(() => {
-                console.log(
-                    "🚀 ~ LoadingPlanTable ~ pendingRecompute:",
-                    pendingRecompute,
-                );
-                if (!pendingRecompute) return;
-                const { fromMachine, toMachine, isTransfer, moved } =
-                    pendingRecompute;
+            if (!pendingRecompute) return;
+            const { fromMachine, toMachine, isTransfer, moved } =
+                pendingRecompute;
 
-                let finalRows = null;
+            // Unassigned has no persisted order — nothing to save
+            // when the destination is the holding pen and this
+            // wasn't a transfer (a pure Unassigned-to-Unassigned
+            // reorder is purely cosmetic, per the JSDoc contract).
+            if (toMachine === null && !isTransfer) return;
+            const isBlock = isBlockRow(moved);
+            if (isBlock && !moved.entryId) return; // block was never persisted (shouldn't happen — addBlock always creates it)
 
-                update((prev) => {
-                    const next = prev.map((r) => ({ ...r }));
-                    recomputeMachine(next, toMachine, baseTimes);
-                    if (isTransfer)
-                        recomputeMachine(next, fromMachine, baseTimes);
+            const { beforeEntryId, afterEntryId } = findMachineNeighbors(
+                finalRows,
+                moved._dndId,
+                toMachine,
+            );
 
-                    // callbacks have access to final state here
-                    onReorder?.(
-                        toMachine,
-                        next.filter((r) => r.machine === toMachine),
-                    );
-                    if (isTransfer)
-                        onReorder?.(
-                            fromMachine,
-                            next.filter((r) => r.machine === fromMachine),
-                        );
-                    if (isTransfer)
-                        onLotTransfer?.(moved.Lot_Id, fromMachine, toMachine);
+            const persist = isTransfer
+                ? mutate(route("loading-plan.transfer"), {
+                      body: {
+                          entry_type: isBlock ? "block" : "lot",
+                          lot_id: isBlock ? null : moved.Lot_Id,
+                          entry_id: isBlock ? moved.entryId : null,
+                          target_machine: toMachine,
+                          before_entry_id: beforeEntryId,
+                          after_entry_id: afterEntryId,
+                          scheduled_date: date,
+                      },
+                  })
+                : mutate(route("loading-plan.move"), {
+                      body: {
+                          entry_type: isBlock ? "block" : "lot",
+                          lot_id: isBlock ? null : moved.Lot_Id,
+                          entry_id: isBlock ? moved.entryId : null,
+                          before_entry_id: beforeEntryId,
+                          after_entry_id: afterEntryId,
+                          machine: toMachine,
+                          scheduled_date: date,
+                      },
+                  });
 
-                    finalRows = next;
-                    return next;
-                });
-
-                // Unassigned has no persisted order — nothing to save
-                // when the destination is the holding pen and this
-                // wasn't a transfer (a pure Unassigned-to-Unassigned
-                // reorder is purely cosmetic, per the JSDoc contract).
-                if (toMachine === null && !isTransfer) return;
-                console.log("🚀 ~ LoadingPlanTable ~ finalRows:", finalRows);
-                const isBlock = isBlockRow(moved);
-                if (isBlock && !moved.entryId) return; // block was never persisted (shouldn't happen — addBlock always creates it)
-
-                const { beforeLotId, afterLotId } = findMachineNeighbors(
-                    finalRows,
-                    moved._dndId,
-                    toMachine,
-                );
-
-                const persist = isTransfer
-                    ? mutate(route("loading-plan.transfer"), {
-                          body: {
-                              entry_type: isBlock ? "block" : "lot",
-                              lot_id: isBlock ? null : moved.Lot_Id,
-                              entry_id: isBlock ? moved.entryId : null,
-                              target_machine: toMachine,
-                              before_lot_id: beforeLotId,
-                              after_lot_id: afterLotId,
-                              scheduled_date: date,
-                          },
-                      })
-                    : mutate(route("loading-plan.move"), {
-                          body: {
-                              entry_type: isBlock ? "block" : "lot",
-                              lot_id: isBlock ? null : moved.Lot_Id,
-                              entry_id: isBlock ? moved.entryId : null,
-                              before_lot_id: beforeLotId,
-                              after_lot_id: afterLotId,
-                              machine: toMachine,
-                              scheduled_date: date,
-                          },
-                      });
-
-                persist
-                    .then((entry) => {
-                        // sync the authoritative sequence_order/lock_version
-                        // back into local state so the next move's
-                        // neighbor lookup and future edits use fresh values
-                        update((prev) =>
+            persist
+                .then((entry) => {
+                    // sync the authoritative sequence_order/lock_version
+                    // back into local state so the next move's
+                    // neighbor lookup and future edits use fresh values
+                    update(
+                        (prev) =>
                             prev.map((r) =>
                                 r._dndId === moved._dndId
                                     ? {
@@ -3004,13 +3248,13 @@ export default function LoadingPlanTable({
                                       }
                                     : r,
                             ),
-                        );
-                    })
-                    .catch((err) => {
-                        console.error("Failed to persist move/transfer:", err);
-                        // Consider: revert local state or show a toast here.
-                    });
-            }, 0);
+                        true,
+                    );
+                })
+                .catch((err) => {
+                    console.error("Failed to persist move/transfer:", err);
+                    // Consider: revert local state or show a toast here.
+                });
         },
         [baseTimes, onLotTransfer, onReorder, update, addSeenPair],
     );
@@ -3055,21 +3299,16 @@ export default function LoadingPlanTable({
 
             const row = data.find((r) => r._dndId === dndId);
 
-            update((prev) =>
-                prev.map((r) =>
-                    r._dndId !== dndId ? r : { ...r, [field]: value },
-                ),
-            );
-
-            // accuTime edit triggers queue recomputation
-            if (field === "accuTime") {
-                update((prev) => {
-                    const next = prev.map((r) => ({ ...r }));
+            update((prev) => {
+                const next = prev.map((r) =>
+                    r._dndId !== dndId ? { ...r } : { ...r, [field]: value },
+                );
+                if (field === "accuTime") {
                     const row = next.find((r) => r._dndId === dndId);
                     if (row) recomputeMachine(next, row.machine, baseTimes);
-                    return next;
-                });
-            }
+                }
+                return next;
+            });
 
             setIsDirty(true);
             setEditCell(null);
@@ -3094,35 +3333,39 @@ export default function LoadingPlanTable({
                 },
             )
                 .then((entry) => {
-                    update((prev) =>
-                        prev.map((r) =>
-                            r._dndId === dndId
-                                ? {
-                                      ...r,
-                                      entryId: entry.id,
-                                      lockVersion: entry.lock_version,
-                                  }
-                                : r,
-                        ),
+                    update(
+                        (prev) =>
+                            prev.map((r) =>
+                                r._dndId === dndId
+                                    ? {
+                                          ...r,
+                                          entryId: entry.id,
+                                          lockVersion: entry.lock_version,
+                                      }
+                                    : r,
+                            ),
+                        true,
                     );
                 })
                 .catch((err) => {
                     if (err.status === 409) {
                         const current = err.data?.current;
-                        update((prev) =>
-                            prev.map((r) =>
-                                r._dndId === dndId
-                                    ? {
-                                          ...r,
-                                          [field]:
-                                              current?.[backendField] ??
-                                              r[field],
-                                          lockVersion:
-                                              current?.lock_version ??
-                                              r.lockVersion,
-                                      }
-                                    : r,
-                            ),
+                        update(
+                            (prev) =>
+                                prev.map((r) =>
+                                    r._dndId === dndId
+                                        ? {
+                                              ...r,
+                                              [field]:
+                                                  current?.[backendField] ??
+                                                  r[field],
+                                              lockVersion:
+                                                  current?.lock_version ??
+                                                  r.lockVersion,
+                                          }
+                                        : r,
+                                ),
+                            true,
                         );
                         toast?.error?.(
                             "Someone else updated this lot — showing their latest value.",
@@ -3217,8 +3460,8 @@ export default function LoadingPlanTable({
                     scheduled_date: date,
                     label: label.trim() || "Time block",
                     duration,
-                    before_lot_id: null,
-                    after_lot_id: null, // appends to end — adjust if you add a "drop position" UI for blocks
+                    before_entry_id: null,
+                    after_entry_id: null, // appends to end — adjust if you add a "drop position" UI for blocks
                 },
             })
                 .then((entry) => {

@@ -46,6 +46,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::post('bulk-delete', [LoadingPlanEntryController::class, 'bulkDestroy'])->name('bulk-delete');
     Route::patch('entries/{id}', [LoadingPlanEntryController::class, 'updateField'])->name('entries.update');
     Route::post('bulk-update', [LoadingPlanEntryController::class, 'bulkUpdateField'])->name('bulk-update');
+    Route::post('batch-apply', [LoadingPlanEntryController::class, 'batchApply'])->name('batch-apply');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
 });
 

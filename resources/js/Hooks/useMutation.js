@@ -2,97 +2,111 @@ import { useEffect, useRef, useState } from "react";
 import { useToast } from "./useToast";
 
 export function useMutation() {
-	const toast = useToast();
-	const [isLoading, setIsLoading] = useState(false);
-	const [errorMessage, setErrorMessage] = useState(null);
-	const [errorData, setErrorData] = useState(null);
-	const [data, setData] = useState(null);
+    const toast = useToast();
+    const [isLoading, setIsLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState(null);
+    const [errorData, setErrorData] = useState(null);
+    const [data, setData] = useState(null);
 
-	const abortControllersRef = useRef({});
+    const abortControllersRef = useRef({});
 
-	const mutate = async (url, options = {}) => {
-		const { cancelPrevious = false, mutationKey = "default" } = options;
+    const mutate = async (url, options = {}) => {
+        console.log(
+            `[mutate #${++window.__mutateCounter || (window.__mutateCounter = 1)}]`,
+            url,
+            options.body,
+        );
+        console.trace();
 
-		if (cancelPrevious && abortControllersRef.current[mutationKey]) {
-			abortControllersRef.current[mutationKey].abort();
-		}
+        const { cancelPrevious = false, mutationKey = "default" } = options;
 
-		const controller = new AbortController();
-		abortControllersRef.current[mutationKey] = controller;
+        if (cancelPrevious && abortControllersRef.current[mutationKey]) {
+            abortControllersRef.current[mutationKey].abort();
+        }
 
-		setIsLoading(true);
-		setErrorMessage(null);
-		setErrorData(null);
+        const controller = new AbortController();
+        abortControllersRef.current[mutationKey] = controller;
 
-		try {
-			const {
-				method = "POST",
-				body,
-				isFormData = false,
-				isContentTypeInclude = true,
-				additionalHeaders = {},
-			} = options;
+        setIsLoading(true);
+        setErrorMessage(null);
+        setErrorData(null);
 
-			const token = localStorage.getItem("authify-token");
+        try {
+            const {
+                method = "POST",
+                body,
+                isFormData = false,
+                isContentTypeInclude = true,
+                additionalHeaders = {},
+            } = options;
 
-			const response = await fetch(url, {
-				method,
-				headers: {
-					...(isContentTypeInclude && { "Content-Type": "application/json" }),
-					Accept: "application/json",
-					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
-						?.content,
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
-					...additionalHeaders,
-				},
-				body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
-				signal: controller.signal,
-			});
+            const token = localStorage.getItem("authify-token");
 
-			let result;
-			try {
-				result = await response.json();
-			} catch (jsonErr) {
-				const error = new Error("Invalid JSON response from server");
-				error.status = response.status;
-				throw error;
-			}
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    ...(isContentTypeInclude && {
+                        "Content-Type": "application/json",
+                    }),
+                    Accept: "application/json",
+                    "X-CSRF-TOKEN": document.querySelector(
+                        'meta[name="csrf-token"]',
+                    )?.content,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    ...additionalHeaders,
+                },
+                body: body
+                    ? isFormData
+                        ? body
+                        : JSON.stringify(body)
+                    : undefined,
+                signal: controller.signal,
+            });
 
-			if (!response.ok || (result && result.status === "error")) {
-				const error = new Error(
-					result?.message || `HTTP error: ${response.status}`,
-				);
-				error.status = response.status;
-				error.data = result;
-				throw error;
-			}
+            let result;
+            try {
+                result = await response.json();
+            } catch (jsonErr) {
+                const error = new Error("Invalid JSON response from server");
+                error.status = response.status;
+                throw error;
+            }
 
-			setData(result);
-			return result;
-		} catch (error) {
-			if (error.name !== "AbortError") {
-				setErrorData(error.data);
-				setErrorMessage(error.message);
-				throw error;
-			}
-			throw error;
-		} finally {
-			delete abortControllersRef.current[mutationKey];
-			setIsLoading(false);
-		}
-	};
+            if (!response.ok || (result && result.status === "error")) {
+                const error = new Error(
+                    result?.message || `HTTP error: ${response.status}`,
+                );
+                error.status = response.status;
+                error.data = result;
+                throw error;
+            }
 
-	useEffect(() => {
-		return () => {
-			Object.values(abortControllersRef.current).forEach((controller) =>
-				controller.abort(),
-			);
-		};
-	}, []);
+            setData(result);
+            return result;
+        } catch (error) {
+            if (error.name !== "AbortError") {
+                setErrorData(error.data);
+                setErrorMessage(error.message);
+                throw error;
+            }
+            throw error;
+        } finally {
+            delete abortControllersRef.current[mutationKey];
+            setIsLoading(false);
+        }
+    };
 
-	const cancel = (mutationKey = "default") => {
-		abortControllersRef.current[mutationKey]?.abort();
-	};
+    useEffect(() => {
+        return () => {
+            Object.values(abortControllersRef.current).forEach((controller) =>
+                controller.abort(),
+            );
+        };
+    }, []);
 
-	return { mutate, data, errorMessage, errorData, isLoading, cancel };
+    const cancel = (mutationKey = "default") => {
+        abortControllersRef.current[mutationKey]?.abort();
+    };
+
+    return { mutate, data, errorMessage, errorData, isLoading, cancel };
 }

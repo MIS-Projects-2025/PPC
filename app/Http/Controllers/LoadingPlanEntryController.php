@@ -17,30 +17,24 @@ class LoadingPlanEntryController extends Controller
     public function move(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'entry_type'     => 'required|in:lot,block',
-            'lot_id'         => 'required_if:entry_type,lot|nullable|string',
-            'entry_id'       => 'required_if:entry_type,block|nullable|integer',
-            'before_lot_id'  => 'nullable|string',
-            'after_lot_id'   => 'nullable|string',
-            'machine'        => 'nullable|string',
-            'scheduled_date' => 'required|date',
+            'entry_type'      => 'required|in:lot,block',
+            'lot_id'          => 'required_if:entry_type,lot|nullable|string',
+            'entry_id'        => 'required_if:entry_type,block|nullable|integer',
+            'before_entry_id' => 'nullable|integer',
+            'after_entry_id'  => 'nullable|integer',
+            'machine'         => 'nullable|string',
+            'scheduled_date'  => 'required|date',
         ]);
 
-        $entry = $data['entry_type'] === 'block'
-            ? $this->service->moveBlock(
-                $data['entry_id'],
-                $data['before_lot_id'] ?? null,
-                $data['after_lot_id'] ?? null,
-                $data['machine'],
-                $data['scheduled_date'],
-            )
-            : $this->service->moveLot(
-                $data['lot_id'],
-                $data['before_lot_id'] ?? null,
-                $data['after_lot_id'] ?? null,
-                $data['machine'],
-                $data['scheduled_date'],
-            );
+        $entry = $this->service->moveEntry(
+            $data['entry_type'],
+            $data['lot_id'] ?? null,
+            $data['entry_id'] ?? null,
+            $data['before_entry_id'] ?? null,
+            $data['after_entry_id'] ?? null,
+            $data['machine'],
+            $data['scheduled_date'],
+        );
 
         return response()->json($entry);
     }
@@ -52,26 +46,20 @@ class LoadingPlanEntryController extends Controller
             'lot_id'          => 'required_if:entry_type,lot|nullable|string',
             'entry_id'        => 'required_if:entry_type,block|nullable|integer',
             'target_machine'  => 'nullable|string',
-            'before_lot_id'   => 'nullable|string',
-            'after_lot_id'    => 'nullable|string',
+            'before_entry_id' => 'nullable|integer',
+            'after_entry_id'  => 'nullable|integer',
             'scheduled_date'  => 'required|date',
         ]);
 
-        $entry = $data['entry_type'] === 'block'
-            ? $this->service->transferBlock(
-                $data['entry_id'],
-                $data['target_machine'],
-                $data['before_lot_id'] ?? null,
-                $data['after_lot_id'] ?? null,
-                $data['scheduled_date'],
-            )
-            : $this->service->transferLot(
-                $data['lot_id'],
-                $data['target_machine'],
-                $data['before_lot_id'] ?? null,
-                $data['after_lot_id'] ?? null,
-                $data['scheduled_date'],
-            );
+        $entry = $this->service->transferEntry(
+            $data['entry_type'],
+            $data['lot_id'] ?? null,
+            $data['entry_id'] ?? null,
+            $data['target_machine'],
+            $data['before_entry_id'] ?? null,
+            $data['after_entry_id'] ?? null,
+            $data['scheduled_date'],
+        );
 
         return response()->json($entry);
     }
@@ -104,8 +92,8 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date'  => 'required|date',
             'label'           => 'required|string|max:128',
             'duration'        => 'required|integer|min:1',
-            'before_lot_id'   => 'nullable|string',
-            'after_lot_id'    => 'nullable|string',
+            'before_entry_id'   => 'nullable|integer',
+            'after_entry_id'    => 'nullable|integer',
         ]);
 
         $entry = $this->service->addBlock(
@@ -113,8 +101,8 @@ class LoadingPlanEntryController extends Controller
             $data['scheduled_date'],
             $data['label'],
             $data['duration'],
-            $data['before_lot_id'] ?? null,
-            $data['after_lot_id'] ?? null,
+            $data['before_entry_id'] ?? null,
+            $data['after_entry_id'] ?? null,
         );
 
         return response()->json($entry, 201);
@@ -197,5 +185,33 @@ class LoadingPlanEntryController extends Controller
         $result = $this->service->bulkEditField($data['updates']);
 
         return response()->json($result);
+    }
+
+    public function batchApply(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'operations'                   => 'required|array|min:1',
+            'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field',
+            'operations.*.entry_type'      => 'required|in:lot,block',
+            'operations.*.before_entry_id' => 'nullable|integer',
+            'operations.*.after_entry_id'  => 'nullable|integer',
+            'operations.*.machine'         => 'nullable|string',
+            'operations.*.lot_id'          => 'nullable|string',
+            'operations.*.entry_id'        => 'nullable|integer',
+            'scheduled_date'               => 'nullable|date',
+        ]);
+
+        Log::info("data: " . json_encode($data));
+
+        try {
+            $results = $this->service->batchApply($data['operations'], $data['scheduled_date']);
+            return response()->json(['results' => $results]);
+        } catch (\Throwable $e) {
+            Log::error('batchApply failed', ['message' => $e->getMessage()]);
+            return response()->json([
+                'error'   => 'server_error',
+                'message' => 'Could not apply the batch of changes. Nothing was saved.',
+            ], 500);
+        }
     }
 }
