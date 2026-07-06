@@ -49,6 +49,7 @@
         "react-datepicker": "^8.7.0",
         "react-hot-toast": "^2.6.0",
         "react-icons": "^5.5.0",
+        "react-is": "^19.2.7",
         "react-overlays": "^5.2.1",
         "react-tooltip": "^5.30.0",
         "recharts": "^3.2.1",

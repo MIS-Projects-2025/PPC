@@ -108,7 +108,10 @@
  *   time, in any direction — nothing here is one-way.
  */
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
+import { useMutation } from "@/Hooks/useMutation";
+import { useToast } from "@/Hooks/useToast";
 import { createUndoStore } from "@/Store/undoStore";
+import toSnakeCase from "@/Utils/toSnakeCase";
 import {
     closestCenter,
     DndContext,
@@ -145,7 +148,6 @@ import {
     useState,
 } from "react";
 import { MdChevronLeft, MdChevronRight } from "react-icons/md";
-
 // ---------------------------------------------------------------------------
 // Package grouping config
 // ---------------------------------------------------------------------------
@@ -307,6 +309,27 @@ function machineToDroppableToken(machine) {
 /** Inverse of machineToDroppableToken(). */
 function droppableTokenToMachine(token) {
     return token === UNASSIGNED_DROPPABLE_TOKEN ? null : token;
+}
+
+/** Given the full data array (post-move) and a row's _dndId, find the
+ *  Lot_Id of its immediate same-machine neighbors — what moveLot/transferLot
+ *  need to compute the new sequence_order server-side. */
+function findMachineNeighbors(rows, dndId, machine) {
+    const machineRows = rows.filter(
+        (r) =>
+            (r.machine === machine && !isBlockRow(r)) ||
+            (isBlockRow(r) && r.machine === machine),
+    );
+    console.log("🚀 ~ findMachineNeighbors ~ machineRows:", machineRows);
+    const idx = machineRows.findIndex((r) => r._dndId === dndId);
+    console.log("🚀 ~ findMachineNeighbors ~ idx:", idx);
+    if (idx === -1) return { beforeLotId: null, afterLotId: null };
+    const before = machineRows[idx - 1];
+    const after = machineRows[idx + 1];
+    return {
+        beforeLotId: before && !isBlockRow(before) ? before.Lot_Id : null,
+        afterLotId: after && !isBlockRow(after) ? after.Lot_Id : null,
+    };
 }
 
 function parseTime(hhmm) {
@@ -707,7 +730,7 @@ function StatusBadge({ status }) {
         STATUS_STYLES[status] ?? "bg-base-content/10 text-base-content/50";
     return (
         <span
-            className={`inline-block text-center text-[11px] font-medium px-2 py-0.5 w-full rounded-full whitespace-nowrap ${cls}`}
+            className={`flex px-1 rounded-lg items-center text-left text-[11px] font-medium w-full h-full whitespace-nowrap ${cls}`}
         >
             {status}
         </span>
@@ -1037,7 +1060,7 @@ const RowContent = memo(
                                 className="px-2.5 text-sm"
                             >
                                 <button
-                                    className="btn btn-ghost w-full"
+                                    className="btn btn-ghost w-full px-0 justify-start items-center"
                                     onClick={(e) =>
                                         handleStatusClick(
                                             e,
@@ -2154,6 +2177,10 @@ export default function LoadingPlanTable({
         canUndo,
         canRedo,
     } = useLoadingPlanStore();
+    console.log("🚀 ~ LoadingPlanTable ~ data:", data);
+
+    const toast = useToast();
+    const { mutate } = useMutation();
 
     const resolvedData = initialData ?? _initialData;
     const [isDirty, setIsDirty] = useState(false);
@@ -2238,44 +2265,158 @@ export default function LoadingPlanTable({
 
     const handleBulkTag = useCallback(
         (tag) => {
+            const targets = data.filter((r) => selectedIds.has(r._dndId));
+
             update((prev) =>
                 prev.map((r) =>
                     selectedIds.has(r._dndId) ? { ...r, tag } : r,
                 ),
             );
             setIsDirty(true);
+
+            mutate(route("loading-plan.bulk-update"), {
+                body: {
+                    updates: targets.map((r) => ({
+                        id: r.entryId ?? null,
+                        lot_id: r.Lot_Id,
+                        scheduled_date: date,
+                        fields: { tag },
+                        lock_version: r.lockVersion ?? 0,
+                    })),
+                },
+            })
+                .then(({ entries }) => {
+                    update((prev) =>
+                        prev.map((r) => {
+                            const match = entries?.find(
+                                (e) =>
+                                    e.id === r.entryId || e.lot_id === r.Lot_Id,
+                            );
+                            return match
+                                ? {
+                                      ...r,
+                                      entryId: match.id,
+                                      lockVersion: match.lock_version,
+                                  }
+                                : r;
+                        }),
+                    );
+                })
+                .catch((err) => {
+                    console.error("Bulk tag update failed:", err);
+                    undo();
+                    toast?.error?.("Couldn't apply tag — reverted.");
+                });
         },
-        [selectedIds, update],
+        [selectedIds, update, data, date, undo],
     );
 
     const handleBulkClearTag = useCallback(() => {
+        const targets = data.filter((r) => selectedIds.has(r._dndId));
+
         update((prev) =>
             prev.map((r) =>
                 selectedIds.has(r._dndId) ? { ...r, tag: null } : r,
             ),
         );
         setIsDirty(true);
-    }, [selectedIds, update]);
+
+        mutate(route("loading-plan.bulk-update"), {
+            body: {
+                updates: targets.map((r) => ({
+                    id: r.entryId ?? null,
+                    lot_id: r.Lot_Id,
+                    scheduled_date: date,
+                    fields: { tag: null },
+                    lock_version: r.lockVersion ?? 0,
+                })),
+            },
+        })
+            .then(({ entries }) => {
+                update((prev) =>
+                    prev.map((r) => {
+                        const match = entries?.find(
+                            (e) => e.id === r.entryId || e.lot_id === r.Lot_Id,
+                        );
+                        return match
+                            ? {
+                                  ...r,
+                                  entryId: match.id,
+                                  lockVersion: match.lock_version,
+                              }
+                            : r;
+                    }),
+                );
+            })
+            .catch((err) => {
+                console.error("Bulk clear tag failed:", err);
+                undo();
+                toast?.error?.("Couldn't clear tag — reverted.");
+            });
+    }, [selectedIds, update, data, date, undo]);
 
     const handleBulkStatus = useCallback(
         (newStatus) => {
+            const normalizedStatus = newStatus === "NONE" ? null : newStatus;
+            const targets = data.filter(
+                (r) => selectedIds.has(r._dndId) && !isBlockRow(r),
+            );
+
             update((prev) =>
                 prev.map((r) =>
                     selectedIds.has(r._dndId) && !isBlockRow(r)
-                        ? {
-                              ...r,
-                              status: newStatus === "NONE" ? null : newStatus,
-                          }
+                        ? { ...r, status: normalizedStatus }
                         : r,
                 ),
             );
             setIsDirty(true);
+
+            mutate(route("loading-plan.bulk-update"), {
+                body: {
+                    updates: targets.map((r) => ({
+                        id: r.entryId ?? null,
+                        lot_id: r.Lot_Id,
+                        scheduled_date: date,
+                        fields: { status: normalizedStatus },
+                        lock_version: r.lockVersion ?? 0,
+                    })),
+                },
+            })
+                .then(({ entries }) => {
+                    update((prev) =>
+                        prev.map((r) => {
+                            const match = entries?.find(
+                                (e) => e.lot_id === r.Lot_Id,
+                            );
+                            return match
+                                ? {
+                                      ...r,
+                                      entryId: match.id,
+                                      lockVersion: match.lock_version,
+                                  }
+                                : r;
+                        }),
+                    );
+                })
+                .catch((err) => {
+                    console.error("Bulk status update failed:", err);
+                    undo();
+                    toast?.error?.("Couldn't update status — reverted.");
+                });
         },
-        [selectedIds, update],
+        [selectedIds, update, data, date, undo],
     );
 
     const handleBulkTransfer = useCallback(
         (targetMachine) => {
+            const selectedRows = data.filter((r) => selectedIds.has(r._dndId));
+            const lotIds = selectedRows
+                .filter((r) => !isBlockRow(r) && r.Lot_Id)
+                .map((r) => r.Lot_Id);
+            const blockEntryIds = selectedRows
+                .filter((r) => isBlockRow(r) && r.entryId)
+                .map((r) => r.entryId);
+
             const affectedMachines = new Set();
             update((prev) => {
                 const next = prev.map((r) => {
@@ -2291,11 +2432,26 @@ export default function LoadingPlanTable({
             });
             setIsDirty(true);
             clearSelection();
+
+            if (lotIds.length > 0 || blockEntryIds.length > 0) {
+                mutate(route("loading-plan.bulk-transfer"), {
+                    body: {
+                        lot_ids: lotIds,
+                        block_entry_ids: blockEntryIds,
+                        target_machine: targetMachine,
+                        scheduled_date: date,
+                    },
+                }).catch((err) => console.error("Bulk transfer failed:", err));
+            }
         },
-        [selectedIds, update, baseTimes, clearSelection],
+        [selectedIds, update, baseTimes, clearSelection, data, date],
     );
 
     const handleBulkDelete = useCallback(() => {
+        const entryIds = data
+            .filter((r) => selectedIds.has(r._dndId) && r.entryId)
+            .map((r) => r.entryId);
+
         update((prev) => {
             const removed = new Set(
                 prev
@@ -2308,7 +2464,17 @@ export default function LoadingPlanTable({
         });
         setIsDirty(true);
         clearSelection();
-    }, [selectedIds, update, baseTimes, clearSelection]);
+
+        if (entryIds.length > 0) {
+            mutate(route("loading-plan.bulk-delete"), {
+                body: { ids: entryIds, scheduled_date: date },
+            }).catch((err) => {
+                console.error("Bulk delete failed:", err);
+                undo();
+                toast?.error?.("Couldn't delete — restored.");
+            });
+        }
+    }, [selectedIds, update, baseTimes, clearSelection, data, date, undo]);
 
     // ── Keyboard shortcuts ───────────────────────────────────────────────────
     useEffect(() => {
@@ -2411,20 +2577,53 @@ export default function LoadingPlanTable({
 
     const handleStatusChange = useCallback(
         (newStatus) => {
+            const normalizedStatus = newStatus === "NONE" ? null : newStatus;
+            const dndId = statusMenu.dndId;
+            const row = data.find((r) => r._dndId === dndId);
+
             update((prev) =>
                 prev.map((r) =>
-                    r._dndId === statusMenu.dndId
-                        ? {
-                              ...r,
-                              status: newStatus === null ? null : newStatus,
-                          }
-                        : r,
+                    r._dndId === dndId ? { ...r, status: normalizedStatus } : r,
                 ),
             );
             setIsDirty(true);
             setStatusMenu(null);
+
+            if (!row) return;
+
+            mutate(
+                route("loading-plan.entries.update", { id: row.entryId ?? 0 }),
+                {
+                    method: "PATCH",
+                    body: {
+                        entry_type: isBlockRow(row) ? "block" : "lot",
+                        lot_id: row.Lot_Id,
+                        scheduled_date: date,
+                        fields: { status: normalizedStatus },
+                        lock_version: row.lockVersion ?? null,
+                    },
+                },
+            )
+                .then((entry) => {
+                    update((prev) =>
+                        prev.map((r) =>
+                            r._dndId === dndId
+                                ? {
+                                      ...r,
+                                      entryId: entry.id,
+                                      lockVersion: entry.lock_version,
+                                  }
+                                : r,
+                        ),
+                    );
+                })
+                .catch((err) => {
+                    console.error("Status update failed:", err);
+                    undo();
+                    toast?.error?.("Couldn't save status change — reverted.");
+                });
         },
-        [statusMenu, update],
+        [statusMenu, update, data, date, undo],
     );
 
     // Package_Name editor — same pattern as status, but options are scoped
@@ -2717,9 +2916,15 @@ export default function LoadingPlanTable({
 
             // ✅ Second update: recompute + callbacks — deferred past the paint
             setTimeout(() => {
+                console.log(
+                    "🚀 ~ LoadingPlanTable ~ pendingRecompute:",
+                    pendingRecompute,
+                );
                 if (!pendingRecompute) return;
                 const { fromMachine, toMachine, isTransfer, moved } =
                     pendingRecompute;
+
+                let finalRows = null;
 
                 update((prev) => {
                     const next = prev.map((r) => ({ ...r }));
@@ -2740,8 +2945,71 @@ export default function LoadingPlanTable({
                     if (isTransfer)
                         onLotTransfer?.(moved.Lot_Id, fromMachine, toMachine);
 
+                    finalRows = next;
                     return next;
                 });
+
+                // Unassigned has no persisted order — nothing to save
+                // when the destination is the holding pen and this
+                // wasn't a transfer (a pure Unassigned-to-Unassigned
+                // reorder is purely cosmetic, per the JSDoc contract).
+                if (toMachine === null && !isTransfer) return;
+                console.log("🚀 ~ LoadingPlanTable ~ finalRows:", finalRows);
+                const isBlock = isBlockRow(moved);
+                if (isBlock && !moved.entryId) return; // block was never persisted (shouldn't happen — addBlock always creates it)
+
+                const { beforeLotId, afterLotId } = findMachineNeighbors(
+                    finalRows,
+                    moved._dndId,
+                    toMachine,
+                );
+
+                const persist = isTransfer
+                    ? mutate(route("loading-plan.transfer"), {
+                          body: {
+                              entry_type: isBlock ? "block" : "lot",
+                              lot_id: isBlock ? null : moved.Lot_Id,
+                              entry_id: isBlock ? moved.entryId : null,
+                              target_machine: toMachine,
+                              before_lot_id: beforeLotId,
+                              after_lot_id: afterLotId,
+                              scheduled_date: date,
+                          },
+                      })
+                    : mutate(route("loading-plan.move"), {
+                          body: {
+                              entry_type: isBlock ? "block" : "lot",
+                              lot_id: isBlock ? null : moved.Lot_Id,
+                              entry_id: isBlock ? moved.entryId : null,
+                              before_lot_id: beforeLotId,
+                              after_lot_id: afterLotId,
+                              machine: toMachine,
+                              scheduled_date: date,
+                          },
+                      });
+
+                persist
+                    .then((entry) => {
+                        // sync the authoritative sequence_order/lock_version
+                        // back into local state so the next move's
+                        // neighbor lookup and future edits use fresh values
+                        update((prev) =>
+                            prev.map((r) =>
+                                r._dndId === moved._dndId
+                                    ? {
+                                          ...r,
+                                          sequenceOrder: entry.sequence_order,
+                                          lockVersion: entry.lock_version,
+                                          entryId: entry.id,
+                                      }
+                                    : r,
+                            ),
+                        );
+                    })
+                    .catch((err) => {
+                        console.error("Failed to persist move/transfer:", err);
+                        // Consider: revert local state or show a toast here.
+                    });
             }, 0);
         },
         [baseTimes, onLotTransfer, onReorder, update, addSeenPair],
@@ -2785,6 +3053,8 @@ export default function LoadingPlanTable({
                     ? parseInt(rawValue, 10) || 0
                     : rawValue.trim();
 
+            const row = data.find((r) => r._dndId === dndId);
+
             update((prev) =>
                 prev.map((r) =>
                     r._dndId !== dndId ? r : { ...r, [field]: value },
@@ -2803,8 +3073,76 @@ export default function LoadingPlanTable({
 
             setIsDirty(true);
             setEditCell(null);
+
+            if (!row) return;
+            console.log("🚀 ~ LoadingPlanTable ~ row:", row);
+
+            // Backend field name for accuTime is snake_case (accu_time)
+            const backendField = toSnakeCase(field);
+
+            mutate(
+                route("loading-plan.entries.update", { id: row.entryId ?? 0 }),
+                {
+                    method: "PATCH",
+                    body: {
+                        entry_type: isBlockRow(row) ? "block" : "lot",
+                        lot_id: row.Lot_Id,
+                        scheduled_date: date,
+                        fields: { [backendField]: value },
+                        lock_version: row.lockVersion ?? null,
+                    },
+                },
+            )
+                .then((entry) => {
+                    update((prev) =>
+                        prev.map((r) =>
+                            r._dndId === dndId
+                                ? {
+                                      ...r,
+                                      entryId: entry.id,
+                                      lockVersion: entry.lock_version,
+                                  }
+                                : r,
+                        ),
+                    );
+                })
+                .catch((err) => {
+                    if (err.status === 409) {
+                        const current = err.data?.current;
+                        update((prev) =>
+                            prev.map((r) =>
+                                r._dndId === dndId
+                                    ? {
+                                          ...r,
+                                          [field]:
+                                              current?.[backendField] ??
+                                              r[field],
+                                          lockVersion:
+                                              current?.lock_version ??
+                                              r.lockVersion,
+                                      }
+                                    : r,
+                            ),
+                        );
+                        toast?.error?.(
+                            "Someone else updated this lot — showing their latest value.",
+                        );
+                    } else if (err.status === 422) {
+                        // Laravel's default validation error shape: { message, errors: { "fields.remarks": [...] } }
+                        const firstError = Object.values(
+                            err.data?.errors ?? {},
+                        )[0]?.[0];
+                        toast?.error?.(firstError ?? "That value isn't valid.");
+                    } else {
+                        toast?.error?.(
+                            err.data?.message ??
+                                "Failed to save your change. Please try again.",
+                        );
+                        console.error("Failed to save field edit:", err);
+                    }
+                });
         },
-        [editCell, update, baseTimes],
+        [editCell, update, baseTimes, data, date],
     );
 
     const handleCellCancel = useCallback(() => setEditCell(null), []);
@@ -2873,36 +3211,54 @@ export default function LoadingPlanTable({
             const duration = parseInt(durationStr, 10);
             if (!duration || duration <= 0) return;
 
-            update((prev) => {
-                const next = [...prev];
-                const newRow = {
+            mutate(route("loading-plan.blocks.store"), {
+                body: {
                     machine,
-                    item: 0,
-                    Lot_Id: null,
-                    Part_Name: null,
-                    Package_Name: null,
-                    status: null,
-                    Station: null,
-                    Qty: null,
-                    Doable: null,
-                    accuTime: duration,
-                    Lot_Type: null,
-                    Lot_Status: null,
-                    Remarks: null,
-                    tag: null,
-                    isBlock: true,
-                    blockLabel: label.trim() || "Time block",
-                    _dndId: `block-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                };
-
-                next.push(newRow);
-                recomputeMachine(next, machine, baseTimes);
-                return next;
-            });
-            setIsDirty(true);
-            setJustAddedMachine(machine);
+                    scheduled_date: date,
+                    label: label.trim() || "Time block",
+                    duration,
+                    before_lot_id: null,
+                    after_lot_id: null, // appends to end — adjust if you add a "drop position" UI for blocks
+                },
+            })
+                .then((entry) => {
+                    update((prev) => {
+                        const next = [...prev];
+                        next.push({
+                            machine,
+                            item: 0,
+                            Lot_Id: null,
+                            Part_Name: null,
+                            Package_Name: null,
+                            status: null,
+                            Station: null,
+                            Qty: null,
+                            Doable: null,
+                            accuTime: duration,
+                            Lot_Type: null,
+                            Lot_Status: null,
+                            Remarks: null,
+                            tag: null,
+                            isBlock: true,
+                            blockLabel: entry.block_label,
+                            entryId: entry.id,
+                            lockVersion: entry.lock_version,
+                            _dndId: `block-${entry.id}`,
+                        });
+                        recomputeMachine(next, machine, baseTimes);
+                        return next;
+                    });
+                    setIsDirty(true);
+                    setJustAddedMachine(machine);
+                })
+                .catch((err) => {
+                    console.error("Failed to save block:", err);
+                    window.alert(
+                        "Could not save the block — please try again.",
+                    );
+                });
         },
-        [baseTimes, update],
+        [baseTimes, update, date],
     );
 
     useEffect(() => {
@@ -3156,7 +3512,7 @@ export default function LoadingPlanTable({
                             onClick={() => setStatusMenu(null)}
                         />
                         <div
-                            className="fixed z-50 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36"
+                            className="fixed z-10000 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36"
                             style={{
                                 top: statusMenu.y,
                                 left: statusMenu.x,
@@ -3173,7 +3529,7 @@ export default function LoadingPlanTable({
                             ].map((s) => (
                                 <button
                                     key={s}
-                                    className="btn btn-ghost w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
+                                    className="btn btn-ghost w-full text-left px-0 text-sm hover:bg-base-200 flex items-center gap-2"
                                     onClick={() => handleStatusChange(s)}
                                 >
                                     <StatusBadge status={s} />

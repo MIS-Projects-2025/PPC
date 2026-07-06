@@ -6,6 +6,7 @@ use Inertia\Inertia;
 use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware};
 use App\Http\Controllers\{
     LoadingPlanController,
+    LoadingPlanEntryController,
     AutoImportController,
     BodySizeController,
     DashboardController,
@@ -36,8 +37,18 @@ Route::redirect('/', "/$app_name");
 
 require __DIR__ . '/auth.php';
 
-Route::get('/loading-plan', [LoadingPlanController::class, 'index'])
-    ->name('index');
+Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
+    Route::post('move', [LoadingPlanEntryController::class, 'move'])->name('move');
+    Route::post('transfer', [LoadingPlanEntryController::class, 'transfer'])->name('transfer');
+    Route::post('bulk-transfer', [LoadingPlanEntryController::class, 'bulkTransfer'])->name('bulk-transfer');
+    Route::post('blocks', [LoadingPlanEntryController::class, 'addBlock'])->name('blocks.store');
+    Route::delete('entries/{id}', [LoadingPlanEntryController::class, 'destroy'])->name('entries.destroy');
+    Route::post('bulk-delete', [LoadingPlanEntryController::class, 'bulkDestroy'])->name('bulk-delete');
+    Route::patch('entries/{id}', [LoadingPlanEntryController::class, 'updateField'])->name('entries.update');
+    Route::post('bulk-update', [LoadingPlanEntryController::class, 'bulkUpdateField'])->name('bulk-update');
+    Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
+});
+
 
 Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::get('/{productionLine}', [LotController::class, 'index'])

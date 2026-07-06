@@ -18,10 +18,13 @@ class LoadingPlanEntry extends Model
         'tag',
         'remarks',
         'block_label',
+        'accu_time',
+        'lock_version',
     ];
 
     protected $casts = [
         'scheduled_date' => 'date',
+        'sequence_order' => 'float',
     ];
 
     public function lot()
