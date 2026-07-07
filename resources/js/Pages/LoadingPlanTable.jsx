@@ -1193,6 +1193,7 @@ const MachineSection = memo(
         onSortingChange,
         onAddRow,
         onAddBlock,
+        isUpdating,
     }) {
         const [collapsed, setCollapsed] = useState(true);
 
@@ -1273,6 +1274,7 @@ const MachineSection = memo(
                                 <td className="flex flex-col">
                                     {!isUnassigned && (
                                         <button
+                                            disabled={isUpdating}
                                             className="btn btn-ghost btn-sm w-16 text-left h-5 leading-0 text-[10px] font-medium text-info hover:text-info/80 hover:bg-info/10"
                                             onClick={(e) => {
                                                 e.stopPropagation();
@@ -1284,6 +1286,7 @@ const MachineSection = memo(
                                     )}
                                     {!isUnassigned && (
                                         <button
+                                            disabled={isUpdating}
                                             className="btn btn-ghost btn-sm w-16 text-left h-5 leading-0 text-[10px] font-medium text-base-content/50 hover:text-base-content/80 hover:bg-base-300"
                                             onClick={(e) => {
                                                 e.stopPropagation();
@@ -1854,6 +1857,7 @@ function SelectionToolbar({
     allData,
     machines,
     onTag,
+    disabled,
     onClearTag,
     onStatusChange,
     onTransfer,
@@ -1903,6 +1907,7 @@ function SelectionToolbar({
                             onClick={() => onTag(key)}
                             className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ${cfg.toolbar}`}
                             title={`Mark as ${cfg.label}`}
+                            disabled={disabled}
                         >
                             <span
                                 className={`w-2 h-2 rounded-full ${cfg.dot}`}
@@ -1913,6 +1918,7 @@ function SelectionToolbar({
                     <button
                         onClick={onClearTag}
                         className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/60 hover:bg-base-content/20"
+                        disabled={disabled}
                     >
                         Clear tag
                     </button>
@@ -1927,6 +1933,7 @@ function SelectionToolbar({
                                 setTransferOpen(false);
                             }}
                             className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            disabled={disabled}
                         >
                             Set status
                             <svg
@@ -1958,6 +1965,7 @@ function SelectionToolbar({
                                             onStatusChange(s);
                                             setStatusOpen(false);
                                         }}
+                                        disabled={disabled}
                                     >
                                         <StatusBadge status={s} />
                                     </button>
@@ -1975,6 +1983,7 @@ function SelectionToolbar({
                                 setTransferOpen((v) => !v);
                                 setStatusOpen(false);
                             }}
+                            disabled={disabled}
                             className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
                         >
                             Transfer to…
@@ -2007,8 +2016,9 @@ function SelectionToolbar({
                                                     : ""
                                             }`}
                                             disabled={
-                                                selectedMachines.size === 1 &&
-                                                selectedMachines.has(m)
+                                                disabled ||
+                                                (selectedMachines.size === 1 &&
+                                                    selectedMachines.has(m))
                                             }
                                             onClick={() => {
                                                 if (
@@ -2033,6 +2043,7 @@ function SelectionToolbar({
                     <button
                         onClick={onDelete}
                         className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
+                        disabled={disabled}
                     >
                         Delete
                     </button>
@@ -2041,6 +2052,7 @@ function SelectionToolbar({
                         onClick={onClearSelection}
                         className="ml-1 text-neutral-content/40 hover:text-neutral-content"
                         title="Clear selection (Esc)"
+                        disabled={disabled}
                     >
                         <svg
                             width="14"
@@ -2381,6 +2393,14 @@ export default function LoadingPlanTable({
 
     const resolvedData = initialData ?? _initialData;
     const [isDirty, setIsDirty] = useState(false);
+    const [inFlightCount, setInFlightCount] = useState(0);
+
+    const isUpdating = inFlightCount > 0;
+
+    const withUpdating = useCallback((promise) => {
+        setInFlightCount((c) => c + 1);
+        return promise.finally(() => setInFlightCount((c) => c - 1));
+    }, []);
 
     const isDirtyRef = useRef(isDirty);
     useEffect(() => {
@@ -2471,17 +2491,19 @@ export default function LoadingPlanTable({
             );
             setIsDirty(true);
 
-            mutate(route("loading-plan.bulk-update"), {
-                body: {
-                    updates: targets.map((r) => ({
-                        id: r.entryId ?? null,
-                        lot_id: r.Lot_Id,
-                        scheduled_date: date,
-                        fields: { tag },
-                        lock_version: r.lockVersion ?? 0,
-                    })),
-                },
-            })
+            withUpdating(
+                mutate(route("loading-plan.bulk-update"), {
+                    body: {
+                        updates: targets.map((r) => ({
+                            id: r.entryId ?? null,
+                            lot_id: r.Lot_Id,
+                            scheduled_date: date,
+                            fields: { tag },
+                            lock_version: r.lockVersion ?? 0,
+                        })),
+                    },
+                }),
+            )
                 .then(({ entries }) => {
                     update(
                         (prev) =>
@@ -2501,25 +2523,18 @@ export default function LoadingPlanTable({
                             }),
                         true,
                     );
-
-                    if (stale?.length > 0) {
-                        toast?.error?.(
-                            `${stale.length} row(s) were changed by someone else and weren't updated.`,
-                        );
-                        // Optional: revert just those specific rows' tag locally, since
-                        // their optimistic update never actually persisted.
-                    }
                 })
                 .catch((err) => {
                     console.error("Bulk tag update failed:", err);
+                    undo(); // whole batch is atomic — nothing applied, safe to fully revert
                     if (err.status === 409) {
-                        undo(); // whole batch is genuinely atomic now — safe to fully revert
+                        const conflicts = err.data?.conflicts ?? [];
                         toast?.error?.(
-                            err.data?.message ??
-                                "Some rows were changed by someone else — the tag change was cancelled.",
+                            conflicts.length > 0
+                                ? `${conflicts.length} row(s) were changed by someone else — the tag change was cancelled.`
+                                : "Some rows were changed by someone else — the tag change was cancelled.",
                         );
                     } else {
-                        undo();
                         toast?.error?.("Couldn't apply tag — reverted.");
                     }
                 });
@@ -2537,17 +2552,19 @@ export default function LoadingPlanTable({
         );
         setIsDirty(true);
 
-        mutate(route("loading-plan.bulk-update"), {
-            body: {
-                updates: targets.map((r) => ({
-                    id: r.entryId ?? null,
-                    lot_id: r.Lot_Id,
-                    scheduled_date: date,
-                    fields: { tag: null },
-                    lock_version: r.lockVersion ?? 0,
-                })),
-            },
-        })
+        withUpdating(
+            mutate(route("loading-plan.bulk-update"), {
+                body: {
+                    updates: targets.map((r) => ({
+                        id: r.entryId ?? null,
+                        lot_id: r.Lot_Id,
+                        scheduled_date: date,
+                        fields: { tag: null },
+                        lock_version: r.lockVersion ?? 0,
+                    })),
+                },
+            }),
+        )
             .then(({ entries }) => {
                 update(
                     (prev) =>
@@ -2569,14 +2586,15 @@ export default function LoadingPlanTable({
             })
             .catch((err) => {
                 console.error("Bulk tag update failed:", err);
+                undo(); // whole batch is atomic — nothing applied, safe to fully revert
                 if (err.status === 409) {
-                    undo(); // whole batch is genuinely atomic now — safe to fully revert
+                    const conflicts = err.data?.conflicts ?? [];
                     toast?.error?.(
-                        err.data?.message ??
-                            "Some rows were changed by someone else — the tag change was cancelled.",
+                        conflicts.length > 0
+                            ? `${conflicts.length} row(s) were changed by someone else — the tag change was cancelled.`
+                            : "Some rows were changed by someone else — the tag change was cancelled.",
                     );
                 } else {
-                    undo();
                     toast?.error?.("Couldn't apply tag — reverted.");
                 }
             });
@@ -2598,17 +2616,19 @@ export default function LoadingPlanTable({
             );
             setIsDirty(true);
 
-            mutate(route("loading-plan.bulk-update"), {
-                body: {
-                    updates: targets.map((r) => ({
-                        id: r.entryId ?? null,
-                        lot_id: r.Lot_Id,
-                        scheduled_date: date,
-                        fields: { status: normalizedStatus },
-                        lock_version: r.lockVersion ?? 0,
-                    })),
-                },
-            })
+            withUpdating(
+                mutate(route("loading-plan.bulk-update"), {
+                    body: {
+                        updates: targets.map((r) => ({
+                            id: r.entryId ?? null,
+                            lot_id: r.Lot_Id,
+                            scheduled_date: date,
+                            fields: { status: normalizedStatus },
+                            lock_version: r.lockVersion ?? 0,
+                        })),
+                    },
+                }),
+            )
                 .then(({ entries }) => {
                     update(
                         (prev) =>
@@ -2628,16 +2648,17 @@ export default function LoadingPlanTable({
                     );
                 })
                 .catch((err) => {
-                    console.error("Bulk status update failed:", err);
+                    console.error("Bulk tag update failed:", err);
+                    undo(); // whole batch is atomic — nothing applied, safe to fully revert
                     if (err.status === 409) {
-                        undo();
+                        const conflicts = err.data?.conflicts ?? [];
                         toast?.error?.(
-                            err.data?.message ??
-                                "Some rows were changed by someone else — the status update was cancelled.",
+                            conflicts.length > 0
+                                ? `${conflicts.length} row(s) were changed by someone else — the tag change was cancelled.`
+                                : "Some rows were changed by someone else — the tag change was cancelled.",
                         );
                     } else {
-                        undo();
-                        toast?.error?.("Couldn't update status — reverted.");
+                        toast?.error?.("Couldn't apply tag — reverted.");
                     }
                 });
         },
@@ -2671,14 +2692,16 @@ export default function LoadingPlanTable({
             clearSelection();
 
             if (lotIds.length > 0 || blockEntryIds.length > 0) {
-                mutate(route("loading-plan.bulk-transfer"), {
-                    body: {
-                        lot_ids: lotIds,
-                        block_entry_ids: blockEntryIds,
-                        target_machine: targetMachine,
-                        scheduled_date: date,
-                    },
-                })
+                withUpdating(
+                    mutate(route("loading-plan.bulk-transfer"), {
+                        body: {
+                            lot_ids: lotIds,
+                            block_entry_ids: blockEntryIds,
+                            target_machine: targetMachine,
+                            scheduled_date: date,
+                        },
+                    }),
+                )
                     .then((updatedEntries) => {
                         update(
                             (prev) =>
@@ -2735,9 +2758,11 @@ export default function LoadingPlanTable({
         clearSelection();
 
         if (entryIds.length > 0) {
-            mutate(route("loading-plan.bulk-delete"), {
-                body: { ids: entryIds, scheduled_date: date },
-            })
+            withUpdating(
+                mutate(route("loading-plan.bulk-delete"), {
+                    body: { ids: entryIds, scheduled_date: date },
+                }),
+            )
                 .then(({ unassigned }) => {
                     update(
                         (prev) =>
@@ -2897,10 +2922,11 @@ export default function LoadingPlanTable({
     const [packageMenu, setPackageMenu] = useState(null);
     const [editCell, setEditCell] = useState(null);
 
-    const isSortable = sorting.length === 0;
+    const isSortable = sorting.length === 0 && !isUpdating;
 
     const handleStatusClick = useCallback((e, dndId) => {
         e.stopPropagation();
+        if (isUpdating) return;
         const rect = e.currentTarget.getBoundingClientRect();
         setStatusMenu({ dndId, x: rect.left, y: rect.bottom + 4 });
     }, []);
@@ -2921,18 +2947,22 @@ export default function LoadingPlanTable({
 
             if (!row) return;
 
-            mutate(
-                route("loading-plan.entries.update", { id: row.entryId ?? 0 }),
-                {
-                    method: "PATCH",
-                    body: {
-                        entry_type: isBlockRow(row) ? "block" : "lot",
-                        lot_id: row.Lot_Id,
-                        scheduled_date: date,
-                        fields: { status: normalizedStatus },
-                        lock_version: row.lockVersion ?? null,
+            withUpdating(
+                mutate(
+                    route("loading-plan.entries.update", {
+                        id: row.entryId ?? 0,
+                    }),
+                    {
+                        method: "PATCH",
+                        body: {
+                            entry_type: isBlockRow(row) ? "block" : "lot",
+                            lot_id: row.Lot_Id,
+                            scheduled_date: date,
+                            fields: { status: normalizedStatus },
+                            lock_version: row.lockVersion ?? null,
+                        },
                     },
-                },
+                ),
             )
                 .then((entry) => {
                     update(
@@ -2962,6 +2992,7 @@ export default function LoadingPlanTable({
     // to the row's CURRENT group (you're correcting which package within
     // the family this lot belongs to, not moving it to a different tab).
     const handlePackageClick = useCallback((e, dndId, currentPackage) => {
+        if (isUpdating) return;
         e.stopPropagation();
         const rect = e.currentTarget.getBoundingClientRect();
         setPackageMenu({
@@ -3283,29 +3314,31 @@ export default function LoadingPlanTable({
                 toMachine,
             );
 
-            const persist = isTransfer
-                ? mutate(route("loading-plan.transfer"), {
-                      body: {
-                          entry_type: isBlock ? "block" : "lot",
-                          lot_id: isBlock ? null : moved.Lot_Id,
-                          entry_id: isBlock ? moved.entryId : null,
-                          target_machine: toMachine,
-                          before_entry_id: beforeEntryId,
-                          after_entry_id: afterEntryId,
-                          scheduled_date: date,
-                      },
-                  })
-                : mutate(route("loading-plan.move"), {
-                      body: {
-                          entry_type: isBlock ? "block" : "lot",
-                          lot_id: isBlock ? null : moved.Lot_Id,
-                          entry_id: isBlock ? moved.entryId : null,
-                          before_entry_id: beforeEntryId,
-                          after_entry_id: afterEntryId,
-                          machine: toMachine,
-                          scheduled_date: date,
-                      },
-                  });
+            const persist = withUpdating(
+                isTransfer
+                    ? mutate(route("loading-plan.transfer"), {
+                          body: {
+                              entry_type: isBlock ? "block" : "lot",
+                              lot_id: isBlock ? null : moved.Lot_Id,
+                              entry_id: isBlock ? moved.entryId : null,
+                              target_machine: toMachine,
+                              before_entry_id: beforeEntryId,
+                              after_entry_id: afterEntryId,
+                              scheduled_date: date,
+                          },
+                      })
+                    : mutate(route("loading-plan.move"), {
+                          body: {
+                              entry_type: isBlock ? "block" : "lot",
+                              lot_id: isBlock ? null : moved.Lot_Id,
+                              entry_id: isBlock ? moved.entryId : null,
+                              before_entry_id: beforeEntryId,
+                              after_entry_id: afterEntryId,
+                              machine: toMachine,
+                              scheduled_date: date,
+                          },
+                      }),
+            );
 
             persist
                 .then((entry) => {
@@ -3344,6 +3377,7 @@ export default function LoadingPlanTable({
     // ── Cell editing ─────────────────────────────────────────────────────────
     const handleCellClick = useCallback(
         (e, dndId, field) => {
+            if (isUpdating) return;
             const type = EDITABLE_COLUMNS[field];
             if (!type) return;
             const row = data.find((r) => r._dndId === dndId);
@@ -3361,7 +3395,7 @@ export default function LoadingPlanTable({
                 height: rect.height,
             });
         },
-        [data],
+        [data, isUpdating],
     );
 
     const handleCellCommit = useCallback(
@@ -3395,18 +3429,22 @@ export default function LoadingPlanTable({
             // Backend field name for accuTime is snake_case (accu_time)
             const backendField = toSnakeCase(field);
 
-            mutate(
-                route("loading-plan.entries.update", { id: row.entryId ?? 0 }),
-                {
-                    method: "PATCH",
-                    body: {
-                        entry_type: isBlockRow(row) ? "block" : "lot",
-                        lot_id: row.Lot_Id,
-                        scheduled_date: date,
-                        fields: { [backendField]: value },
-                        lock_version: row.lockVersion ?? null,
+            withUpdating(
+                mutate(
+                    route("loading-plan.entries.update", {
+                        id: row.entryId ?? 0,
+                    }),
+                    {
+                        method: "PATCH",
+                        body: {
+                            entry_type: isBlockRow(row) ? "block" : "lot",
+                            lot_id: row.Lot_Id,
+                            scheduled_date: date,
+                            fields: { [backendField]: value },
+                            lock_version: row.lockVersion ?? null,
+                        },
                     },
-                },
+                ),
             )
                 .then((entry) => {
                     update(
@@ -3484,19 +3522,21 @@ export default function LoadingPlanTable({
             const groupPkgs = packagesInGroup(activePackage);
             const packageName = groupPkgs[0] ?? activePackage;
 
-            mutate(route("loading-plan.manual-lots.store"), {
-                body: {
-                    machine,
-                    scheduled_date: date,
-                    fields: {
-                        Part_Name: partName.trim(),
-                        Package_Name: packageName,
-                        Qty: qty,
+            withUpdating(
+                mutate(route("loading-plan.manual-lots.store"), {
+                    body: {
+                        machine,
+                        scheduled_date: date,
+                        fields: {
+                            Part_Name: partName.trim(),
+                            Package_Name: packageName,
+                            Qty: qty,
+                        },
+                        before_entry_id: null,
+                        after_entry_id: null, // appends to end
                     },
-                    before_entry_id: null,
-                    after_entry_id: null, // appends to end
-                },
-            })
+                }),
+            )
                 .then((entry) => {
                     update((prev) => {
                         const next = [...prev];
@@ -3559,16 +3599,18 @@ export default function LoadingPlanTable({
             const duration = parseInt(durationStr, 10);
             if (!duration || duration <= 0) return;
 
-            mutate(route("loading-plan.blocks.store"), {
-                body: {
-                    machine,
-                    scheduled_date: date,
-                    label: label.trim() || "Time block",
-                    duration,
-                    before_entry_id: null,
-                    after_entry_id: null, // appends to end — adjust if you add a "drop position" UI for blocks
-                },
-            })
+            withUpdating(
+                mutate(route("loading-plan.blocks.store"), {
+                    body: {
+                        machine,
+                        scheduled_date: date,
+                        label: label.trim() || "Time block",
+                        duration,
+                        before_entry_id: null,
+                        after_entry_id: null, // appends to end — adjust if you add a "drop position" UI for blocks
+                    },
+                }),
+            )
                 .then((entry) => {
                     update((prev) => {
                         const next = [...prev];
@@ -3665,6 +3707,7 @@ export default function LoadingPlanTable({
                             </button>
                         </div>
                     )}
+
                     {status && (
                         <div className="text-sm text-muted-foreground">
                             {getStatusMessage(status)}
@@ -3676,7 +3719,7 @@ export default function LoadingPlanTable({
                         <div className="flex items-center gap-2 mb-3">
                             <button
                                 onClick={() => handleUndo()}
-                                disabled={!canUndo()}
+                                disabled={!canUndo() || isUpdating}
                                 className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
                                 title="Undo (Ctrl+Z)"
                             >
@@ -3684,12 +3727,20 @@ export default function LoadingPlanTable({
                             </button>
                             <button
                                 onClick={() => handleRedo()}
-                                disabled={!canRedo()}
+                                disabled={!canRedo() || isUpdating}
                                 className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
                                 title="Redo (Ctrl+Y)"
                             >
                                 ↪ Redo
                             </button>
+                            {isUpdating && (
+                                <>
+                                    <span className="loading text-info loading-spinner loading-xs"></span>
+                                    <span className="text-xs text-info animate-pulse">
+                                        Saving…
+                                    </span>
+                                </>
+                            )}
                             {selectedIds.size > 0 && (
                                 <span className="text-xs text-info ml-2">
                                     {selectedIds.size} row
@@ -3801,6 +3852,7 @@ export default function LoadingPlanTable({
                                                     onSortingChange={setSorting}
                                                     onAddRow={handleAddRow}
                                                     onAddBlock={handleAddBlock}
+                                                    isUpdating={isUpdating}
                                                 />
                                             ))}
                                         </SortableTableContext.Provider>
@@ -3828,6 +3880,7 @@ export default function LoadingPlanTable({
                         allData={data}
                         machines={machines}
                         onTag={handleBulkTag}
+                        disabled={isUpdating}
                         onClearTag={handleBulkClearTag}
                         onStatusChange={handleBulkStatus}
                         onTransfer={handleBulkTransfer}
@@ -3863,6 +3916,7 @@ export default function LoadingPlanTable({
                                     key={s}
                                     className="btn btn-ghost w-full text-left px-0 text-sm hover:bg-base-200 flex items-center gap-2"
                                     onClick={() => handleStatusChange(s)}
+                                    disabled={isUpdating}
                                 >
                                     <StatusBadge status={s} />
                                 </button>
@@ -3892,6 +3946,7 @@ export default function LoadingPlanTable({
                                     key={pkg}
                                     className="btn btn-ghost w-full text-left px-3 py-1.5 text-sm hover:bg-base-200"
                                     onClick={() => handlePackageChange(pkg)}
+                                    disabled={isUpdating}
                                 >
                                     {pkg}
                                 </button>
