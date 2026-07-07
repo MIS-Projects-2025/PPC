@@ -77,6 +77,20 @@ class LoadingPlanSeeder extends Seeder
 
     public function run(): void
     {
+        // FOR SAFETY: If you run this seeder, it will wipe out all existing.
+        // I WILL RETURN IF I AM USING THE LIVE DATABASE. DO NOT RUN THIS SEEDER AGAINST PRODUCTION.
+        return;
+        return;
+        return;
+        return;
+        return;
+        return;
+        return;
+        return;
+        return;
+        return;
+        return;
+
         $this->truncateOwnedTables();
 
         $this->seedMachines();

@@ -47,6 +47,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::patch('entries/{id}', [LoadingPlanEntryController::class, 'updateField'])->name('entries.update');
     Route::post('bulk-update', [LoadingPlanEntryController::class, 'bulkUpdateField'])->name('bulk-update');
     Route::post('batch-apply', [LoadingPlanEntryController::class, 'batchApply'])->name('batch-apply');
+    Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
 });
 

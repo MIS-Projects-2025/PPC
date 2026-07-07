@@ -79,6 +79,57 @@ class LoadingPlanController extends Controller
             ];
         });
 
+        // Manual lots: entries with entry_type 'lot' whose Lot_Id has no
+        // matching WIP row at all — these exist purely from
+        // createManualLot(), so display them from lot_registry + the entry
+        // itself, with every WIP-only field left null.
+        $wipLotIds = $wipRows->pluck('Lot_Id')->all();
+        $manualLotEntries = $lotEntries->reject(fn($entry, $lotId) => in_array($lotId, $wipLotIds));
+
+        $manualLotIds = $manualLotEntries->keys()->all();
+        $lotRegistryByLotId = \App\Models\LotRegistry::whereIn('Lot_Id', $manualLotIds)->get()->keyBy('Lot_Id');
+
+        $manualLotResults = $manualLotEntries->map(function ($entry) use ($lotRegistryByLotId) {
+            $registry = $lotRegistryByLotId->get($entry->lot_id);
+
+            return [
+                'id'                  => null,
+                'entryId'             => $entry->id,
+                'entryType'           => 'lot',
+                'machine'             => $entry->machine,
+                'sequenceOrder'       => $entry->sequence_order,
+                'item'                => $entry->sequence_order,
+                'Part_Name'           => $registry->Part_Name ?? '',
+                'Lead_Count'          => null,
+                'Package_Name'        => $registry->Package_Name ?? null,
+                'Lot_Id'              => $entry->lot_id,
+                'status'              => $entry->status ?? null,
+                'Station'             => null,
+                'Qty'                 => $registry->Qty ?? 0,
+                'Lot_Type'            => null,
+                'Prod_Area'           => null,
+                'Lot_Status'          => null,
+                'Focus_Group'         => null,
+                'Stage'               => null,
+                'Lot_Entry_Time_Days' => null,
+                'CR3'                 => null,
+                'BE_OSL_Days'         => null,
+                'Body_Size'           => null,
+                'Ramp_Time'           => null,
+                'Date_Loaded'         => null,
+                'BE_Starttime'        => null,
+                'Backend_Leadtime'    => null,
+                'Doable'              => null,
+                'Capacity_UPH'        => null,
+                'accuTime'            => $entry->accu_time,
+                'Remarks'             => $entry->remarks ?? null,
+                'tag'                 => $entry->tag ?? null,
+                'lockVersion'         => $entry->lock_version,
+                'isBlock'             => false,
+                'isManual'            => true, // lets the frontend distinguish if ever needed
+            ];
+        })->values();
+
         $blockResults = $blockEntries->map(function ($entry) {
             return [
                 'id'                  => null,
@@ -129,7 +180,7 @@ class LoadingPlanController extends Controller
         //     ])
         //     ->values();
 
-        $result = $lotResults->concat($blockResults)
+        $result = $lotResults->concat($manualLotResults)->concat($blockResults)
             ->sort(function ($a, $b) {
                 // Nulls (Unassigned) always sort last, unconditionally
                 if (($a['machine'] === null) !== ($b['machine'] === null)) {

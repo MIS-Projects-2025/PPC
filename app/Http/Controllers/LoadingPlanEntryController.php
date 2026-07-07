@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\StaleWriteException;
+use App\Exceptions\BulkStaleWriteException;
 use App\Services\LoadingPlanEntryService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -108,6 +109,29 @@ class LoadingPlanEntryController extends Controller
         return response()->json($entry, 201);
     }
 
+    public function createManualLot(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'machine'         => 'required|string',
+            'scheduled_date'  => 'required|date',
+            'fields.Part_Name'    => 'nullable|string|max:100',
+            'fields.Package_Name' => 'nullable|string|max:50',
+            'fields.Qty'          => 'nullable|integer',
+            'before_entry_id' => 'nullable|integer',
+            'after_entry_id'  => 'nullable|integer',
+        ]);
+
+        $entry = $this->service->createManualLot(
+            $data['machine'],
+            $data['scheduled_date'],
+            $data['fields'] ?? [],
+            $data['before_entry_id'] ?? null,
+            $data['after_entry_id'] ?? null,
+        );
+
+        return response()->json($entry, 201);
+    }
+
     public function destroy(Request $request, int $id): JsonResponse
     {
         $data = $request->validate([
@@ -115,9 +139,9 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $this->service->deleteEntry($id, $data['machine'], $data['scheduled_date']);
+        $this->service->deleteEntry($id, $data['machine'] ?? null, $data['scheduled_date']);
 
-        return response()->json(['deleted' => $id]);
+        return response()->json(['id' => $id]);
     }
 
     public function bulkDestroy(Request $request): JsonResponse
@@ -128,9 +152,9 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $this->service->bulkDelete($data['ids'], $data['scheduled_date']);
+        $result = $this->service->bulkDelete($data['ids'], $data['scheduled_date']);
 
-        return response()->json(['deleted' => $data['ids']]);
+        return response()->json($result);
     }
 
     // ---- Field-only edits (optimistic locking) -------------------------
@@ -182,9 +206,16 @@ class LoadingPlanEntryController extends Controller
             'updates.*.lock_version'   => 'nullable|integer',
         ]);
 
-        $result = $this->service->bulkEditField($data['updates']);
-
-        return response()->json($result);
+        try {
+            $entries = $this->service->bulkEditField($data['updates']);
+            return response()->json(['entries' => $entries]);
+        } catch (BulkStaleWriteException $e) {
+            return response()->json([
+                'error'     => 'stale',
+                'message'   => $e->getMessage(),
+                'conflicts' => $e->conflicts,
+            ], 409);
+        }
     }
 
     public function batchApply(Request $request): JsonResponse
@@ -192,16 +223,15 @@ class LoadingPlanEntryController extends Controller
         $data = $request->validate([
             'operations'                   => 'required|array|min:1',
             'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field',
-            'operations.*.entry_type'      => 'required|in:lot,block',
+            'operations.*.entry_type'      => 'nullable|string',
             'operations.*.before_entry_id' => 'nullable|integer',
             'operations.*.after_entry_id'  => 'nullable|integer',
             'operations.*.machine'         => 'nullable|string',
+            'operations.*.target_machine'  => 'nullable|string',
             'operations.*.lot_id'          => 'nullable|string',
             'operations.*.entry_id'        => 'nullable|integer',
             'scheduled_date'               => 'nullable|date',
         ]);
-
-        Log::info("data: " . json_encode($data));
 
         try {
             $results = $this->service->batchApply($data['operations'], $data['scheduled_date']);

@@ -3,9 +3,12 @@
 namespace App\Services;
 
 use App\Exceptions\SequenceExhaustedException;
+use App\Exceptions\BulkStaleWriteException;
 use App\Exceptions\StaleWriteException;
 use App\Models\LoadingPlanEntry;
+use App\Models\LotRegistry;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -119,23 +122,39 @@ class LoadingPlanEntryService
         });
     }
 
-    /** Remove one entry (a block outright, or a lot's plan entry — which
-     *  simply makes it reappear as Unassigned on next load, since the
-     *  controller merges WIP rows with plan entries and defaults absent
-     *  entries to machine === null). */
-    public function deleteEntry(int $id, string $machine, string $date): void
+    /** Remove one entry. Blocks are always hard-deleted (no backing WIP row
+     *  to fall back to). Lots are "unassigned" by default (machine and
+     *  sequence_order cleared, entry row kept) — UNLESS $forceDelete is
+     *  true, in which case the row is hard-deleted regardless of type. Force
+     *  delete is only used to undo a creation (via batchApply's 'delete'
+     *  op), where the correct undo of "I created this" is "it no longer
+     *  exists," not "it's unassigned." */
+    public function deleteEntry(int $id, ?string $machine, string $date, bool $forceDelete = false): void
     {
-        DB::transaction(function () use ($id, $machine, $date) {
-            // Lock the machine's rows even though nothing here needs
-            // renumbering — this closes the race where a concurrent
-            // moveLot/addBlock on the same machine reads this row as a
-            // neighbor a moment before it's deleted out from under it.
-            $this->lockMachineRows([$machine], $date);
+        DB::transaction(function () use ($id, $machine, $date, $forceDelete) {
+            if ($machine) {
+                $this->lockMachineRows([$machine], $date);
+            }
 
-            LoadingPlanEntry::where('id', $id)
-                ->where('machine', $machine)
+            $entry = LoadingPlanEntry::where('id', $id)
                 ->where('scheduled_date', $date)
-                ->delete();
+                ->first();
+
+            if (!$entry) {
+                return;
+            }
+
+            if ($forceDelete || $entry->entry_type === 'block') {
+                $entry->delete();
+                return;
+            }
+
+            // Lot, normal delete: unassign, don't remove.
+            $entry->update([
+                'machine'        => null,
+                'sequence_order' => null,
+                'lock_version'   => DB::raw('lock_version + 1'),
+            ]);
         });
     }
 
@@ -215,27 +234,72 @@ class LoadingPlanEntryService
         });
     }
 
-    /** Delete many entries at once (mixed lots/blocks, possibly spanning
-     *  several machines). Locks every distinct machine involved, sorted. */
-    public function bulkDelete(array $ids, string $date): void
+    /** Bulk version of the same rule: blocks are deleted, lots are
+     *  unassigned. Locks every distinct machine involved, sorted. */
+    public function bulkDelete(array $ids, string $date): array
     {
-        DB::transaction(function () use ($ids, $date) {
-            $machines = LoadingPlanEntry::whereIn('id', $ids)
+        return DB::transaction(function () use ($ids, $date) {
+            $entries = LoadingPlanEntry::whereIn('id', $ids)
                 ->where('scheduled_date', $date)
-                ->pluck('machine')
-                ->filter()
-                ->unique()
-                ->sort()
-                ->values()
-                ->all();
+                ->get();
 
+            $machines = $entries->pluck('machine')->filter()->unique()->sort()->values()->all();
             if (!empty($machines)) {
                 $this->lockMachineRows($machines, $date);
             }
 
-            LoadingPlanEntry::whereIn('id', $ids)
-                ->where('scheduled_date', $date)
-                ->delete();
+            $unassigned = [];
+            $deleted = [];
+
+            foreach ($entries as $entry) {
+                if ($entry->entry_type === 'block') {
+                    $deleted[] = $entry->id;
+                    $entry->delete();
+                } else {
+                    $entry->update([
+                        'machine'        => null,
+                        'sequence_order' => null,
+                        'lock_version'   => DB::raw('lock_version + 1'),
+                    ]);
+                    $unassigned[] = $entry->fresh();
+                }
+            }
+
+            return ['deleted' => $deleted, 'unassigned' => $unassigned];
+        });
+    }
+
+    /** Creates a brand-new "manual" lot — one with no backing WIP row at
+     *  all (unlike every other lot in this system, which originates from
+     *  customer_data_wip). Registers it in lot_registry with a synthetic
+     *  Lot_Id, then creates its plan entry directly on the given machine,
+     *  same positioning logic as addBlock. */
+    public function createManualLot(string $machine, string $date, array $fields, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
+    {
+        return DB::transaction(function () use ($machine, $date, $fields, $beforeEntryId, $afterEntryId) {
+            $lotId = 'MANUAL-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4));
+
+            LotRegistry::create([
+                'Lot_Id'       => $lotId,
+                'Part_Name'    => $fields['Part_Name'] ?? '',
+                'Package_Name' => $fields['Package_Name'] ?? null,
+                'Qty'          => $fields['Qty'] ?? 0,
+                'first_seen'   => now(),
+                'last_seen'    => now(),
+            ]);
+
+            $rows = $this->lockMachineRows([$machine], $date);
+            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
+
+            return LoadingPlanEntry::create([
+                'entry_type'     => 'lot',
+                'lot_id'         => $lotId,
+                'scheduled_date' => $date,
+                'machine'        => $machine,
+                'sequence_order' => $newOrder,
+                'status'         => 'NONE',
+                'lock_version'   => 1,
+            ]);
         });
     }
 
@@ -295,20 +359,19 @@ class LoadingPlanEntryService
         return LoadingPlanEntry::findOrFail($existing->id);
     }
 
-    /** Bulk field edit (e.g. "set status DONE" across a multi-select).
-     *  Each update is either:
-     *    - { id, fields, lock_version } — existing entry, optimistic-lock
-     *      checked and updated, same as editField.
-     *    - { lot_id, scheduled_date, fields } — lot never planned before,
-     *      no entry row exists yet; created fresh (entry_type: 'lot').
-     *  Returns the ids/lot_ids that were stale (existing-entry case only)
-     *  so the client can report which ones didn't apply. */
+    /** Bulk field edit (e.g. "set status DONE" across a multi-select), fully
+     *  atomic: if ANY row in the batch has a stale lock_version, the entire
+     *  batch is rolled back and nothing applies — consistent with
+     *  batchApply's all-or-nothing behavior. Throws StaleWriteException
+     *  (carrying every conflicting row's current server-side data) if any
+     *  conflict is found, so the caller can tell the user exactly what
+     *  changed underneath them. */
     public function bulkEditField(array $updates): array
     {
-        $stale = [];
-        $entries = [];
+        return DB::transaction(function () use ($updates) {
+            $entries = [];
+            $conflicts = [];
 
-        DB::transaction(function () use ($updates, &$stale, &$entries) {
             foreach ($updates as $u) {
                 $id = $u['id'] ?? null;
                 $fields = $u['fields'];
@@ -319,10 +382,11 @@ class LoadingPlanEntryService
                         ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
 
                     if ($affected === 0) {
-                        $stale[] = $id;
-                    } else {
-                        $entries[] = LoadingPlanEntry::find($id);
+                        $conflicts[] = LoadingPlanEntry::find($id);
+                        continue;
                     }
+
+                    $entries[] = LoadingPlanEntry::find($id);
                     continue;
                 }
 
@@ -330,7 +394,7 @@ class LoadingPlanEntryService
                 $scheduledDate = $u['scheduled_date'];
 
                 try {
-                    $entry = LoadingPlanEntry::create([
+                    $entries[] = LoadingPlanEntry::create([
                         'entry_type'     => 'lot',
                         'lot_id'         => $lotId,
                         'scheduled_date' => $scheduledDate,
@@ -339,7 +403,6 @@ class LoadingPlanEntryService
                         'lock_version'   => 1,
                         ...$fields,
                     ]);
-                    $entries[] = $entry;
                 } catch (\Illuminate\Database\QueryException $e) {
                     $existing = LoadingPlanEntry::where('lot_id', $lotId)
                         ->where('scheduled_date', $scheduledDate)
@@ -353,9 +416,16 @@ class LoadingPlanEntryService
                     $entries[] = $existing->fresh();
                 }
             }
-        });
 
-        return ['stale' => $stale, 'entries' => $entries];
+            if (!empty($conflicts)) {
+                // Rolling back is automatic — DB::transaction() catches this
+                // exception and rolls back everything applied in this loop so
+                // far, including any successful updates/creates above.
+                throw new BulkStaleWriteException($conflicts);
+            }
+
+            return $entries;
+        });
     }
 
     // ------------------------------------------------------------------
@@ -505,8 +575,6 @@ class LoadingPlanEntryService
             $results = [];
 
             foreach ($operations as $op) {
-                Log::info("op op op op: move, entry_type: {$op['entry_type']}, lot_id: {$op['lot_id']}, entry_id: {$op['entry_id']}, before_entry_id: {$op['before_entry_id']}, after_entry_id: {$op['after_entry_id']}, machine: {$op['machine']}, date: $date");
-
                 $results[] = match ($op['type']) {
                     'move' => $this->applyMove($op, $date),
                     'transfer' => $this->applyTransfer($op, $date),
@@ -531,9 +599,9 @@ class LoadingPlanEntryService
 
     private function applyMove(array $op, string $date)
     {
-        Log::info("operation: move, entry_type: {$op['entry_type']}, lot_id: {$op['lot_id']}, entry_id: {$op['entry_id']}, before_entry_id: {$op['before_entry_id']}, after_entry_id: {$op['after_entry_id']}, machine: {$op['machine']}, date: $date");
+        // Log::info("operation: move, entry_type: {$op['entry_type']}, lot_id: {$op['lot_id']}, entry_id: {$op['entry_id']}, before_entry_id: {$op['before_entry_id']}, after_entry_id: {$op['after_entry_id']}, machine: {$op['machine']}, date: $date");
 
-        $this->moveEntry(
+        return $this->moveEntry(
             $op['entry_type'],
             $op['lot_id'] ?? null,
             $op['entry_id'] ?? null,
@@ -546,7 +614,7 @@ class LoadingPlanEntryService
 
     private function applyTransfer(array $op, string $date)
     {
-        $this->transferEntry(
+        return $this->transferEntry(
             $op['entry_type'],
             $op['lot_id'] ?? null,
             $op['entry_id'] ?? null,
@@ -579,7 +647,7 @@ class LoadingPlanEntryService
     private function applyDelete(array $op, string $date)
     {
         $entry = LoadingPlanEntry::findOrFail($op['entry_id']);
-        $this->deleteEntry($op['entry_id'], $entry->machine, $date);
+        $this->deleteEntry($op['entry_id'], $entry->machine, $date, forceDelete: true);
         return ['deleted' => $op['entry_id']];
     }
 

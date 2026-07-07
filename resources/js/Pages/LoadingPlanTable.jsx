@@ -2211,6 +2211,10 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update) {
         );
     });
 
+    console.log("🚀 ~ syncUndoRedoToServer ~ changed:", changed);
+    console.log("🚀 ~ syncUndoRedoToServer ~ added:", added);
+    console.log("🚀 ~ syncUndoRedoToServer ~ removed:", removed);
+
     const operations = [];
     // Track which _dndId each pushed operation corresponds to, so the
     // single response array (same order as operations) can be mapped
@@ -2315,7 +2319,7 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update) {
 
     if (operations.length === 0) return;
 
-    mutate(route("loading-plan.batch-apply"), {
+    return mutate(route("loading-plan.batch-apply"), {
         body: { operations, scheduled_date: date },
     })
         .then(({ results }) => {
@@ -2346,6 +2350,8 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update) {
             // one shot, rather than reverting row-by-row.
             update(() => prevRows);
             toast?.error?.("That undo couldn't be saved and was reverted.");
+            // Optional: re-throw if you want handleUndo's try/finally to know it failed
+            // throw err;
         });
 }
 
@@ -2375,7 +2381,6 @@ export default function LoadingPlanTable({
 
     const resolvedData = initialData ?? _initialData;
     const [isDirty, setIsDirty] = useState(false);
-    const [lastSaved, setLastSaved] = useState(null);
 
     const isDirtyRef = useRef(isDirty);
     useEffect(() => {
@@ -2399,11 +2404,6 @@ export default function LoadingPlanTable({
 
     // const [activePackage, setActivePackage] = useState(() => packages[0] ?? "");
     const [activePackage, setActivePackage] = useState("LGA");
-
-    const handleSave = useCallback(async () => {
-        setIsDirty(false);
-        setLastSaved(new Date());
-    }, []); // was [data] — never used in the body
 
     // ── Selection state ──────────────────────────────────────────────────────
     const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -2501,11 +2501,27 @@ export default function LoadingPlanTable({
                             }),
                         true,
                     );
+
+                    if (stale?.length > 0) {
+                        toast?.error?.(
+                            `${stale.length} row(s) were changed by someone else and weren't updated.`,
+                        );
+                        // Optional: revert just those specific rows' tag locally, since
+                        // their optimistic update never actually persisted.
+                    }
                 })
                 .catch((err) => {
                     console.error("Bulk tag update failed:", err);
-                    undo();
-                    toast?.error?.("Couldn't apply tag — reverted.");
+                    if (err.status === 409) {
+                        undo(); // whole batch is genuinely atomic now — safe to fully revert
+                        toast?.error?.(
+                            err.data?.message ??
+                                "Some rows were changed by someone else — the tag change was cancelled.",
+                        );
+                    } else {
+                        undo();
+                        toast?.error?.("Couldn't apply tag — reverted.");
+                    }
                 });
         },
         [selectedIds, update, data, date, undo],
@@ -2552,9 +2568,17 @@ export default function LoadingPlanTable({
                 );
             })
             .catch((err) => {
-                console.error("Bulk clear tag failed:", err);
-                undo();
-                toast?.error?.("Couldn't clear tag — reverted.");
+                console.error("Bulk tag update failed:", err);
+                if (err.status === 409) {
+                    undo(); // whole batch is genuinely atomic now — safe to fully revert
+                    toast?.error?.(
+                        err.data?.message ??
+                            "Some rows were changed by someone else — the tag change was cancelled.",
+                    );
+                } else {
+                    undo();
+                    toast?.error?.("Couldn't apply tag — reverted.");
+                }
             });
     }, [selectedIds, update, data, date, undo]);
 
@@ -2605,8 +2629,16 @@ export default function LoadingPlanTable({
                 })
                 .catch((err) => {
                     console.error("Bulk status update failed:", err);
-                    undo();
-                    toast?.error?.("Couldn't update status — reverted.");
+                    if (err.status === 409) {
+                        undo();
+                        toast?.error?.(
+                            err.data?.message ??
+                                "Some rows were changed by someone else — the status update was cancelled.",
+                        );
+                    } else {
+                        undo();
+                        toast?.error?.("Couldn't update status — reverted.");
+                    }
                 });
         },
         [selectedIds, update, data, date, undo],
@@ -2678,18 +2710,25 @@ export default function LoadingPlanTable({
     );
 
     const handleBulkDelete = useCallback(() => {
-        const entryIds = data
-            .filter((r) => selectedIds.has(r._dndId) && r.entryId)
-            .map((r) => r.entryId);
+        const targets = data.filter(
+            (r) => selectedIds.has(r._dndId) && r.entryId,
+        );
+        const entryIds = targets.map((r) => r.entryId);
 
         update((prev) => {
-            const removed = new Set(
-                prev
-                    .filter((r) => selectedIds.has(r._dndId))
-                    .map((r) => r.machine),
+            const affectedMachines = new Set();
+            const next = prev
+                .map((r) => {
+                    if (!selectedIds.has(r._dndId)) return r;
+                    if (isBlockRow(r)) return r; // blocks get removed below
+                    affectedMachines.add(r.machine);
+                    return { ...r, machine: null, sequenceOrder: null };
+                })
+                .filter((r) => !(selectedIds.has(r._dndId) && isBlockRow(r)));
+
+            affectedMachines.forEach((m) =>
+                recomputeMachine(next, m, baseTimes),
             );
-            const next = prev.filter((r) => !selectedIds.has(r._dndId));
-            removed.forEach((m) => recomputeMachine(next, m, baseTimes));
             return next;
         });
         setIsDirty(true);
@@ -2698,11 +2737,26 @@ export default function LoadingPlanTable({
         if (entryIds.length > 0) {
             mutate(route("loading-plan.bulk-delete"), {
                 body: { ids: entryIds, scheduled_date: date },
-            }).catch((err) => {
-                console.error("Bulk delete failed:", err);
-                undo();
-                toast?.error?.("Couldn't delete — restored.");
-            });
+            })
+                .then(({ unassigned }) => {
+                    update(
+                        (prev) =>
+                            prev.map((r) => {
+                                const match = unassigned?.find(
+                                    (e) => e.id === r.entryId,
+                                );
+                                return match
+                                    ? { ...r, lockVersion: match.lock_version }
+                                    : r;
+                            }),
+                        true,
+                    );
+                })
+                .catch((err) => {
+                    console.error("Bulk delete failed:", err);
+                    undo();
+                    toast?.error?.("Couldn't delete/unassign — reverted.");
+                });
         }
     }, [selectedIds, update, baseTimes, clearSelection, data, date, undo]);
 
@@ -2710,6 +2764,48 @@ export default function LoadingPlanTable({
     useEffect(() => {
         dataRef.current = data;
     }, [data]);
+
+    const isSyncingRef = useRef(false);
+
+    const handleUndo = useCallback(async () => {
+        if (isSyncingRef.current) return;
+        isSyncingRef.current = true;
+
+        try {
+            const prevSnapshot = dataRef.current;
+            undo();
+            const nextSnapshot = useLoadingPlanStore.getState().present;
+            await syncUndoRedoToServer(
+                prevSnapshot,
+                nextSnapshot,
+                date,
+                mutate,
+                update,
+            );
+        } finally {
+            isSyncingRef.current = false;
+        }
+    }, [undo, date, mutate, update]);
+
+    const handleRedo = useCallback(async () => {
+        if (isSyncingRef.current) return;
+        isSyncingRef.current = true;
+
+        try {
+            const prevSnapshot = dataRef.current;
+            redo();
+            const nextSnapshot = useLoadingPlanStore.getState().present;
+            await syncUndoRedoToServer(
+                prevSnapshot,
+                nextSnapshot,
+                date,
+                mutate,
+                update,
+            );
+        } finally {
+            isSyncingRef.current = false;
+        }
+    }, [redo, date, mutate, update]);
 
     useEffect(() => {
         const onKey = (e) => {
@@ -2719,36 +2815,16 @@ export default function LoadingPlanTable({
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === "z" && !e.shiftKey) {
                     e.preventDefault();
-                    const prevSnapshot = dataRef.current;
-                    undo();
-                    const nextSnapshot = useLoadingPlanStore.getState().present;
-                    syncUndoRedoToServer(
-                        prevSnapshot,
-                        nextSnapshot,
-                        date,
-                        mutate,
-                        update,
-                    );
+                    handleUndo();
                 }
                 if (e.key === "y" || (e.key === "z" && e.shiftKey)) {
                     e.preventDefault();
-                    const prevSnapshot = dataRef.current;
-                    redo();
-                    const nextSnapshot = useLoadingPlanStore.getState().present;
-                    syncUndoRedoToServer(
-                        prevSnapshot,
-                        nextSnapshot,
-                        date,
-                        mutate,
-                        update,
-                    );
-                }
-                if (e.key === "s") {
-                    e.preventDefault();
-                    if (isDirtyRef.current) handleSave();
+                    handleRedo();
                 }
                 if (e.key === "a") {
                     e.preventDefault();
+
+                    // TODO: all rows means all packages which is not the user wants, usually they want all rows in the current package or machine.
                     setSelectedIds(
                         new Set(dataRef.current.map((r) => r._dndId)),
                     );
@@ -2757,7 +2833,7 @@ export default function LoadingPlanTable({
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [undo, redo, clearSelection, handleSave]); // handleSave now stable ([] deps), so this only re-subscribes if undo/redo/clearSelection identity changes
+    }, [undo, redo, clearSelection]);
 
     // NOTE: now that `machines` (below) is driven entirely by the MACHINES
     // config rather than by scanning data, this ref is write-only — nothing
@@ -2787,7 +2863,7 @@ export default function LoadingPlanTable({
                 Doable: row.Doable ?? 0,
                 accuTime: row.accuTime ?? row.duration ?? 0,
                 Remarks: row.Remarks ?? "",
-                _dndId: `lot-${i}`,
+                _dndId: row.entryId ? `entry-${row.entryId}` : `wip-${row.id}`,
             };
         });
 
@@ -3395,52 +3471,81 @@ export default function LoadingPlanTable({
 
     const handleAddRow = useCallback(
         (machine) => {
-            // Default to the first package in the active group — the user
-            // can correct it afterwards via the Package cell's dropdown,
-            // same as fixing a status.
+            const partName = window.prompt(
+                "Part name for this manual lot:",
+                "",
+            );
+            if (partName === null) return; // cancelled
+
+            const qtyStr = window.prompt("Quantity:", "0");
+            if (qtyStr === null) return; // cancelled
+            const qty = parseInt(qtyStr, 10) || 0;
+
             const groupPkgs = packagesInGroup(activePackage);
             const packageName = groupPkgs[0] ?? activePackage;
 
-            update((prev) => {
-                const next = [...prev];
-                const newRow = {
+            mutate(route("loading-plan.manual-lots.store"), {
+                body: {
                     machine,
-                    item: 0,
-                    Part_Name: "",
-                    Lead_Count: null,
-                    Package_Name: packageName,
-                    Lot_Id: "",
-                    status: "NONE",
-                    Station: "",
-                    Qty: 0,
-                    Doable: 0,
-                    accuTime: 0,
-                    Lot_Type: "",
-                    Lot_Status: "",
-                    Focus_Group: "",
-                    Stage: "",
-                    Lot_Entry_Time_Days: null,
-                    CR3: null,
-                    BE_OSL_Days: null,
-                    Body_Size: "",
-                    Ramp_Time: null,
-                    Remarks: "",
-                    // Hidden columns for derived calcs
-                    Date_Loaded: null,
-                    BE_Starttime: null,
-                    Backend_Leadtime: null,
-                    tag: null,
-                    _dndId: `lot-new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                };
-                next.push(newRow);
-                recomputeMachine(next, machine, baseTimes);
-                return next;
-            });
-            setIsDirty(true);
-            addSeenPair(machine, packageName);
-            setJustAddedMachine(machine);
+                    scheduled_date: date,
+                    fields: {
+                        Part_Name: partName.trim(),
+                        Package_Name: packageName,
+                        Qty: qty,
+                    },
+                    before_entry_id: null,
+                    after_entry_id: null, // appends to end
+                },
+            })
+                .then((entry) => {
+                    update((prev) => {
+                        const next = [...prev];
+                        next.push({
+                            machine,
+                            item: 0,
+                            Part_Name: partName.trim(),
+                            Lead_Count: null,
+                            Package_Name: packageName,
+                            Lot_Id: entry.lot_id,
+                            status: entry.status ?? "NONE",
+                            Station: "",
+                            Qty: qty,
+                            Doable: 0,
+                            accuTime: 0,
+                            Lot_Type: "",
+                            Lot_Status: "",
+                            Focus_Group: "",
+                            Stage: "",
+                            Lot_Entry_Time_Days: null,
+                            CR3: null,
+                            BE_OSL_Days: null,
+                            Body_Size: "",
+                            Ramp_Time: null,
+                            Remarks: "",
+                            Date_Loaded: null,
+                            BE_Starttime: null,
+                            Backend_Leadtime: null,
+                            tag: null,
+                            entryId: entry.id,
+                            sequenceOrder: entry.sequence_order,
+                            lockVersion: entry.lock_version,
+                            _dndId: `entry-${entry.id}`,
+                        });
+                        recomputeMachine(next, machine, baseTimes);
+                        return next;
+                    });
+                    setIsDirty(true);
+                    addSeenPair(machine, packageName);
+                    setJustAddedMachine(machine);
+                })
+                .catch((err) => {
+                    console.error("Failed to create manual lot:", err);
+                    toast?.error?.(
+                        "Couldn't create the new lot — please try again.",
+                    );
+                });
         },
-        [activePackage, baseTimes, update, addSeenPair],
+        [activePackage, baseTimes, update, addSeenPair, date],
     );
 
     const handleAddBlock = useCallback(
@@ -3486,7 +3591,7 @@ export default function LoadingPlanTable({
                             blockLabel: entry.block_label,
                             entryId: entry.id,
                             lockVersion: entry.lock_version,
-                            _dndId: `block-${entry.id}`,
+                            _dndId: `entry-${entry.id}`,
                         });
                         recomputeMachine(next, machine, baseTimes);
                         return next;
@@ -3570,7 +3675,7 @@ export default function LoadingPlanTable({
                     <div className="flex-none px-4 pt-4">
                         <div className="flex items-center gap-2 mb-3">
                             <button
-                                onClick={undo}
+                                onClick={() => handleUndo()}
                                 disabled={!canUndo()}
                                 className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
                                 title="Undo (Ctrl+Z)"
@@ -3578,29 +3683,13 @@ export default function LoadingPlanTable({
                                 ↩ Undo
                             </button>
                             <button
-                                onClick={redo}
+                                onClick={() => handleRedo()}
                                 disabled={!canRedo()}
                                 className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
                                 title="Redo (Ctrl+Y)"
                             >
                                 ↪ Redo
                             </button>
-                            {isDirty && (
-                                <span className="text-xs text-warning ml-2">
-                                    Unsaved changes ·{" "}
-                                    <button
-                                        onClick={handleSave}
-                                        className="underline"
-                                    >
-                                        Save
-                                    </button>
-                                </span>
-                            )}
-                            {lastSaved && !isDirty && (
-                                <span className="text-xs text-base-content/40">
-                                    Saved {lastSaved.toLocaleTimeString()}
-                                </span>
-                            )}
                             {selectedIds.size > 0 && (
                                 <span className="text-xs text-info ml-2">
                                     {selectedIds.size} row
