@@ -52,6 +52,22 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date'  => 'required|date',
         ]);
 
+        // Unassigned isn't a real machine — order doesn't apply there, so this
+        // is an unassign, not a transfer. deleteEntry() (non-force) already
+        // does exactly that: clears machine/sequence_order, keeps the row.
+        if ($data['target_machine'] === null) {
+            $entry = $this->service->resolveEntry(
+                $data['entry_type'],
+                $data['lot_id'] ?? null,
+                $data['entry_id'] ?? null,
+                $data['scheduled_date'],
+            );
+
+            $this->service->deleteEntry($entry->id, $entry->machine, $data['scheduled_date']);
+
+            return response()->json($entry->fresh());
+        }
+
         $entry = $this->service->transferEntry(
             $data['entry_type'],
             $data['lot_id'] ?? null,
@@ -222,6 +238,7 @@ class LoadingPlanEntryController extends Controller
     {
         $data = $request->validate([
             'operations'                   => 'required|array|min:1',
+            'operations.*.fields'          => 'nullable|array',
             'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field',
             'operations.*.entry_type'      => 'nullable|string',
             'operations.*.before_entry_id' => 'nullable|integer',
@@ -230,6 +247,7 @@ class LoadingPlanEntryController extends Controller
             'operations.*.target_machine'  => 'nullable|string',
             'operations.*.lot_id'          => 'nullable|string',
             'operations.*.entry_id'        => 'nullable|integer',
+            'operations.*.lock_version'    => 'nullable|integer',
             'scheduled_date'               => 'nullable|date',
         ]);
 

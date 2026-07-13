@@ -133,40 +133,6 @@ class F1F2WipRepository
     }, $data);
 
     CustomerDataWip::insert($data);
-
-    $this->upsertLotRegistry($data);
-  }
-
-  private function upsertLotRegistry(array $data): void
-  {
-    $now = now();
-    $rows = [];
-    $seen = [];
-
-    foreach ($data as $row) {
-      $lotId = $row['Lot_Id'] ?? null;
-      if (!$lotId || isset($seen[$lotId])) {
-        continue; // guard against duplicate Lot_Id within the same chunk
-      }
-      $seen[$lotId] = true;
-
-      $rows[] = [
-        'Lot_Id'       => $lotId,
-        'Part_Name'    => $row['Part_Name'] ?? null,
-        'Package_Name' => $row['Package_Name'] ?? null,
-        'Qty'          => $row['Qty'] ?? null,
-        'first_seen'   => $now,
-        'last_seen'    => $now,
-      ];
-    }
-
-    if (!empty($rows)) {
-      DB::table('lot_registry')->upsert(
-        $rows,
-        ['Lot_Id'],
-        ['Part_Name', 'Package_Name', 'Qty', 'last_seen']
-      );
-    }
   }
 
   public function applyStationFilter($query, array $includeStations = [], array $excludeStations = []): Builder

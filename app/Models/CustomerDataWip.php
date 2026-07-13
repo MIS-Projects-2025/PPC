@@ -61,7 +61,7 @@ class CustomerDataWip extends Model
 
   // ---- Scopes for the WIP Loading Plan filtration ----
 
-  // keep only Station names that are tape-and-reel ("_T") stations
+  // keep only Station names that are tape-and-reel ("_T") stations except for GTTRES_T (which is a tape-and-reel station but not part of the WIP Loading Plan)
   public function scopeTapeReelStations(Builder $q): Builder
   {
     return $q->whereIn('Station', config('wip.tape_reel_stations'))

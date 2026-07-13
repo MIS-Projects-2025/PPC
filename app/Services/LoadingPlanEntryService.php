@@ -6,7 +6,6 @@ use App\Exceptions\SequenceExhaustedException;
 use App\Exceptions\BulkStaleWriteException;
 use App\Exceptions\StaleWriteException;
 use App\Models\LoadingPlanEntry;
-use App\Models\LotRegistry;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
@@ -40,7 +39,7 @@ class LoadingPlanEntryService
 
     /** Resolve the entry being moved/transferred, given the same discriminated
      *  identifier the controller validates: lot_id for lots, entry id for blocks. */
-    private function resolveEntry(string $entryType, string|int|null $lotId, ?int $entryId, string $date): LoadingPlanEntry
+    public function resolveEntry(string $entryType, string|int|null $lotId, ?int $entryId, string $date): LoadingPlanEntry
     {
         return $entryType === 'block'
             ? LoadingPlanEntry::where('id', $entryId)
@@ -269,24 +268,10 @@ class LoadingPlanEntryService
         });
     }
 
-    /** Creates a brand-new "manual" lot — one with no backing WIP row at
-     *  all (unlike every other lot in this system, which originates from
-     *  customer_data_wip). Registers it in lot_registry with a synthetic
-     *  Lot_Id, then creates its plan entry directly on the given machine,
-     *  same positioning logic as addBlock. */
     public function createManualLot(string $machine, string $date, array $fields, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
     {
         return DB::transaction(function () use ($machine, $date, $fields, $beforeEntryId, $afterEntryId) {
             $lotId = 'MANUAL-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4));
-
-            LotRegistry::create([
-                'Lot_Id'       => $lotId,
-                'Part_Name'    => $fields['Part_Name'] ?? '',
-                'Package_Name' => $fields['Package_Name'] ?? null,
-                'Qty'          => $fields['Qty'] ?? 0,
-                'first_seen'   => now(),
-                'last_seen'    => now(),
-            ]);
 
             $rows = $this->lockMachineRows([$machine], $date);
             $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
@@ -294,6 +279,9 @@ class LoadingPlanEntryService
             return LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
                 'lot_id'         => $lotId,
+                'part_name'      => $fields['Part_Name'] ?? '',
+                'package_name'   => $fields['Package_Name'] ?? null,
+                'qty'            => $fields['Qty'] ?? 0,
                 'scheduled_date' => $date,
                 'machine'        => $machine,
                 'sequence_order' => $newOrder,

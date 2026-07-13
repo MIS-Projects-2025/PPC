@@ -11,6 +11,9 @@ class LoadingPlanEntry extends Model
     protected $fillable = [
         'entry_type',
         'lot_id',
+        'part_name',
+        'package_name',
+        'qty',
         'scheduled_date',
         'machine',
         'sequence_order',
@@ -26,9 +29,4 @@ class LoadingPlanEntry extends Model
         'scheduled_date' => 'date',
         'sequence_order' => 'float',
     ];
-
-    public function lot()
-    {
-        return $this->belongsTo(LotRegistry::class, 'lot_id', 'Lot_Id');
-    }
 }

@@ -96,7 +96,6 @@ class LoadingPlanSeeder extends Seeder
         $this->seedMachines();
         $bandsByPlatform = $this->seedCapacityBands();
         $wipRows = $this->seedCustomerDataWip();
-        $this->seedLotRegistry($wipRows);
         $this->seedLoadingPlanEntries(array_column($wipRows, 'Lot_Id'), array_keys($bandsByPlatform));
     }
 
@@ -105,54 +104,21 @@ class LoadingPlanSeeder extends Seeder
     // ------------------------------------------------------------------
     //
     // customer_data_wip has no unique constraints of its own, and
-    // loading_plan_entries/lot_registry both have unique/FK constraints
-    // that collide on a second run (same day => same Lot_Ids => same
-    // (lot_id, scheduled_date) and (machine, scheduled_date,
-    // sequence_order) pairs). Truncating first makes re-running safe.
+    // loading_plan_entries has a unique (machine, scheduled_date,
+    // sequence_order) that collides on a second run (same day => same
+    // Lot_Ids => same tuples). Truncating first makes re-running safe.
     //
-    // Order matters: loading_plan_entries has an FK to lot_registry, so
-    // it must be truncated before lot_registry. machines/capacity_bands
-    // are handled separately via upsert() and are left alone here.
+    // lot_registry no longer exists (dropped — manual lots now store
+    // Part_Name/Package_Name/Qty directly on loading_plan_entries), so it's
+    // no longer part of this truncate or the seeding order below.
+    // machines/capacity_bands are handled separately via upsert() and are
+    // left alone here.
     private function truncateOwnedTables(): void
     {
         DB::statement('SET FOREIGN_KEY_CHECKS=0');
         DB::table('loading_plan_entries')->truncate();
-        DB::table('lot_registry')->truncate();
         DB::table('customer_data_wip')->truncate();
         DB::statement('SET FOREIGN_KEY_CHECKS=1');
-    }
-
-    // ------------------------------------------------------------------
-    // lot_registry
-    // ------------------------------------------------------------------
-    //
-    // loading_plan_entries.lot_id has an FK against lot_registry.Lot_Id,
-    // so every lot we plan against must exist here first. Mirrors the
-    // subset of fields lot_registry actually has (Lot_Id, Part_Name,
-    // Package_Name, Qty) straight off the customer_data_wip rows we just
-    // created, so the two stay consistent.
-    private function seedLotRegistry(array $wipRows): void
-    {
-        $now = now();
-        $rows = array_map(
-            fn($w) => [
-                'Lot_Id'       => $w['Lot_Id'],
-                'Part_Name'    => $w['Part_Name'],
-                'Package_Name' => $w['Package_Name'],
-                'Qty'          => $w['Qty'],
-                'first_seen'   => $now,
-                'last_seen'    => $now,
-            ],
-            $wipRows
-        );
-
-        foreach (array_chunk($rows, 100) as $chunk) {
-            DB::table('lot_registry')->upsert(
-                $chunk,
-                ['Lot_Id'],
-                ['Part_Name', 'Package_Name', 'Qty', 'last_seen']
-            );
-        }
     }
 
     // ------------------------------------------------------------------
@@ -325,8 +291,6 @@ class LoadingPlanSeeder extends Seeder
             DB::table('customer_data_wip')->insert($chunk);
         }
 
-        // Return the full rows (not just IDs) so seedLotRegistry() can pull
-        // Part_Name/Package_Name/Qty straight off them.
         return $rows;
     }
 

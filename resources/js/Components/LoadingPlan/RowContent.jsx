@@ -1,0 +1,407 @@
+import { COL_WIDTHS } from "@/Components/LoadingPlan/columns.jsx";
+import { formatExpectedPT } from "@/Lib/time.js";
+import { CSS } from "@dnd-kit/utilities";
+import { flexRender } from "@tanstack/react-table";
+import {
+    createContext,
+    memo,
+    useCallback,
+    useContext,
+    useEffect,
+    useRef,
+} from "react";
+import { GripIcon } from "./GripIcon";
+import { StatusBadge } from "./StatusBadge";
+import { TAGS, TagDot } from "./Tag";
+
+/**
+ * Editable columns and their input types.
+ * accuTime replaces the old "duration" as the editable queue-time field.
+ * Package_Name is intentionally NOT here — it has its own dropdown editor
+ * (handlePackageClick), scoped to the row's current group, mirroring how
+ * `status` already works.
+ * Capacity_UPH is intentionally NOT here either — it's fully derived from
+ * (Qty, the lot's current machine's platform) via CAPACITY_BANDS, so it's
+ * a display column now, recomputed live on every render (see its
+ * columnHelper.display definition below).
+ */
+export const EDITABLE_COLUMNS = {
+    Doable: "integer",
+    accuTime: "integer",
+    Remarks: "string",
+};
+
+function RowCheckbox({ checked, indeterminate, onChange, title }) {
+    const ref = useRef(null);
+    useEffect(() => {
+        if (ref.current) ref.current.indeterminate = Boolean(indeterminate);
+    }, [indeterminate]);
+    return (
+        <input
+            ref={ref}
+            type="checkbox"
+            checked={checked}
+            onChange={onChange}
+            title={title ?? "Select row"}
+            className="checkbox checkbox-info cursor-pointer"
+            onClick={(e) => e.stopPropagation()}
+        />
+    );
+}
+
+export const TableActionsContext = createContext(null);
+
+const RowContent = memo(
+    function RowContent({
+        row,
+        orderedDndIds,
+        setNodeRef,
+        virtualIndex,
+        transform,
+        transition,
+        isDragging,
+        dragHandleProps,
+        itemNumber,
+        isSortable,
+    }) {
+        const {
+            handleStatusClick,
+            handleCellClick,
+            handlePackageClick,
+            selectedIds,
+            handleRowSelect,
+        } = useContext(TableActionsContext);
+
+        const isSelected = selectedIds.has(row.original._dndId);
+        const tag = row.original.tag ?? null;
+        const tagCfg = tag ? TAGS[tag] : null;
+
+        const handleItemClick = useCallback(
+            (e) => {
+                e.stopPropagation();
+                handleRowSelect(
+                    row.original._dndId,
+                    e.shiftKey,
+                    e.ctrlKey || e.metaKey,
+                    orderedDndIds,
+                );
+            },
+            [row.original._dndId, handleRowSelect, orderedDndIds],
+        );
+
+        const handleCheckboxChange = useCallback(
+            (e) => {
+                handleRowSelect(
+                    row.original._dndId,
+                    e.nativeEvent.shiftKey,
+                    e.nativeEvent.ctrlKey || e.nativeEvent.metaKey,
+                    orderedDndIds,
+                );
+            },
+            [row.original._dndId, handleRowSelect, orderedDndIds],
+        );
+
+        // ── Block row ────────────────────────────────────────────────────────
+        if (row.original?.isBlock === true) {
+            const r = row.original;
+            return (
+                <tr
+                    ref={setNodeRef}
+                    data-index={virtualIndex}
+                    style={{
+                        transform: CSS.Transform.toString(transform),
+                        transition,
+                        opacity: isDragging ? 0.3 : 1,
+                        backgroundImage: isSelected
+                            ? undefined
+                            : "repeating-linear-gradient(45deg,oklch(var(--bc)/0.06),oklch(var(--bc)/0.12) 10px,transparent 10px,transparent 20px)",
+                    }}
+                    className={`border-b border-base-300 last:border-0 border-l-2 ${
+                        isSelected
+                            ? "bg-info/10 border-l-info"
+                            : tagCfg
+                              ? `${tagCfg.bg} ${tagCfg.border}`
+                              : "border-l-transparent"
+                    }`}
+                >
+                    <td className="px-1 text-center">
+                        <div className="flex items-center gap-1">
+                            <RowCheckbox
+                                checked={isSelected}
+                                onChange={handleCheckboxChange}
+                                title="Select row (Shift+click for range, Ctrl+click to add)"
+                            />
+                            <button
+                                className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/70 active:cursor-grabbing p-1 rounded"
+                                {...dragHandleProps}
+                                disabled={!isSortable}
+                                tabIndex={-1}
+                                aria-label="Drag to reorder"
+                            >
+                                <GripIcon />
+                            </button>
+                        </div>
+                    </td>
+                    <td
+                        style={{
+                            width: COL_WIDTHS.item,
+                            maxWidth: COL_WIDTHS.item,
+                        }}
+                        className="px-2.5 text-xs text-base-content/40"
+                    >
+                        <div className="flex items-center gap-1">
+                            <TagDot tag={tag} />
+                            {itemNumber}
+                        </div>
+                    </td>
+                    <td
+                        colSpan={4}
+                        style={{
+                            width:
+                                COL_WIDTHS.Part_Name +
+                                COL_WIDTHS.Lead_Count +
+                                COL_WIDTHS.Package_Name +
+                                COL_WIDTHS.Lot_Id,
+                        }}
+                        className="px-2.5 text-sm font-medium text-base-content whitespace-nowrap overflow-hidden text-ellipsis"
+                    >
+                        - - - - - - {r.blockLabel || "Time block"} - - - - - -
+                    </td>
+                    <td style={{ width: COL_WIDTHS.status }} />
+                    <td style={{ width: COL_WIDTHS.Station }} />
+                    <td style={{ width: COL_WIDTHS.Qty }} />
+                    <td style={{ width: COL_WIDTHS.Doable }} />
+                    <td style={{ width: COL_WIDTHS.Capacity_UPH }} />
+                    <td
+                        style={{
+                            width: COL_WIDTHS.accuTime,
+                            maxWidth: COL_WIDTHS.accuTime,
+                        }}
+                        className="px-2.5 text-sm cursor-text hover:bg-info/10 hover:ring-1 hover:ring-info/30"
+                        onClick={(e) =>
+                            handleCellClick(e, r._dndId, "accuTime")
+                        }
+                    >
+                        {(() => {
+                            const v = Number(r.accuTime) || 0;
+                            const h = Math.floor(v / 60);
+                            const m = v % 60;
+                            return h > 0 ? `${h}h ${m}m` : `${m}m`;
+                        })()}
+                    </td>
+                    <td
+                        style={{ width: COL_WIDTHS.timeStart }}
+                        className="px-2.5 text-sm text-base-content"
+                    >
+                        {r.timeStart}
+                    </td>
+                    <td
+                        style={{ width: COL_WIDTHS.timeEnd }}
+                        className="px-2.5 text-sm text-base-content"
+                    >
+                        {r.timeEnd}
+                    </td>
+                    <td
+                        style={{ width: COL_WIDTHS.expectedPT }}
+                        className="px-2.5 text-sm text-base-content"
+                    >
+                        {formatExpectedPT(r.accuTime)}
+                    </td>
+                    <td style={{ width: COL_WIDTHS.Lot_Type }} />
+                    <td style={{ width: COL_WIDTHS.Lot_Status }} />
+                    <td style={{ width: COL_WIDTHS.focusGroupStage }} />
+                    <td style={{ width: COL_WIDTHS.Lot_Entry_Time_Days }} />
+                    <td style={{ width: COL_WIDTHS.CR3 }} />
+                    <td style={{ width: COL_WIDTHS.BE_OSL_Days }} />
+                    <td style={{ width: COL_WIDTHS.CT }} />
+                    <td style={{ width: COL_WIDTHS.OSL }} />
+                    <td style={{ width: COL_WIDTHS.Body_Size }} />
+                    <td style={{ width: COL_WIDTHS.Ramp_Time }} />
+                    <td style={{ width: COL_WIDTHS.Remarks }} />
+                </tr>
+            );
+        }
+
+        // ── Normal lot row ───────────────────────────────────────────────────
+        return (
+            <tr
+                ref={setNodeRef}
+                data-index={virtualIndex}
+                style={{
+                    transform: CSS.Transform.toString(transform),
+                    transition,
+                    opacity: isDragging ? 0.3 : 1,
+                }}
+                className={`border-b border-base-300 last:border-0 border-l-2 transition-colors ${
+                    isSelected
+                        ? "bg-info/10 border-l-info"
+                        : tagCfg
+                          ? `${tagCfg.bg} ${tagCfg.border} hover:brightness-95`
+                          : !row.original.Lot_Id
+                            ? "bg-warning/10 border-l-warning/60 hover:bg-base-200"
+                            : "border-l-transparent hover:bg-base-200"
+                }`}
+            >
+                <td className="w-9 px-1 text-center">
+                    <div className="flex items-center gap-1">
+                        <RowCheckbox
+                            checked={isSelected}
+                            onChange={handleCheckboxChange}
+                            title="Select row (Shift+click for range, Ctrl+click to add)"
+                        />
+                        <button
+                            className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/50 active:cursor-grabbing p-1 rounded"
+                            {...dragHandleProps}
+                            tabIndex={-1}
+                            disabled={!isSortable}
+                            aria-label="Drag to reorder or transfer"
+                        >
+                            <GripIcon />
+                        </button>
+                    </div>
+                </td>
+                {row.getVisibleCells().map((cell) => {
+                    if (cell.column.id === "drag") return null;
+
+                    if (cell.column.id === "item") {
+                        return (
+                            <td
+                                key={cell.id}
+                                style={{
+                                    width: cell.column.getSize(),
+                                    maxWidth: cell.column.getSize(),
+                                }}
+                                className="px-2.5 text-sm cursor-pointer select-none hover:text-info"
+                                onClick={handleItemClick}
+                                title="Click to select · Shift+click to range-select · Ctrl+click to add/remove"
+                            >
+                                <div className="flex items-center gap-1">
+                                    <TagDot tag={tag} />
+                                    <span
+                                        className={`text-xs font-mono ${isSelected ? "text-info font-medium" : "text-base-content/40"}`}
+                                    >
+                                        {itemNumber}
+                                    </span>
+                                </div>
+                            </td>
+                        );
+                    }
+
+                    if (cell.column.id === "status") {
+                        return (
+                            <td
+                                key={cell.id}
+                                style={{
+                                    width: cell.column.getSize(),
+                                    maxWidth: cell.column.getSize(),
+                                }}
+                                className="px-2.5 text-sm"
+                            >
+                                <button
+                                    className="btn btn-ghost w-full px-0 justify-start items-center"
+                                    onClick={(e) =>
+                                        handleStatusClick(
+                                            e,
+                                            row.original._dndId,
+                                        )
+                                    }
+                                >
+                                    <StatusBadge
+                                        status={
+                                            row.original.status === null
+                                                ? "NONE"
+                                                : row.original.status
+                                        }
+                                    />
+                                </button>
+                            </td>
+                        );
+                    }
+
+                    if (cell.column.id === "Package_Name") {
+                        return (
+                            <td
+                                key={cell.id}
+                                style={{
+                                    width: cell.column.getSize(),
+                                    maxWidth: cell.column.getSize(),
+                                }}
+                                className="px-2.5 text-sm"
+                            >
+                                <button
+                                    className="btn btn-ghost w-full text-left justify-start px-1.5 hover:bg-info/10 hover:ring-1 hover:ring-info/30 rounded"
+                                    onClick={(e) =>
+                                        handlePackageClick(
+                                            e,
+                                            row.original._dndId,
+                                            row.original.Package_Name,
+                                        )
+                                    }
+                                >
+                                    <span className="text-sm whitespace-nowrap overflow-hidden text-ellipsis">
+                                        {row.original.Package_Name ?? "—"}
+                                    </span>
+                                </button>
+                            </td>
+                        );
+                    }
+
+                    const colId = cell.column.id;
+                    const isEditable = Boolean(EDITABLE_COLUMNS[colId]);
+
+                    return (
+                        <td
+                            key={cell.id}
+                            style={{
+                                width: cell.column.getSize(),
+                                maxWidth: cell.column.getSize(),
+                            }}
+                            className={`px-2.5 text-sm whitespace-nowrap overflow-hidden text-ellipsis text-base-content ${
+                                isEditable
+                                    ? "cursor-text hover:bg-info/10 hover:ring-1 hover:ring-info/30"
+                                    : ""
+                            } ${colId === "Doable" ? "text-error" : ""}`}
+                            title={
+                                typeof cell.getValue() === "string" ||
+                                typeof cell.getValue() === "number"
+                                    ? String(cell.getValue())
+                                    : undefined
+                            }
+                            onClick={
+                                isEditable
+                                    ? (e) =>
+                                          handleCellClick(
+                                              e,
+                                              row.original._dndId,
+                                              colId,
+                                          )
+                                    : undefined
+                            }
+                        >
+                            {flexRender(
+                                cell.column.columnDef.cell,
+                                cell.getContext(),
+                            )}
+                        </td>
+                    );
+                })}
+            </tr>
+        );
+    },
+    (prev, next) => {
+        const po = prev.row.original;
+        const no = next.row.original;
+        return (
+            po === no &&
+            prev.orderedDndIds === next.orderedDndIds &&
+            prev.isDragging === next.isDragging &&
+            prev.virtualIndex === next.virtualIndex &&
+            prev.transform?.x === next.transform?.x &&
+            prev.transform?.y === next.transform?.y &&
+            prev.transition === next.transition &&
+            prev.isSortable === next.isSortable
+        );
+    },
+);
+
+export default RowContent;

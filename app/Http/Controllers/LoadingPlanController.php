@@ -15,11 +15,40 @@ class LoadingPlanController extends Controller
     {
         $date = $request->get('date', now()->toDateString());
 
+        [$result, $wipRows] = $this->buildPlanRows($date);
+
+        return Inertia::render(
+            'LoadingPlanTable',
+            [
+                'data'   => $result,
+                'date'   => $date,
+                'status' => $wipRows->isEmpty() ? 'not_imported' : 'ok',
+            ]
+        );
+    }
+
+    public function byMachine(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'date'       => 'required|date',
+            'machines'   => 'required|array|min:1',
+            'machines.*' => 'string',
+        ]);
+
+        [$result] = $this->buildPlanRows($data['date']);
+
+        $filtered = $result
+            ->whereIn('machine', $data['machines'])
+            ->values();
+
+        return response()->json(['data' => $filtered]);
+    }
+
+    /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
+    private function buildPlanRows(string $date): array
+    {
         $allEntries = LoadingPlanEntry::where('scheduled_date', $date)->get();
 
-        // lot_id is unique per (lot_id, scheduled_date) thanks to the
-        // uniq_lot_per_day constraint, so this is safe to key by lot_id —
-        // block entries (lot_id === null) are handled separately below.
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
         $blockEntries = $allEntries->where('entry_type', 'block');
 
@@ -37,9 +66,6 @@ class LoadingPlanController extends Controller
 
             $doable = $calc->doable($wip->Lot_Id, $wip->Qty);
             $capacityUph = $calc->capacityUph($machine, $wip->Qty);
-            // accu_time on the entry (if the user has ever edited it)
-            // takes priority over the derived value — same "editable
-            // overrides computed" pattern as the rest of the plan.
             $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
 
             return [
@@ -79,19 +105,10 @@ class LoadingPlanController extends Controller
             ];
         });
 
-        // Manual lots: entries with entry_type 'lot' whose Lot_Id has no
-        // matching WIP row at all — these exist purely from
-        // createManualLot(), so display them from lot_registry + the entry
-        // itself, with every WIP-only field left null.
         $wipLotIds = $wipRows->pluck('Lot_Id')->all();
         $manualLotEntries = $lotEntries->reject(fn($entry, $lotId) => in_array($lotId, $wipLotIds));
 
-        $manualLotIds = $manualLotEntries->keys()->all();
-        $lotRegistryByLotId = \App\Models\LotRegistry::whereIn('Lot_Id', $manualLotIds)->get()->keyBy('Lot_Id');
-
-        $manualLotResults = $manualLotEntries->map(function ($entry) use ($lotRegistryByLotId) {
-            $registry = $lotRegistryByLotId->get($entry->lot_id);
-
+        $manualLotResults = $manualLotEntries->map(function ($entry) {
             return [
                 'id'                  => null,
                 'entryId'             => $entry->id,
@@ -99,13 +116,13 @@ class LoadingPlanController extends Controller
                 'machine'             => $entry->machine,
                 'sequenceOrder'       => $entry->sequence_order,
                 'item'                => $entry->sequence_order,
-                'Part_Name'           => $registry->Part_Name ?? '',
+                'Part_Name'           => $entry->part_name ?? '',
                 'Lead_Count'          => null,
-                'Package_Name'        => $registry->Package_Name ?? null,
+                'Package_Name'        => $entry->package_name,
                 'Lot_Id'              => $entry->lot_id,
                 'status'              => $entry->status ?? null,
                 'Station'             => null,
-                'Qty'                 => $registry->Qty ?? 0,
+                'Qty'                 => $entry->qty ?? 0,
                 'Lot_Type'            => null,
                 'Prod_Area'           => null,
                 'Lot_Status'          => null,
@@ -126,7 +143,7 @@ class LoadingPlanController extends Controller
                 'tag'                 => $entry->tag ?? null,
                 'lockVersion'         => $entry->lock_version,
                 'isBlock'             => false,
-                'isManual'            => true, // lets the frontend distinguish if ever needed
+                'isManual'            => true,
             ];
         })->values();
 
@@ -169,20 +186,8 @@ class LoadingPlanController extends Controller
             ];
         });
 
-        // Merge, then sort so each machine's rows appear in true saved
-        // order (Unassigned/no-entry lots have sequenceOrder === null —
-        // sorted last within their bucket, order among themselves is
-        // otherwise arbitrary/stable by original WIP fetch order).
-        // $result = $lotResults->concat($blockResults)
-        //     ->sortBy([
-        //         fn($r) => $r['machine'] ?? '',
-        //         fn($r) => $r['sequenceOrder'] ?? PHP_FLOAT_MAX,
-        //     ])
-        //     ->values();
-
         $result = $lotResults->concat($manualLotResults)->concat($blockResults)
             ->sort(function ($a, $b) {
-                // Nulls (Unassigned) always sort last, unconditionally
                 if (($a['machine'] === null) !== ($b['machine'] === null)) {
                     return $a['machine'] === null ? 1 : -1;
                 }
@@ -201,15 +206,6 @@ class LoadingPlanController extends Controller
             })
             ->values();
 
-        // Log::info('result', $result->toArray());
-
-        return Inertia::render(
-            'LoadingPlanTable',
-            [
-                'data'   => $result,
-                'date'   => $date,
-                'status' => $wipRows->isEmpty() ? 'not_imported' : 'ok',
-            ]
-        );
+        return [$result, $wipRows];
     }
 }
