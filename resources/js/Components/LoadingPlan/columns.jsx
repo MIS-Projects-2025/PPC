@@ -41,7 +41,7 @@ export const COLUMNS = [
 
     columnHelper.accessor("Package_Name", {
         header: "Package",
-        size: 100,
+        size: 150,
         // Rendering for normal rows is special-cased in RowContent (clickable,
         // opens the package dropdown) — this default cell is only used as a
         // fallback (e.g. DragGhostRow reads Package_Name directly, not via
@@ -61,6 +61,17 @@ export const COLUMNS = [
             <StatusBadge
                 status={info.getValue() === null ? "NONE" : info.getValue()}
             />
+        ),
+    }),
+
+    // ── Editable free-text ──────────────────────────────────────────────────
+    columnHelper.accessor("Remarks", {
+        header: "Remarks",
+        size: 160,
+        cell: (info) => (
+            <span className="text-xs text-base-content/60 italic">
+                {info.getValue() || ""}
+            </span>
         ),
     }),
 
@@ -87,7 +98,7 @@ export const COLUMNS = [
     columnHelper.display({
         id: "Capacity_UPH",
         header: "Capacity UPH",
-        size: 90,
+        size: 140,
         enableSorting: false,
         cell: (info) => {
             const r = info.row.original;
@@ -111,20 +122,32 @@ export const COLUMNS = [
     // ── Derived time columns ────────────────────────────────────────────────
     columnHelper.accessor("timeStart", {
         header: "Time Start",
-        size: 75,
+        size: 120,
         enableSorting: false,
+        cell: (info) => {
+            const row = info.row.original;
+            return row.timeStartDayOffset > 0
+                ? `${info.getValue()} +${row.timeStartDayOffset}d`
+                : info.getValue();
+        },
     }),
 
     columnHelper.accessor("timeEnd", {
         header: "Time End",
-        size: 75,
+        size: 120,
         enableSorting: false,
+        cell: (info) => {
+            const row = info.row.original;
+            return row.timeStartDayOffset > 0
+                ? `${info.getValue()} +${row.timeStartDayOffset}d`
+                : info.getValue();
+        },
     }),
 
     columnHelper.display({
         id: "expectedPT",
         header: "Expected PT",
-        size: 85,
+        size: 120,
         enableSorting: false,
         cell: (info) => formatExpectedPT(info.row.original.accuTime),
     }),
@@ -132,7 +155,7 @@ export const COLUMNS = [
     // ── More read-only data columns ─────────────────────────────────────────
     columnHelper.accessor("Lot_Type", {
         header: "Lot Type",
-        size: 65,
+        size: 95,
     }),
 
     columnHelper.accessor("Lot_Status", {
@@ -157,7 +180,7 @@ export const COLUMNS = [
 
     columnHelper.accessor("Lot_Entry_Time_Days", {
         header: "Entry Days",
-        size: 75,
+        size: 95,
         cell: (info) => fmt2dp(info.getValue()),
     }),
 
@@ -169,38 +192,30 @@ export const COLUMNS = [
 
     columnHelper.accessor("BE_OSL_Days", {
         header: "BE OSL Days",
-        size: 85,
+        size: 125,
         cell: (info) => fmt2dp(info.getValue()),
     }),
 
-    // ── Derived CT / OSL ────────────────────────────────────────────────────
     columnHelper.display({
         id: "CT",
         header: "CT",
-        size: 65,
+        size: 100,
         enableSorting: false,
-        cell: (info) => {
-            const ct = computeCT(info.row.original);
-            return fmt2dp(ct);
-        },
+        cell: (info) => info.row.original.CT?.toLocaleString() ?? "—",
     }),
 
     columnHelper.display({
         id: "OSL",
         header: "OSL",
-        size: 65,
+        size: 100,
         enableSorting: false,
-        cell: (info) => {
-            const ct = computeCT(info.row.original);
-            const osl = computeOSL(ct, info.row.original.Backend_Leadtime);
-            return fmt2dp(osl);
-        },
+        cell: (info) => info.row.original.OSL?.toLocaleString() ?? "—",
     }),
 
     // ── More read-only data columns ─────────────────────────────────────────
     columnHelper.accessor("Body_Size", {
         header: "Body Size",
-        size: 75,
+        size: 145,
         cell: (info) => info.getValue() ?? "—",
     }),
 
@@ -208,17 +223,6 @@ export const COLUMNS = [
         header: "Ramp Time",
         size: 80,
         cell: (info) => info.getValue() ?? "—",
-    }),
-
-    // ── Editable free-text ──────────────────────────────────────────────────
-    columnHelper.accessor("Remarks", {
-        header: "Remarks",
-        size: 160,
-        cell: (info) => (
-            <span className="text-xs text-base-content/60 italic">
-                {info.getValue() || ""}
-            </span>
-        ),
     }),
 ];
 

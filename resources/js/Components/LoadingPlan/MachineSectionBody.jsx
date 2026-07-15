@@ -44,7 +44,13 @@ function EmptyMachineDropRow({ machine }) {
 }
 
 export const ScrollParentContext = createContext(null);
-export const SortableTableContext = createContext(null);
+export const TableInteractionContext = createContext({
+    isSortable: false,
+    disableSelection: false,
+    disableGripButton: false,
+    disableAddRowLot: false,
+    disableAddRowBlock: false,
+});
 export const GapInfoContext = createContext({});
 
 function GapHintRow({ segments }) {
@@ -83,7 +89,6 @@ const MachineSectionBody = memo(function MachineSectionBody({
     onSortingChange,
     machine,
 }) {
-    const isSortable = useContext(SortableTableContext);
     const scrollParentRef = useContext(ScrollParentContext);
     const sectionRef = useRef(null); // the section's own <table> wrapper, NOT scrollable
 
@@ -164,6 +169,14 @@ const MachineSectionBody = memo(function MachineSectionBody({
                                         allGapInfo[machine]?.[
                                             row.original._dndId
                                         ];
+                                    console.log(
+                                        "🚀 ~ MachineSectionBody ~ row:",
+                                        row,
+                                    );
+                                    console.log(
+                                        "🚀 ~ MachineSectionBody ~ segments:",
+                                        segments,
+                                    );
                                     return (
                                         <Fragment key={row.original._dndId}>
                                             <SortableRow
@@ -174,7 +187,6 @@ const MachineSectionBody = memo(function MachineSectionBody({
                                                     rowVirtualizer.measureElement
                                                 }
                                                 virtualIndex={vRow.index}
-                                                isSortable={isSortable}
                                             />
                                             {segments && (
                                                 <GapHintRow

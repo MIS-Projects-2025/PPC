@@ -1,5 +1,69 @@
 import { hasTimeline } from "@/Constants/machines.js";
 import { formatTime, parseDatetime, parseTime } from "@/Lib/time.js";
+
+const GAP_LABEL = "Gap";
+
+export function applyTimeStartEdit(
+    rows,
+    dndId,
+    machine,
+    newTimeStartStr,
+    baseTimes,
+) {
+    const machineRows = rows.filter((r) => r.machine === machine);
+    const idx = machineRows.findIndex((r) => r._dndId === dndId);
+    const idxOfAbove = idx - 1;
+
+    const rowAbove = idxOfAbove >= 0 ? machineRows[idxOfAbove] : null;
+    const referencePointStr = rowAbove ? rowAbove.timeEnd : baseTimes[machine];
+
+    const referenceMinutes = parseTime(referencePointStr);
+    const newStartMinutes = parseTime(newTimeStartStr);
+
+    console.log("🚀 ~ applyTimeStartEdit ~ rowAbove:", rowAbove);
+    const isGapAbove = rowAbove?.isBlock && rowAbove?.blockLabel === GAP_LABEL;
+
+    let next = rows.slice();
+
+    if (newStartMinutes === referenceMinutes) {
+        if (isGapAbove) {
+            next = next.filter((r) => r._dndId !== rowAbove._dndId);
+        }
+        return { rows: next, error: null };
+    }
+
+    if (newStartMinutes < referenceMinutes) {
+        return {
+            rows: null,
+            error: "Time can't be earlier than the previous lot's end time.",
+        };
+    }
+
+    const gapDuration = newStartMinutes - referenceMinutes;
+
+    if (isGapAbove) {
+        next = next.map((r) =>
+            r._dndId === rowAbove._dndId ? { ...r, accuTime: gapDuration } : r,
+        );
+    } else {
+        const newBlock = {
+            _dndId: `entry-${crypto.randomUUID()}`, // TODO:
+            isBlock: true,
+            entryType: "block",
+            blockLabel: GAP_LABEL,
+            machine,
+            accuTime: gapDuration,
+            entryId: null,
+            lockVersion: null,
+        };
+
+        const insertAt = next.findIndex((r) => r._dndId === dndId);
+        next.splice(insertAt, 0, newBlock);
+    }
+
+    return { rows: next, error: null };
+}
+
 /**
  * Computes ONE continuous timeline for `machine`, in true row order,
  * regardless of Package_Name. A machine (or the MANUAL pseudo-machine,
@@ -19,6 +83,8 @@ export function recomputeMachine(rows, machine, baseTimes) {
         machineRows.forEach((row) => {
             row.timeStart = null;
             row.timeEnd = null;
+            row.timeStartDayOffset = 0;
+            row.timeEndDayOffset = 0;
         });
         return;
     }
@@ -26,8 +92,15 @@ export function recomputeMachine(rows, machine, baseTimes) {
     const baseTime = baseTimes[machine] ?? "06:00";
     machineRows.reduce((prevEnd, row) => {
         const dur = Number(row.accuTime) || 0;
-        row.timeStart = formatTime(prevEnd);
-        row.timeEnd = formatTime(prevEnd + dur);
+
+        const start = formatTime(prevEnd);
+        const end = formatTime(prevEnd + dur);
+
+        row.timeStart = start.time;
+        row.timeStartDayOffset = start.dayOffset;
+        row.timeEnd = end.time;
+        row.timeEndDayOffset = end.dayOffset;
+
         return prevEnd + dur;
     }, parseTime(baseTime));
 }

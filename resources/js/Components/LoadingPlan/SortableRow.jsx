@@ -1,6 +1,7 @@
 import { mergeRefs } from "@/Lib/dnd.js";
 import { useSortable } from "@dnd-kit/sortable";
-import { memo } from "react";
+import { memo, useContext } from "react";
+import { TableInteractionContext } from "./MachineSectionBody";
 import RowContent from "./RowContent";
 
 export const SortableRow = memo(function SortableRow({
@@ -9,8 +10,8 @@ export const SortableRow = memo(function SortableRow({
     itemNumber,
     measureElement,
     virtualIndex,
-    isSortable = true,
 }) {
+    const { isSortable } = useContext(TableInteractionContext);
     const {
         attributes,
         listeners,

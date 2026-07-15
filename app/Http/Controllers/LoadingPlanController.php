@@ -7,6 +7,7 @@ use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
 use App\Services\LotScheduleCalculator;
+use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 
 class LoadingPlanController extends Controller
@@ -14,7 +15,7 @@ class LoadingPlanController extends Controller
     public function index(Request $request)
     {
         $date = $request->get('date', now()->toDateString());
-
+        Log::info("date", array($date));
         [$result, $wipRows] = $this->buildPlanRows($date);
 
         return Inertia::render(
@@ -27,7 +28,7 @@ class LoadingPlanController extends Controller
         );
     }
 
-    public function byMachine(Request $request): \Illuminate\Http\JsonResponse
+    public function byMachine(Request $request)
     {
         $data = $request->validate([
             'date'       => 'required|date',
@@ -35,13 +36,30 @@ class LoadingPlanController extends Controller
             'machines.*' => 'string',
         ]);
 
-        [$result] = $this->buildPlanRows($data['date']);
+        [$result, $wipRows] = $this->buildPlanRows($data['date']);
+        Log::info("resultresultresult", array($result));
 
         $filtered = $result
             ->whereIn('machine', $data['machines'])
             ->values();
 
-        return response()->json(['data' => $filtered]);
+        Log::info("filtered", array($filtered));
+
+        $status = match (true) {
+            $wipRows->isEmpty()  => 'not_imported', // no WIP data for this date at all
+            $filtered->isEmpty() => 'no_match',      // WIP exists, but not for these machines
+            default              => 'ok',
+        };
+
+        return Inertia::render(
+            'LoadingPlanTableByMachine',
+            [
+                'data'   => $filtered,
+                'date'   => $data['date'],
+                'status' => $status,
+                'machines' => $data['machines'],
+            ]
+        );
     }
 
     /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
@@ -67,6 +85,17 @@ class LoadingPlanController extends Controller
             $doable = $calc->doable($wip->Lot_Id, $wip->Qty);
             $capacityUph = $calc->capacityUph($machine, $wip->Qty);
             $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
+
+            $ct = LoadingPlanFormulas::computeCT($wip->Date_Loaded, $wip->BE_Starttime);
+            $osl = LoadingPlanFormulas::computeOSL($ct, $wip->Backend_Leadtime);
+
+            $cycleTimeExceedResidual = ($wip->CR3 == "RES") && ($wip->Lot_Entry_Time_Days > 2);
+
+            $stationList = ["GTBKLDBE_T", "GTIQA_T", "GTLPI_T", "GTTRANS_T", "GTBRAND_T"];
+
+            $isBakeHighlight = ($wip->Bake == "For Bake")
+                && in_array($wip->Station, $stationList)
+                && $wip->Bake_Count == 0;
 
             return [
                 'id'                  => $wip->customer_data_id,
@@ -98,10 +127,14 @@ class LoadingPlanController extends Controller
                 'Doable'              => $doable,
                 'Capacity_UPH'        => $capacityUph,
                 'accuTime'            => $accuTime,
+                'CT'                  => $ct,
+                'OSL'                 => $osl,
                 'Remarks'             => $entry->remarks ?? null,
                 'tag'                 => $entry->tag ?? null,
                 'lockVersion'         => $entry->lock_version ?? null,
                 'isBlock'             => false,
+                'cycleTimeExceedResidual' => $cycleTimeExceedResidual,
+                'isBakeHighlight'     => $isBakeHighlight
             ];
         });
 

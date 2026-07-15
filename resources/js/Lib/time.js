@@ -5,10 +5,13 @@ export function parseDatetime(str) {
 }
 
 export function formatTime(totalMinutes) {
-    if (!isFinite(totalMinutes) || totalMinutes < 0) return "—";
-    const h = Math.floor(totalMinutes / 60) % 24;
-    const m = Math.round(totalMinutes % 60);
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    if (!isFinite(totalMinutes) || totalMinutes < 0)
+        return { time: "—", dayOffset: 0 };
+    const dayOffset = Math.floor(totalMinutes / 1440);
+    const m = ((totalMinutes % 1440) + 1440) % 1440; // safe mod for negatives too
+    const hh = String(Math.floor(m / 60)).padStart(2, "0");
+    const mm = String(m % 60).padStart(2, "0");
+    return { time: `${hh}:${mm}`, dayOffset };
 }
 
 export function parseTime(hhmm) {

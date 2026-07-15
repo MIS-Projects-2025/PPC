@@ -244,6 +244,8 @@ class LoadingPlanEntryController extends Controller
             'operations.*.before_entry_id' => 'nullable|integer',
             'operations.*.after_entry_id'  => 'nullable|integer',
             'operations.*.machine'         => 'nullable|string',
+            'operations.*.label'           => 'nullable|string',
+            'operations.*.duration'        => 'nullable|integer',
             'operations.*.target_machine'  => 'nullable|string',
             'operations.*.lot_id'          => 'nullable|string',
             'operations.*.entry_id'        => 'nullable|integer',

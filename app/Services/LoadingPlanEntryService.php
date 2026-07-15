@@ -164,7 +164,7 @@ class LoadingPlanEntryService
      *  entry already (created via addBlock), so they're looked up by id.
      *  Locks every machine actually involved (all real sources + the
      *  target), sorted, in one transaction. */
-    public function bulkTransfer(array $lotIds, array $blockEntryIds, string $targetMachine, string $date): Collection
+    public function bulkTransfer(array $lotIds, array $blockEntryIds, ?string $targetMachine, string $date): Collection
     {
         return DB::transaction(function () use ($lotIds, $blockEntryIds, $targetMachine, $date) {
             $lotEntries = LoadingPlanEntry::whereIn('lot_id', $lotIds)

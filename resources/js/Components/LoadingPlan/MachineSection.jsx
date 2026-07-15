@@ -1,7 +1,8 @@
 import { COLUMNS, TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useContext, useMemo, useRef, useState } from "react";
+import { TableInteractionContext } from "./MachineSectionBody";
 import MachineSectionBody from "./MachineSectionBody.jsx";
 
 export const isBlockRow = (row) => row?.isBlock === true;
@@ -19,6 +20,9 @@ const MachineSection = memo(
         onAddBlock,
         isUpdating,
     }) {
+        const outerRef = useRef(null);
+        const { disableAddRowLot, disableAddRowBlock, scrollParentRef } =
+            useContext(TableInteractionContext);
         const [collapsed, setCollapsed] = useState(true);
 
         const prevAutoExpand = useRef(false);
@@ -34,6 +38,7 @@ const MachineSection = memo(
                 rows.reduce((s, r) => s + (isBlockRow(r) ? 0 : r.Qty || 0), 0),
             [rows],
         );
+
         const totalDoable = useMemo(
             () =>
                 rows.reduce(
@@ -42,6 +47,22 @@ const MachineSection = memo(
                 ),
             [rows],
         );
+
+        const toggleCollapsed = () => {
+            const scrollEl = scrollParentRef?.current;
+            const beforeTop = outerRef.current?.getBoundingClientRect().top;
+
+            setCollapsed((c) => !c);
+
+            if (scrollEl && beforeTop != null) {
+                requestAnimationFrame(() => {
+                    const afterTop =
+                        outerRef.current.getBoundingClientRect().top;
+                    scrollEl.scrollTop += afterTop - beforeTop;
+                });
+            }
+        };
+
         const incompleteCount = useMemo(
             () => rows.filter((r) => !isBlockRow(r) && !r.Lot_Id).length,
             [rows],
@@ -53,6 +74,7 @@ const MachineSection = memo(
 
         return (
             <div
+                ref={outerRef}
                 id={`machine-section-${machine ?? "unassigned"}`}
                 className={`mb-2 rounded-xl transition-all duration-150 ${
                     isDropTarget
@@ -72,12 +94,12 @@ const MachineSection = memo(
                 {/* Sticky machine header */}
                 <div className="sticky top-7 z-10 rounded-t-xl">
                     <table
-                        className="shadow-lg w-full border-collapse cursor-pointer select-none bg-base-200 border-b border-base-300"
+                        className="shadow-lg w-full border-collapse cursor-pointer select-none bg-base-200 border-b border-primary"
                         style={{
                             tableLayout: "fixed",
                             minWidth: TOTAL_MIN_WIDTH,
                         }}
-                        onClick={() => setCollapsed((c) => !c)}
+                        onClick={() => toggleCollapsed()}
                     >
                         <colgroup>
                             {COLUMNS.map((col) => (
@@ -96,10 +118,10 @@ const MachineSection = memo(
                                     same as a real machine, since it has its
                                     own real queue. */}
                                 <td className="flex flex-col">
-                                    {!isUnassigned && (
+                                    {!disableAddRowLot && !isUnassigned && (
                                         <button
                                             disabled={isUpdating}
-                                            className="btn btn-ghost btn-sm w-16 text-left h-5 leading-0 text-[10px] font-medium text-info hover:text-info/80 hover:bg-info/10"
+                                            className="btn btn-ghost btn-sm w-16 z-1000 text-left h-5 leading-0 text-[10px] font-medium text-info hover:text-info/80 hover:bg-info/10"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onAddRow(machine);
@@ -108,10 +130,10 @@ const MachineSection = memo(
                                             + lot
                                         </button>
                                     )}
-                                    {!isUnassigned && (
+                                    {!disableAddRowBlock && !isUnassigned && (
                                         <button
                                             disabled={isUpdating}
-                                            className="btn btn-ghost btn-sm w-16 text-left h-5 leading-0 text-[10px] font-medium text-base-content/50 hover:text-base-content/80 hover:bg-base-300"
+                                            className="btn btn-ghost btn-sm w-16 z-1000 text-left h-5 leading-0 text-[10px] font-medium text-base-content/50 hover:text-base-content/80 hover:bg-base-300"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onAddBlock(machine);

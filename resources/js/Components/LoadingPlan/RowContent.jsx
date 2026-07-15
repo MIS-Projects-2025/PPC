@@ -11,6 +11,7 @@ import {
     useRef,
 } from "react";
 import { GripIcon } from "./GripIcon";
+import { TableInteractionContext } from "./MachineSectionBody";
 import { StatusBadge } from "./StatusBadge";
 import { TAGS, TagDot } from "./Tag";
 
@@ -26,10 +27,32 @@ import { TAGS, TagDot } from "./Tag";
  * columnHelper.display definition below).
  */
 export const EDITABLE_COLUMNS = {
-    Doable: "integer",
     accuTime: "integer",
     Remarks: "string",
+    timeStart: "time",
 };
+
+const RED_RANGE = new Set([
+    "Part_Name",
+    "Lead_Count",
+    "Package_Name",
+    "Lot_Id",
+    "Lot_Type",
+    "Lot_Status",
+    "focusGroupStage",
+    "Lot_Entry_Time_Days",
+    "CR3",
+    "BE_OSL_Days",
+    "CT",
+    "OSL",
+    "Body_Size",
+    "Ramp_Time",
+    "Bake_Time_Temp", // Partname → Bake_Time_Temp
+]);
+
+const AMBER_RANGE = new Set([
+    "Lot_Entry_Time_Days", // Partname → Lot_Entry_Time_Days only
+]);
 
 function RowCheckbox({ checked, indeterminate, onChange, title }) {
     const ref = useRef(null);
@@ -51,6 +74,8 @@ function RowCheckbox({ checked, indeterminate, onChange, title }) {
 
 export const TableActionsContext = createContext(null);
 
+const noop = () => {};
+
 const RowContent = memo(
     function RowContent({
         row,
@@ -65,14 +90,18 @@ const RowContent = memo(
         isSortable,
     }) {
         const {
-            handleStatusClick,
-            handleCellClick,
-            handlePackageClick,
+            handleStatusClick = noop,
+            handleCellClick = noop,
+            handlePackageClick = noop,
             selectedIds,
-            handleRowSelect,
+            handleRowSelect = noop,
         } = useContext(TableActionsContext);
 
-        const isSelected = selectedIds.has(row.original._dndId);
+        const { disableSelection, disableGripButton } = useContext(
+            TableInteractionContext,
+        );
+
+        const isSelected = selectedIds?.has(row.original._dndId) ?? false;
         const tag = row.original.tag ?? null;
         const tagCfg = tag ? TAGS[tag] : null;
 
@@ -114,7 +143,10 @@ const RowContent = memo(
                         opacity: isDragging ? 0.3 : 1,
                         backgroundImage: isSelected
                             ? undefined
-                            : "repeating-linear-gradient(45deg,oklch(var(--bc)/0.06),oklch(var(--bc)/0.12) 10px,transparent 10px,transparent 20px)",
+                            : "url(\"data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23a6a6a6' fill-opacity='0.20' fill-rule='evenodd'%3E%3Cpath d='M0 40L40 0H20L0 20M40 40V20L20 40'/%3E%3C/g%3E%3C/svg%3E\")",
+                        backgroundColor: isSelected
+                            ? undefined
+                            : "oklch(var(--bc) / 0.06)",
                     }}
                     className={`border-b border-base-300 last:border-0 border-l-2 ${
                         isSelected
@@ -126,20 +158,24 @@ const RowContent = memo(
                 >
                     <td className="px-1 text-center">
                         <div className="flex items-center gap-1">
-                            <RowCheckbox
-                                checked={isSelected}
-                                onChange={handleCheckboxChange}
-                                title="Select row (Shift+click for range, Ctrl+click to add)"
-                            />
-                            <button
-                                className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/70 active:cursor-grabbing p-1 rounded"
-                                {...dragHandleProps}
-                                disabled={!isSortable}
-                                tabIndex={-1}
-                                aria-label="Drag to reorder"
-                            >
-                                <GripIcon />
-                            </button>
+                            {!disableSelection && (
+                                <RowCheckbox
+                                    checked={isSelected}
+                                    onChange={handleCheckboxChange}
+                                    title="Select row (Shift+click for range, Ctrl+click to add)"
+                                />
+                            )}
+                            {!disableGripButton && (
+                                <button
+                                    className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/70 active:cursor-grabbing p-1 rounded"
+                                    {...dragHandleProps}
+                                    disabled={!isSortable}
+                                    tabIndex={-1}
+                                    aria-label="Drag to reorder"
+                                >
+                                    <GripIcon />
+                                </button>
+                            )}
                         </div>
                     </td>
                     <td
@@ -244,20 +280,25 @@ const RowContent = memo(
             >
                 <td className="w-9 px-1 text-center">
                     <div className="flex items-center gap-1">
-                        <RowCheckbox
-                            checked={isSelected}
-                            onChange={handleCheckboxChange}
-                            title="Select row (Shift+click for range, Ctrl+click to add)"
-                        />
-                        <button
-                            className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/50 active:cursor-grabbing p-1 rounded"
-                            {...dragHandleProps}
-                            tabIndex={-1}
-                            disabled={!isSortable}
-                            aria-label="Drag to reorder or transfer"
-                        >
-                            <GripIcon />
-                        </button>
+                        {!disableSelection && (
+                            <RowCheckbox
+                                checked={isSelected}
+                                onChange={handleCheckboxChange}
+                                title="Select row (Shift+click for range, Ctrl+click to add)"
+                            />
+                        )}
+
+                        {!disableGripButton && (
+                            <button
+                                className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/50 active:cursor-grabbing p-1 rounded"
+                                {...dragHandleProps}
+                                tabIndex={-1}
+                                disabled={!isSortable}
+                                aria-label="Drag to reorder or transfer"
+                            >
+                                <GripIcon />
+                            </button>
+                        )}
                     </div>
                 </td>
                 {row.getVisibleCells().map((cell) => {
@@ -349,6 +390,12 @@ const RowContent = memo(
                     const colId = cell.column.id;
                     const isEditable = Boolean(EDITABLE_COLUMNS[colId]);
 
+                    const isBake =
+                        row.original.isBakeHighlight && RED_RANGE.has(colId);
+                    const isCycleExceed =
+                        row.original.cycleTimeExceedResidual &&
+                        AMBER_RANGE.has(colId);
+
                     return (
                         <td
                             key={cell.id}
@@ -356,11 +403,21 @@ const RowContent = memo(
                                 width: cell.column.getSize(),
                                 maxWidth: cell.column.getSize(),
                             }}
-                            className={`px-2.5 text-sm whitespace-nowrap overflow-hidden text-ellipsis text-base-content ${
+                            className={`px-2.5 text-sm whitespace-nowrap overflow-hidden text-ellipsis ${
                                 isEditable
                                     ? "cursor-text hover:bg-info/10 hover:ring-1 hover:ring-info/30"
                                     : ""
-                            } ${colId === "Doable" ? "text-error" : ""}`}
+                            } ${colId === "Doable" ? "text-error" : ""} ${
+                                isBake
+                                    ? "text-error font-bold"
+                                    : "text-base-content"
+                            } ${isCycleExceed ? "bg-amber-500" : ""}`}
+                            // className={`px-2.5 text-sm whitespace-nowrap overflow-hidden text-ellipsis text-base-content ${
+                            //     isEditable
+                            //         ? "cursor-text hover:bg-info/10 hover:ring-1 hover:ring-info/30"
+                            //         : ""
+                            // } ${colId === "Doable" ? "text-error" : ""}`}
+                            // TODO: make a sign of the cell editable
                             title={
                                 typeof cell.getValue() === "string" ||
                                 typeof cell.getValue() === "number"

@@ -121,7 +121,9 @@ import {
     useSensors,
 } from "@dnd-kit/core";
 
+import DateNav from "@/Components/DateNav";
 import { COLUMNS, TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
+import GlobalTableHeader from "@/Components/LoadingPlan/GlobalTableHeader";
 import { GripIcon } from "@/Components/LoadingPlan/GripIcon";
 import MachineSection, {
     isBlockRow,
@@ -130,7 +132,7 @@ import {
     GapInfoContext,
     PREFIX_EMPTY_DROPPABLE,
     ScrollParentContext,
-    SortableTableContext,
+    TableInteractionContext,
 } from "@/Components/LoadingPlan/MachineSectionBody";
 import {
     EDITABLE_COLUMNS,
@@ -143,6 +145,7 @@ import {
     packagesInGroup,
 } from "@/Constants/loadingPlanPackageGroups.js";
 import {
+    applyTimeStartEdit,
     computeCT,
     computeOSL,
     findMachineNeighbors,
@@ -159,12 +162,7 @@ import { getStatusMessage } from "@/Constants/wipStatus.js";
 import { droppableTokenToMachine } from "@/Lib/dnd.js";
 import { fmt2dp } from "@/Lib/format.js";
 import { formatExpectedPT } from "@/Lib/time.js";
-import {
-    flexRender,
-    getCoreRowModel,
-    getSortedRowModel,
-    useReactTable,
-} from "@tanstack/react-table";
+import { router } from "@inertiajs/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MdChevronLeft, MdChevronRight } from "react-icons/md";
 // ---------------------------------------------------------------------------
@@ -632,6 +630,20 @@ function SelectionToolbar({
     );
 }
 
+const getInputType = (type) => {
+    switch (type) {
+        case "integer":
+        case "decimal":
+            return "number";
+        case "time":
+            return "time";
+        case "date":
+            return "date";
+        default:
+            return "text";
+    }
+};
+
 function CellEditor({ editCell, onCommit, onCancel }) {
     const inputRef = useRef(null);
 
@@ -643,15 +655,22 @@ function CellEditor({ editCell, onCommit, onCancel }) {
     }, []);
 
     const commit = useCallback(() => {
-        onCommit(inputRef.current?.value ?? "");
-    }, [onCommit]);
+        const next = inputRef.current?.value ?? "";
+        if (next === editCell.value) {
+            onCancel();
+            return;
+        }
+        onCommit(next);
+    }, [onCommit, onCancel, editCell.value]);
+
+    const inputType = getInputType(editCell.type);
 
     return (
         <>
             <div className="fixed inset-0 z-40" onClick={commit} />
             <input
                 ref={inputRef}
-                type={editCell.type === "integer" ? "number" : "text"}
+                type={inputType}
                 defaultValue={editCell.value}
                 style={{
                     position: "fixed",
@@ -668,63 +687,6 @@ function CellEditor({ editCell, onCommit, onCancel }) {
                 }}
             />
         </>
-    );
-}
-
-function GlobalTableHeader({ sorting, onSortingChange }) {
-    const table = useReactTable({
-        data: [], // header-only instance, no rows needed
-        columns: COLUMNS,
-        state: { sorting },
-        onSortingChange,
-        getCoreRowModel: getCoreRowModel(),
-        getSortedRowModel: getSortedRowModel(),
-    });
-    return (
-        <table
-            className="w-full border-collapse"
-            style={{ tableLayout: "fixed", minWidth: TOTAL_MIN_WIDTH }}
-        >
-            <colgroup>
-                {table.getAllColumns().map((col) => (
-                    <col key={col.id} style={{ width: col.getSize() }} />
-                ))}
-            </colgroup>
-            <thead>
-                {table.getHeaderGroups().map((hg) => (
-                    <tr
-                        key={hg.id}
-                        className="bg-base-200 border-b border-base-300"
-                    >
-                        {hg.headers.map((header) => (
-                            <th
-                                key={header.id}
-                                style={{ width: header.getSize() }}
-                                className={`px-2.5 py-1.5 text-left text-[11px] font-medium text-base-content/50 whitespace-nowrap overflow-hidden text-ellipsis ${
-                                    header.column.getCanSort()
-                                        ? "cursor-pointer hover:text-base-content/80 select-none"
-                                        : ""
-                                }`}
-                                onClick={header.column.getToggleSortingHandler()}
-                            >
-                                {header.isPlaceholder
-                                    ? null
-                                    : flexRender(
-                                          header.column.columnDef.header,
-                                          header.getContext(),
-                                      )}
-                                {header.column.getIsSorted() === "asc" && (
-                                    <span className="ml-1 text-info">↑</span>
-                                )}
-                                {header.column.getIsSorted() === "desc" && (
-                                    <span className="ml-1 text-info">↓</span>
-                                )}
-                            </th>
-                        ))}
-                    </tr>
-                ))}
-            </thead>
-        </table>
     );
 }
 
@@ -949,6 +911,8 @@ export default function LoadingPlanTable({
     const { mutate } = useMutation();
 
     const resolvedData = initialData ?? _initialData;
+    console.log("🚀 ~ LoadingPlanTable ~ resolvedData:", resolvedData);
+    const [selectedDate, setSelectedDate] = useState(new Date(date));
     const [isDirty, setIsDirty] = useState(false);
     const [inFlightCount, setInFlightCount] = useState(0);
 
@@ -991,6 +955,15 @@ export default function LoadingPlanTable({
         setSelectedIds(new Set());
         anchorIdRef.current = null;
     }, []);
+
+    const handleDateChange = (newDate) => {
+        setSelectedDate(newDate);
+        router.get(
+            route("loading-plan.index"),
+            { date: newDate.toISOString().slice(0, 10) }, // 'YYYY-MM-DD'
+            // { preserveState: true, preserveScroll: true },
+        );
+    };
 
     const handleRowSelect = useCallback(
         (dndId, isShift, isCtrl, orderedDndIds) => {
@@ -1662,15 +1635,15 @@ export default function LoadingPlanTable({
                     const last = segments[segments.length - 1];
 
                     if (isBlockRow(r)) {
-                        if (last && last.kind === "block") {
-                            last.minutes += minutes; // merge consecutive blocks
-                        } else {
-                            segments.push({
-                                kind: "block",
-                                minutes,
-                                label: r.blockLabel || "Time block",
-                            });
-                        }
+                        // if (last && last.kind === "block") {
+                        //     last.minutes += minutes; // merge consecutive blocks
+                        // } else {
+                        //     segments.push({
+                        //         kind: "block",
+                        //         minutes,
+                        //         label: r.blockLabel || "Time block",
+                        //     });
+                        // }
                     } else {
                         const otherGroup = groupOf(r.Package_Name);
                         if (
@@ -1698,6 +1671,7 @@ export default function LoadingPlanTable({
 
         return result;
     }, [data]);
+    console.log("🚀 ~ LoadingPlanTable ~ gapInfo:", gapInfo);
 
     const otherPackageCounts = useMemo(() => {
         const map = {};
@@ -1974,6 +1948,44 @@ export default function LoadingPlanTable({
                     : rawValue.trim();
 
             const row = data.find((r) => r._dndId === dndId);
+            if (!row) return;
+
+            if (field === "timeStart") {
+                const { rows: withGap, error } = applyTimeStartEdit(
+                    data,
+                    dndId,
+                    row.machine,
+                    value,
+                    baseTimes,
+                );
+                console.log("🚀 ~ LoadingPlanTable ~ withGap:", withGap);
+
+                if (error) {
+                    toast?.error?.(error);
+                    setEditCell(null);
+                    return;
+                }
+
+                recomputeMachine(withGap, row.machine, baseTimes);
+
+                const prevSnapshot = data;
+                update(() => withGap);
+                setIsDirty(true);
+                setEditCell(null);
+
+                withUpdating(
+                    syncUndoRedoToServer(
+                        prevSnapshot,
+                        withGap,
+                        date,
+                        mutate,
+                        update,
+                        toast,
+                    ),
+                );
+
+                return;
+            }
 
             update((prev) => {
                 const next = prev.map((r) =>
@@ -1988,9 +2000,6 @@ export default function LoadingPlanTable({
 
             setIsDirty(true);
             setEditCell(null);
-
-            if (!row) return;
-            console.log("🚀 ~ LoadingPlanTable ~ row:", row);
 
             // Backend field name for accuTime is snake_case (accu_time)
             const backendField = toSnakeCase(field);
@@ -2154,17 +2163,27 @@ export default function LoadingPlanTable({
         [activePackage, baseTimes, update, addSeenPair, date],
     );
 
-    const handleAddBlock = useCallback(
-        (machine) => {
-            const label = window.prompt(
-                "Block label (e.g. Preventative Maintenance, Changeover, Lunch):",
-                "Preventative Maintenance",
-            );
-            if (label === null) return;
-            const durationStr = window.prompt("Duration in minutes:", "60");
-            const duration = parseInt(durationStr, 10);
-            if (!duration || duration <= 0) return;
+    const [blockModalMachine, setBlockModalMachine] = useState(null);
+    const [blockOption, setBlockOption] = useState("setup");
+    const [customLabel, setCustomLabel] = useState("");
+    const [customDuration, setCustomDuration] = useState("60");
 
+    const BLOCK_PRESETS = {
+        setup: { label: "Setup", duration: 120 },
+        config: { label: "Config", duration: 240 },
+        conversion: { label: "Conversion", duration: 360 },
+    };
+
+    const handleAddBlock = useCallback((machine) => {
+        setBlockOption("setup");
+        setCustomLabel("");
+        setCustomDuration("60");
+        setBlockModalMachine(machine);
+        document.getElementById("add_block_modal").showModal();
+    }, []);
+
+    const saveBlock = useCallback(
+        (machine, label, duration) => {
             withUpdating(
                 mutate(route("loading-plan.blocks.store"), {
                     body: {
@@ -2173,7 +2192,7 @@ export default function LoadingPlanTable({
                         label: label.trim() || "Time block",
                         duration,
                         before_entry_id: null,
-                        after_entry_id: null, // appends to end — adjust if you add a "drop position" UI for blocks
+                        after_entry_id: null,
                     },
                 }),
             )
@@ -2217,6 +2236,29 @@ export default function LoadingPlanTable({
         [baseTimes, update, date],
     );
 
+    const handleConfirmBlock = useCallback(() => {
+        let label, duration;
+
+        if (blockOption === "custom") {
+            label = customLabel.trim();
+            duration = parseInt(customDuration, 10);
+            if (!label || !duration || duration <= 0) return;
+        } else {
+            const preset = BLOCK_PRESETS[blockOption];
+            label = preset.label;
+            duration = preset.duration;
+        }
+
+        saveBlock(blockModalMachine, label, duration);
+        document.getElementById("add_block_modal").close();
+    }, [
+        blockOption,
+        customLabel,
+        customDuration,
+        blockModalMachine,
+        saveBlock,
+    ]);
+
     useEffect(() => {
         if (justAddedMachine === null) return;
         const id = requestAnimationFrame(() => setJustAddedMachine(null));
@@ -2242,12 +2284,20 @@ export default function LoadingPlanTable({
         ],
     );
 
+    const tableInteractionValue = useMemo(
+        () => ({
+            isSortable,
+            scrollParentRef,
+        }),
+        [isSortable],
+    );
+
     // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="relative h-full">
             <TableActionsContext.Provider value={tableActionsValue}>
                 <div className="absolute inset-0 overflow-hidden flex flex-col">
-                    <div
+                    {/* <div
                         onPaste={(e) => {
                             console.log(
                                 "plain text:",
@@ -2260,7 +2310,7 @@ export default function LoadingPlanTable({
                         }}
                     >
                         paste here
-                    </div>
+                    </div> */}
                     {sorting.length > 0 && (
                         <div className="text-xs text-warning px-4 pb-2">
                             Sorted by {sorting[0].id} — clear sort to
@@ -2274,52 +2324,65 @@ export default function LoadingPlanTable({
                         </div>
                     )}
 
-                    {status && (
-                        <div className="text-sm text-muted-foreground">
-                            {getStatusMessage(status)}
-                        </div>
-                    )}
                     {/* <div className="w-full min-w-0 flex flex-col flex-1 min-h-0"> */}
                     {/* ── Top bar: undo/redo + package tabs ── */}
                     <div className="flex-none px-4 pt-4">
-                        <div className="flex items-center gap-2 mb-3">
-                            <button
-                                onClick={() => handleUndo()}
-                                disabled={!canUndo() || isUpdating}
-                                className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
-                                title="Undo (Ctrl+Z)"
-                            >
-                                ↩ Undo
-                            </button>
-                            <button
-                                onClick={() => handleRedo()}
-                                disabled={!canRedo() || isUpdating}
-                                className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
-                                title="Redo (Ctrl+Y)"
-                            >
-                                ↪ Redo
-                            </button>
-                            {isUpdating && (
-                                <>
-                                    <span className="loading text-info loading-spinner loading-xs"></span>
-                                    <span className="text-xs text-info animate-pulse">
-                                        Saving…
+                        <div className="flex items-start">
+                            <div className="flex flex-col">
+                                <DateNav
+                                    selected={selectedDate}
+                                    onChange={handleDateChange}
+                                    isNoFuture
+                                />
+                                <div className="h-6 mt-1">
+                                    {status && status !== "ok" && (
+                                        <div className="text-sm text-muted-foreground leading-5">
+                                            {getStatusMessage(date, status)}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => handleUndo()}
+                                    disabled={!canUndo() || isUpdating}
+                                    className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
+                                    title="Undo (Ctrl+Z)"
+                                >
+                                    ↩ Undo
+                                </button>
+                                <button
+                                    onClick={() => handleRedo()}
+                                    disabled={!canRedo() || isUpdating}
+                                    className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
+                                    title="Redo (Ctrl+Y)"
+                                >
+                                    ↪ Redo
+                                </button>
+                                {isUpdating && (
+                                    <>
+                                        <span className="loading text-info loading-spinner loading-xs"></span>
+                                        <span className="text-xs text-info animate-pulse">
+                                            Saving…
+                                        </span>
+                                    </>
+                                )}
+                                {selectedIds.size > 0 && (
+                                    <span className="text-xs text-info ml-2">
+                                        {selectedIds.size} row
+                                        {selectedIds.size !== 1 ? "s" : ""}{" "}
+                                        selected
+                                        {" · "}
+                                        <button
+                                            onClick={clearSelection}
+                                            className="underline"
+                                        >
+                                            Deselect all
+                                        </button>
                                     </span>
-                                </>
-                            )}
-                            {selectedIds.size > 0 && (
-                                <span className="text-xs text-info ml-2">
-                                    {selectedIds.size} row
-                                    {selectedIds.size !== 1 ? "s" : ""} selected
-                                    {" · "}
-                                    <button
-                                        onClick={clearSelection}
-                                        className="underline"
-                                    >
-                                        Deselect all
-                                    </button>
-                                </span>
-                            )}
+                                )}
+                            </div>
                         </div>
 
                         <PackageTabs
@@ -2368,8 +2431,8 @@ export default function LoadingPlanTable({
                                         />
                                     </div>
                                     <GapInfoContext.Provider value={gapInfo}>
-                                        <SortableTableContext.Provider
-                                            value={isSortable}
+                                        <TableInteractionContext.Provider
+                                            value={tableInteractionValue}
                                         >
                                             {machines.map((machine) => (
                                                 <MachineSection
@@ -2405,7 +2468,7 @@ export default function LoadingPlanTable({
                                                     isUpdating={isUpdating}
                                                 />
                                             ))}
-                                        </SortableTableContext.Provider>
+                                        </TableInteractionContext.Provider>
                                     </GapInfoContext.Provider>
                                 </div>
                                 {/* end minWidth div */}
@@ -2513,6 +2576,91 @@ export default function LoadingPlanTable({
                         onCancel={handleCellCancel}
                     />
                 )}
+
+                <dialog id="add_block_modal" className="modal">
+                    <div className="modal-box bg-base-300">
+                        <h3 className="font-bold text-lg mb-4">
+                            Add Time Block
+                        </h3>
+
+                        <div className="join join-vertical w-full mb-3">
+                            {Object.entries(BLOCK_PRESETS).map(
+                                ([key, preset]) => (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        className={`btn justify-between join-item ${
+                                            blockOption === key
+                                                ? "btn-primary"
+                                                : ""
+                                        }`}
+                                        onClick={() => setBlockOption(key)}
+                                    >
+                                        {preset.label}
+                                        <span className="text-xs opacity-70 ml-1">
+                                            {preset.duration / 60}hr
+                                        </span>
+                                    </button>
+                                ),
+                            )}
+                            <button
+                                type="button"
+                                className={`btn join-item ${
+                                    blockOption === "custom"
+                                        ? "btn-primary"
+                                        : ""
+                                }`}
+                                onClick={() => setBlockOption("custom")}
+                            >
+                                Custom
+                            </button>
+                        </div>
+
+                        <div
+                            className={`join w-full transition-opacity ${
+                                blockOption === "custom"
+                                    ? "opacity-100"
+                                    : "opacity-0 pointer-events-none"
+                            }`}
+                        >
+                            <input
+                                type="text"
+                                placeholder="Label"
+                                className="input w-2/3 join-item input-bordered"
+                                value={customLabel}
+                                onChange={(e) => setCustomLabel(e.target.value)}
+                                tabIndex={blockOption === "custom" ? 0 : -1}
+                            />
+                            <input
+                                type="number"
+                                placeholder="Duration in minutes"
+                                className="input join-item input-bordered w-1/3"
+                                value={customDuration}
+                                onChange={(e) =>
+                                    setCustomDuration(e.target.value)
+                                }
+                                tabIndex={blockOption === "custom" ? 0 : -1}
+                            />
+                        </div>
+
+                        <div className="modal-action">
+                            <form method="dialog">
+                                <button className="btn btn-ghost mr-2">
+                                    Cancel
+                                </button>
+                            </form>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleConfirmBlock}
+                            >
+                                Add Block
+                            </button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop">
+                        <button>close</button>
+                    </form>
+                </dialog>
             </TableActionsContext.Provider>
         </div>
     );
