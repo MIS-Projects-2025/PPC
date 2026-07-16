@@ -37,6 +37,10 @@ const RED_RANGE = new Set([
     "Lead_Count",
     "Package_Name",
     "Lot_Id",
+    "Station",
+    "status",
+    "Qty",
+    "Capacity_UPH",
     "Lot_Type",
     "Lot_Status",
     "focusGroupStage",
@@ -50,7 +54,17 @@ const RED_RANGE = new Set([
     "Bake_Time_Temp", // Partname → Bake_Time_Temp
 ]);
 
-const AMBER_RANGE = new Set([
+const YELLOW_FILL = new Set([
+    "Part_Name",
+    "Lead_Count",
+    "Package_Name",
+    "Lot_Id",
+    "Station",
+    "status",
+    "Qty",
+]);
+
+const AMBER_RANGE_RESIDUAL = new Set([
     "Lot_Entry_Time_Days", // Partname → Lot_Entry_Time_Days only
 ]);
 
@@ -304,6 +318,18 @@ const RowContent = memo(
                 {row.getVisibleCells().map((cell) => {
                     if (cell.column.id === "drag") return null;
 
+                    const colId = cell.column.id;
+                    const isEditable = Boolean(EDITABLE_COLUMNS[colId]);
+
+                    const isBake =
+                        row.original.isBakeHighlight && RED_RANGE.has(colId);
+                    const isCycleExceedResidual =
+                        row.original.cycleTimeExceedResidual &&
+                        AMBER_RANGE_RESIDUAL.has(colId);
+
+                    const isCycleExceed =
+                        row.original.cycleTimeExceed && YELLOW_FILL.has(colId);
+
                     if (cell.column.id === "item") {
                         return (
                             <td
@@ -336,7 +362,12 @@ const RowContent = memo(
                                     width: cell.column.getSize(),
                                     maxWidth: cell.column.getSize(),
                                 }}
-                                className="px-2.5 text-sm"
+                                // className="px-2.5 text-sm"
+                                className={`px-2.5 text-sm ${
+                                    isCycleExceed
+                                        ? "bg-yellow-300 text-black"
+                                        : ""
+                                }`}
                             >
                                 <button
                                     className="btn btn-ghost w-full px-0 justify-start items-center"
@@ -367,7 +398,12 @@ const RowContent = memo(
                                     width: cell.column.getSize(),
                                     maxWidth: cell.column.getSize(),
                                 }}
-                                className="px-2.5 text-sm"
+                                // className="px-2.5 text-sm"
+                                className={`px-2.5 text-sm ${
+                                    isCycleExceed
+                                        ? "bg-yellow-300 text-black"
+                                        : ""
+                                }`}
                             >
                                 <button
                                     className="btn btn-ghost w-full text-left justify-start px-1.5 hover:bg-info/10 hover:ring-1 hover:ring-info/30 rounded"
@@ -387,15 +423,6 @@ const RowContent = memo(
                         );
                     }
 
-                    const colId = cell.column.id;
-                    const isEditable = Boolean(EDITABLE_COLUMNS[colId]);
-
-                    const isBake =
-                        row.original.isBakeHighlight && RED_RANGE.has(colId);
-                    const isCycleExceed =
-                        row.original.cycleTimeExceedResidual &&
-                        AMBER_RANGE.has(colId);
-
                     return (
                         <td
                             key={cell.id}
@@ -411,7 +438,9 @@ const RowContent = memo(
                                 isBake
                                     ? "text-error font-bold"
                                     : "text-base-content"
-                            } ${isCycleExceed ? "bg-amber-500" : ""}`}
+                            } ${isCycleExceedResidual ? "bg-amber-500 text-black" : ""} ${
+                                isCycleExceed ? "bg-yellow-300 text-black" : ""
+                            }`}
                             // className={`px-2.5 text-sm whitespace-nowrap overflow-hidden text-ellipsis text-base-content ${
                             //     isEditable
                             //         ? "cursor-text hover:bg-info/10 hover:ring-1 hover:ring-info/30"

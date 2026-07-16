@@ -9,12 +9,13 @@ use App\Models\CustomerDataWip;
 use App\Services\LotScheduleCalculator;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
+use App\Helpers\ShiftDay;
 
 class LoadingPlanController extends Controller
 {
     public function index(Request $request)
     {
-        $date = $request->get('date', now()->toDateString());
+        $date = $request->get('date', ShiftDay::current());
         Log::info("date", array($date));
         [$result, $wipRows] = $this->buildPlanRows($date);
 
@@ -65,7 +66,7 @@ class LoadingPlanController extends Controller
     /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
     private function buildPlanRows(string $date): array
     {
-        $allEntries = LoadingPlanEntry::where('scheduled_date', $date)->get();
+        $allEntries = LoadingPlanEntry::with('machineModel')->where('scheduled_date', $date)->get();
 
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
         $blockEntries = $allEntries->where('entry_type', 'block');
@@ -80,16 +81,24 @@ class LoadingPlanController extends Controller
 
         $lotResults = $wipRows->map(function ($wip) use ($lotEntries, $calc) {
             $entry = $lotEntries->get($wip->Lot_Id);
-            $machine = $entry->machine ?? null;
+
+            $machine = $entry?->finalized_at
+                ? $entry->machine_snapshot
+                : $entry?->getMachineName();
 
             $doable = $calc->doable($wip->Lot_Id, $wip->Qty);
-            $capacityUph = $calc->capacityUph($machine, $wip->Qty);
+
+            $capacityUph = $entry?->finalized_at
+                ? $entry->capacity_uph_snapshot
+                : $calc->capacityUph($machine, $wip->Qty);
+
             $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
 
             $ct = LoadingPlanFormulas::computeCT($wip->Date_Loaded, $wip->BE_Starttime);
             $osl = LoadingPlanFormulas::computeOSL($ct, $wip->Backend_Leadtime);
 
             $cycleTimeExceedResidual = ($wip->CR3 == "RES") && ($wip->Lot_Entry_Time_Days > 2);
+            $cycleTimeExceed = $ct > 2;
 
             $stationList = ["GTBKLDBE_T", "GTIQA_T", "GTLPI_T", "GTTRANS_T", "GTBRAND_T"];
 
@@ -134,6 +143,7 @@ class LoadingPlanController extends Controller
                 'lockVersion'         => $entry->lock_version ?? null,
                 'isBlock'             => false,
                 'cycleTimeExceedResidual' => $cycleTimeExceedResidual,
+                'cycleTimeExceed'     => $cycleTimeExceed,
                 'isBakeHighlight'     => $isBakeHighlight
             ];
         });
@@ -142,11 +152,13 @@ class LoadingPlanController extends Controller
         $manualLotEntries = $lotEntries->reject(fn($entry, $lotId) => in_array($lotId, $wipLotIds));
 
         $manualLotResults = $manualLotEntries->map(function ($entry) {
+            $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
+
             return [
                 'id'                  => null,
                 'entryId'             => $entry->id,
                 'entryType'           => 'lot',
-                'machine'             => $entry->machine,
+                'machine'             => $machine,
                 'sequenceOrder'       => $entry->sequence_order,
                 'item'                => $entry->sequence_order,
                 'Part_Name'           => $entry->part_name ?? '',
@@ -170,7 +182,7 @@ class LoadingPlanController extends Controller
                 'BE_Starttime'        => null,
                 'Backend_Leadtime'    => null,
                 'Doable'              => null,
-                'Capacity_UPH'        => null,
+                'Capacity_UPH'        => $entry->finalized_at ? $entry->capacity_uph_snapshot : null,
                 'accuTime'            => $entry->accu_time,
                 'Remarks'             => $entry->remarks ?? null,
                 'tag'                 => $entry->tag ?? null,
@@ -181,11 +193,13 @@ class LoadingPlanController extends Controller
         })->values();
 
         $blockResults = $blockEntries->map(function ($entry) {
+            $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
+
             return [
                 'id'                  => null,
                 'entryId'             => $entry->id,
                 'entryType'           => 'block',
-                'machine'             => $entry->machine,
+                'machine'             => $machine,
                 'sequenceOrder'       => $entry->sequence_order,
                 'item'                => $entry->sequence_order,
                 'Part_Name'           => null,

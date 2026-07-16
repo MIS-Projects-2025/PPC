@@ -312,8 +312,8 @@ class LoadingPlanSeeder extends Seeder
         $sequenceCounters = [];
 
         // Leave a portion of lots with no plan entry at all, so
-        // "Unassigned" behaves realistically (no entry -> machine === null
-        // in the controller via `$entry->machine ?? null`).
+        // "Unassigned" behaves realistically (no entry ->getMachineName() === null
+        // in the controller via `$entry->getMachineName() ?? null`).
         $lotsToPlan = fake()->randomElements($lotIds, (int) (count($lotIds) * 0.75));
 
         foreach ($lotsToPlan as $lotId) {

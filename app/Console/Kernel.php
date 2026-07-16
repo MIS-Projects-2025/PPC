@@ -41,11 +41,13 @@ class Kernel extends ConsoleKernel
     //   ->sendOutputTo(storage_path('logs/auto_import_wip.log'));
 
     // You can also test it every minute while developing:
-    $schedule
-      ->command('auto:import-wip')
-      ->everyMinute()
-      // ->withoutOverlapping()
-      ->sendOutputTo(storage_path('logs/auto_import_wip.log'));
+    // $schedule
+    //   ->command('auto:import-wip')
+    //   ->everyMinute()
+    //   // ->withoutOverlapping()
+    //   ->sendOutputTo(storage_path('logs/auto_import_wip.log'));
+
+    $schedule->command('loading-plan:finalize')->dailyAt('06:00');
   }
 
   /**

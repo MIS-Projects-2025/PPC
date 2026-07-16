@@ -1,7 +1,7 @@
 import { COLUMNS, TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
-import { memo, useContext, useMemo, useRef, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { TableInteractionContext } from "./MachineSectionBody";
 import MachineSectionBody from "./MachineSectionBody.jsx";
 
@@ -24,6 +24,8 @@ const MachineSection = memo(
         const { disableAddRowLot, disableAddRowBlock, scrollParentRef } =
             useContext(TableInteractionContext);
         const [collapsed, setCollapsed] = useState(true);
+        const sentinelRef = useRef(null);
+        const [isStuck, setIsStuck] = useState(false);
 
         const prevAutoExpand = useRef(false);
         const shouldAutoExpand = isDropTarget || justAdded;
@@ -72,6 +74,23 @@ const MachineSection = memo(
         const isManual = machine === MACHINE_MANUAL;
         const isPseudo = isUnassigned || isManual;
 
+        useEffect(() => {
+            const sentinel = sentinelRef.current;
+            const root = scrollParentRef?.current;
+            if (!sentinel) return;
+
+            const observer = new IntersectionObserver(
+                ([entry]) => setIsStuck(!entry.isIntersecting),
+                {
+                    root: root ?? null, // null falls back to viewport
+                    threshold: [1],
+                    rootMargin: `-29px 0px 0px 0px`, // matches top-7 (7 * 4px = 28px, +1 to force trigger)
+                },
+            );
+            observer.observe(sentinel);
+            return () => observer.disconnect();
+        }, [scrollParentRef]);
+
         return (
             <div
                 ref={outerRef}
@@ -83,18 +102,15 @@ const MachineSection = memo(
                           ? "ring-1 ring-base-300 opacity-60"
                           : "ring-1 ring-base-300"
                 }`}
-                // className={`mb-2 border rounded-xl transition-all duration-150 ${
-                //     isDropTarget
-                //         ? "border-info ring-2 ring-info/30 shadow-md"
-                //         : isPseudo
-                //           ? "border-base-300 border-dashed"
-                //           : "border-base-300"
-                // }`}
             >
+                <div ref={sentinelRef} style={{ height: 0 }} />
                 {/* Sticky machine header */}
                 <div className="sticky top-7 z-10 rounded-t-xl">
                     <table
-                        className="shadow-lg w-full border-collapse cursor-pointer select-none bg-base-200 border-b border-primary"
+                        className={`shadow-lg w-full border-collapse cursor-pointer select-none bg-base-200
+                            ${isStuck ? "shadow-2xl" : "shadow-none"}
+                            ${collapsed ? "bg-base-300 border-b border-base-content/10" : "border-b-4 border-base-content/20"}    
+                        `}
                         style={{
                             tableLayout: "fixed",
                             minWidth: TOTAL_MIN_WIDTH,

@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\CapacityBand;
+use App\Models\MachinePlatformCapacityBand;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -17,7 +17,7 @@ class LotScheduleCalculator
         //     ->table('machine_list')
         //     ->pluck('machine_platform', 'machine_num');
 
-        $this->capacityBands = CapacityBand::orderByDesc('qty_min')
+        $this->capacityBands = MachinePlatformCapacityBand::orderByDesc('qty_min')
             ->get()
             ->groupBy('platform');
     }

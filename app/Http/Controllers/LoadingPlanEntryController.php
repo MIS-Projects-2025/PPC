@@ -63,7 +63,7 @@ class LoadingPlanEntryController extends Controller
                 $data['scheduled_date'],
             );
 
-            $this->service->deleteEntry($entry->id, $entry->machine, $data['scheduled_date']);
+            $this->service->deleteEntry($entry->id, $entry->getMachineName(), $data['scheduled_date']);
 
             return response()->json($entry->fresh());
         }

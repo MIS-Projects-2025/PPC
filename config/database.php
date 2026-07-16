@@ -62,6 +62,26 @@ return [
             ]) : [],
         ],
 
+        'qdn_db' => [
+            'driver' => 'mysql',
+            'url' => env('QDN_DB_URL'),
+            'host' => env('QDN_DB_HOST', '192.168.1.18'),
+            'port' => env('QDN_DB_PORT', '6446'),
+            'database' => env('QDN_DB_DATABASE', 'qdn_db'),
+            'username' => env('QDN_DB_USERNAME', 'clusteradmin'),
+            'password' => env('QDN_DB_PASSWORD', 'clusteradmin123'),
+            'unix_socket' => env('QDN_DB_SOCKET', ''),
+            'charset' => env('QDN_DB_CHARSET', 'utf8mb4'),
+            'collation' => env('QDN_DB_COLLATION', 'utf8mb4_0900_ai_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
         'output_monitoring' => [
             'driver'      => 'mysql',
             'host'        => env('DB_HOST', '127.0.0.1'),
