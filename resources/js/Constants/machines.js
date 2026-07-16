@@ -10,32 +10,32 @@ const MACHINES = [
     // { name: "VTX-01", platform: "VITROX" },
 ];
 
-export const CAPACITY_BANDS = [
-    { platform: "VITROX", qty_min: 1, qty_max: 500, capacity_uph: 110 },
-    { platform: "VITROX", qty_min: 501, qty_max: 750, capacity_uph: 357 },
-    { platform: "VITROX", qty_min: 751, qty_max: 1000, capacity_uph: 524 },
-    { platform: "VITROX", qty_min: 1001, qty_max: 2500, capacity_uph: 679 },
-    { platform: "VITROX", qty_min: 2501, qty_max: 5000, capacity_uph: 1187 },
-    { platform: "VITROX", qty_min: 5001, qty_max: 7500, capacity_uph: 2095 },
-    { platform: "VITROX", qty_min: 7501, qty_max: 10000, capacity_uph: 2752 },
-    { platform: "VITROX", qty_min: 10001, qty_max: 999999, capacity_uph: 4000 },
-    { platform: "HSI", qty_min: 1, qty_max: 500, capacity_uph: 110 },
-    { platform: "HSI", qty_min: 501, qty_max: 750, capacity_uph: 357 },
-    { platform: "HSI", qty_min: 751, qty_max: 1000, capacity_uph: 524 },
-    { platform: "HSI", qty_min: 1001, qty_max: 2500, capacity_uph: 679 },
-    { platform: "HSI", qty_min: 2501, qty_max: 5000, capacity_uph: 1276 },
-    { platform: "HSI", qty_min: 5001, qty_max: 7500, capacity_uph: 2263 },
-    { platform: "HSI", qty_min: 7501, qty_max: 10000, capacity_uph: 3050 },
-    { platform: "HSI", qty_min: 10001, qty_max: 999999, capacity_uph: 4000 },
-    { platform: "G6L", qty_min: 1, qty_max: 500, capacity_uph: 110 },
-    { platform: "G6L", qty_min: 501, qty_max: 750, capacity_uph: 357 },
-    { platform: "G6L", qty_min: 751, qty_max: 1000, capacity_uph: 524 },
-    { platform: "G6L", qty_min: 1001, qty_max: 2500, capacity_uph: 679 },
-    { platform: "G6L", qty_min: 2501, qty_max: 5000, capacity_uph: 1132 },
-    { platform: "G6L", qty_min: 5001, qty_max: 7500, capacity_uph: 1845 },
-    { platform: "G6L", qty_min: 7501, qty_max: 10000, capacity_uph: 2337 },
-    { platform: "G6L", qty_min: 10001, qty_max: 999999, capacity_uph: 4000 },
-];
+// export const CAPACITY_BANDS = [
+//     { platform: "VITROX", qty_min: 1, qty_max: 500, capacity_uph: 110 },
+//     { platform: "VITROX", qty_min: 501, qty_max: 750, capacity_uph: 357 },
+//     { platform: "VITROX", qty_min: 751, qty_max: 1000, capacity_uph: 524 },
+//     { platform: "VITROX", qty_min: 1001, qty_max: 2500, capacity_uph: 679 },
+//     { platform: "VITROX", qty_min: 2501, qty_max: 5000, capacity_uph: 1187 },
+//     { platform: "VITROX", qty_min: 5001, qty_max: 7500, capacity_uph: 2095 },
+//     { platform: "VITROX", qty_min: 7501, qty_max: 10000, capacity_uph: 2752 },
+//     { platform: "VITROX", qty_min: 10001, qty_max: 999999, capacity_uph: 4000 },
+//     { platform: "HSI", qty_min: 1, qty_max: 500, capacity_uph: 110 },
+//     { platform: "HSI", qty_min: 501, qty_max: 750, capacity_uph: 357 },
+//     { platform: "HSI", qty_min: 751, qty_max: 1000, capacity_uph: 524 },
+//     { platform: "HSI", qty_min: 1001, qty_max: 2500, capacity_uph: 679 },
+//     { platform: "HSI", qty_min: 2501, qty_max: 5000, capacity_uph: 1276 },
+//     { platform: "HSI", qty_min: 5001, qty_max: 7500, capacity_uph: 2263 },
+//     { platform: "HSI", qty_min: 7501, qty_max: 10000, capacity_uph: 3050 },
+//     { platform: "HSI", qty_min: 10001, qty_max: 999999, capacity_uph: 4000 },
+//     { platform: "G6L", qty_min: 1, qty_max: 500, capacity_uph: 110 },
+//     { platform: "G6L", qty_min: 501, qty_max: 750, capacity_uph: 357 },
+//     { platform: "G6L", qty_min: 751, qty_max: 1000, capacity_uph: 524 },
+//     { platform: "G6L", qty_min: 1001, qty_max: 2500, capacity_uph: 679 },
+//     { platform: "G6L", qty_min: 2501, qty_max: 5000, capacity_uph: 1132 },
+//     { platform: "G6L", qty_min: 5001, qty_max: 7500, capacity_uph: 1845 },
+//     { platform: "G6L", qty_min: 7501, qty_max: 10000, capacity_uph: 2337 },
+//     { platform: "G6L", qty_min: 10001, qty_max: 999999, capacity_uph: 4000 },
+// ];
 
 // Reverse lookup: machine name -> platform.
 export const MACHINE_TO_PLATFORM = Object.fromEntries(
@@ -59,11 +59,11 @@ export function hasTimeline(machine) {
 /** Capacity_UPH for a given qty on a given platform, per CAPACITY_BANDS.
  *  Returns null if platform is unknown or qty falls outside every band
  *  (e.g. no platform — MANUAL/unassigned — or qty <= 0). */
-export function lookupCapacityUPH(qty, platform) {
-    if (!platform) return null;
-    const q = Number(qty) || 0;
-    const band = CAPACITY_BANDS.find(
-        (b) => b.platform === platform && q >= b.qty_min && q <= b.qty_max,
-    );
-    return band ? band.capacity_uph : null;
-}
+// export function lookupCapacityUPH(qty, platform) {
+//     if (!platform) return null;
+//     const q = Number(qty) || 0;
+//     const band = CAPACITY_BANDS.find(
+//         (b) => b.platform === platform && q >= b.qty_min && q <= b.qty_max,
+//     );
+//     return band ? band.capacity_uph : null;
+// }

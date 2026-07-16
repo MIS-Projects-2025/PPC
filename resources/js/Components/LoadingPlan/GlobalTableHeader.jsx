@@ -17,7 +17,7 @@ export default function GlobalTableHeader({ sorting, onSortingChange }) {
     });
     return (
         <table
-            className="w-full border-collapse"
+            className="bg-base-100 border-collapse"
             style={{ tableLayout: "fixed", minWidth: TOTAL_MIN_WIDTH }}
         >
             <colgroup>
@@ -27,10 +27,7 @@ export default function GlobalTableHeader({ sorting, onSortingChange }) {
             </colgroup>
             <thead>
                 {table.getHeaderGroups().map((hg) => (
-                    <tr
-                        key={hg.id}
-                        className="bg-base-200 border-b border-base-300"
-                    >
+                    <tr key={hg.id} className="border-b border-base-300">
                         {hg.headers.map((header) => (
                             <th
                                 key={header.id}

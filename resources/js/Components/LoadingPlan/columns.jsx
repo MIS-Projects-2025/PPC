@@ -1,5 +1,5 @@
 import { computeCT, computeOSL } from "@/Constants/loadingPlanSchedule.js";
-import { lookupCapacityUPH, platformOf } from "@/Constants/machines.js";
+import { platformOf } from "@/Constants/machines.js";
 import { fmt2dp } from "@/Lib/format.js";
 import { formatExpectedPT } from "@/Lib/time.js";
 import { createColumnHelper } from "@tanstack/react-table";
@@ -95,16 +95,18 @@ export const COLUMNS = [
     }),
 
     // ── Derived: Capacity_UPH (from Qty + current machine's platform) ──────
-    columnHelper.display({
-        id: "Capacity_UPH",
+    columnHelper.accessor("Capacity_UPH", {
         header: "Capacity UPH",
         size: 140,
         enableSorting: false,
-        cell: (info) => {
-            const r = info.row.original;
-            const uph = lookupCapacityUPH(r.Qty, platformOf(r.machine));
-            return uph != null ? uph.toLocaleString() : "—";
-        },
+        cell: (info) => info.getValue()?.toLocaleString() ?? "—",
+        // cell: (info) =>
+        //     info.getValue() > 0 ? info.getValue().toLocaleString() : "—",
+        // cell: (info) => {
+        //     const r = info.row.original;
+        //     const uph = lookupCapacityUPH(r.Qty, platformOf(r.machine));
+        //     return uph != null ? uph.toLocaleString() : "—";
+        // },
     }),
 
     columnHelper.accessor("accuTime", {

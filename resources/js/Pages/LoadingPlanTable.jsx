@@ -117,14 +117,15 @@ import {
     DndContext,
     DragOverlay,
     PointerSensor,
+    pointerWithin,
     useSensor,
     useSensors,
 } from "@dnd-kit/core";
 
 import DateNav from "@/Components/DateNav";
-import { COLUMNS, TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
+import { TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
 import GlobalTableHeader from "@/Components/LoadingPlan/GlobalTableHeader";
-import { GripIcon } from "@/Components/LoadingPlan/GripIcon";
+import MachineChip from "@/Components/LoadingPlan/MachineChip";
 import MachineSection, {
     isBlockRow,
 } from "@/Components/LoadingPlan/MachineSection";
@@ -134,37 +135,29 @@ import {
     ScrollParentContext,
     TableInteractionContext,
 } from "@/Components/LoadingPlan/MachineSectionBody";
+import PackageTabs from "@/Components/LoadingPlan/PackageTabs";
 import {
     EDITABLE_COLUMNS,
     TableActionsContext,
 } from "@/Components/LoadingPlan/RowContent";
+import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
-import { TAGS } from "@/Components/LoadingPlan/Tag";
 import {
     groupOf,
     packagesInGroup,
 } from "@/Constants/loadingPlanPackageGroups.js";
 import {
     applyTimeStartEdit,
-    computeCT,
-    computeOSL,
     findMachineNeighbors,
     recomputeMachine,
 } from "@/Constants/loadingPlanSchedule.js";
-import {
-    hasTimeline,
-    lookupCapacityUPH,
-    MACHINE_MANUAL,
-    platformOf,
-    REAL_MACHINE_NAMES,
-} from "@/Constants/machines.js";
+import { hasTimeline, MACHINE_MANUAL } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
 import { droppableTokenToMachine } from "@/Lib/dnd.js";
-import { fmt2dp } from "@/Lib/format.js";
-import { formatExpectedPT } from "@/Lib/time.js";
 import { router } from "@inertiajs/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MdChevronLeft, MdChevronRight } from "react-icons/md";
+import { CellEditor } from "../Components/LoadingPlan/CellEditor";
+import { DragGhostRow } from "../Components/LoadingPlan/DragGhostRow";
 // ---------------------------------------------------------------------------
 // Machine / platform / capacity-band config
 // ---------------------------------------------------------------------------
@@ -188,6 +181,8 @@ import { MdChevronLeft, MdChevronRight } from "react-icons/md";
 
 const useLoadingPlanStore = createUndoStore([]);
 
+const PLATFORM_ORDER = ["G6L", "Vitrox", "HSI"];
+
 // ---------------------------------------------------------------------------
 // MachineSection
 // ---------------------------------------------------------------------------
@@ -198,496 +193,6 @@ function machineLabel(machine) {
     if (machine === null) return "Unassigned";
     if (machine === MACHINE_MANUAL) return "Manual";
     return machine;
-}
-
-// ---------------------------------------------------------------------------
-// PackageTabs
-// ---------------------------------------------------------------------------
-
-function PackageTabs({ packages, active, onChange }) {
-    const scrollRef = useRef(null);
-    const tabRefs = useRef(new Map());
-    const [canScrollLeft, setCanScrollLeft] = useState(false);
-    const [canScrollRight, setCanScrollRight] = useState(false);
-
-    const updateScrollState = () => {
-        const el = scrollRef.current;
-        if (!el) return;
-        setCanScrollLeft(el.scrollLeft > 1);
-        setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 10);
-    };
-
-    useEffect(() => {
-        updateScrollState();
-        const el = scrollRef.current;
-        if (!el) return;
-        el.addEventListener("scroll", updateScrollState);
-        const ro = new ResizeObserver(updateScrollState);
-        ro.observe(el);
-        return () => {
-            el.removeEventListener("scroll", updateScrollState);
-            ro.disconnect();
-        };
-    }, [packages]);
-
-    useEffect(() => {
-        tabRefs.current
-            .get(active)
-            ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }, [active]);
-
-    const scrollByAmount = (dir) => {
-        const el = scrollRef.current;
-        if (!el) return;
-        el.scrollBy({ left: dir * el.clientWidth * 0.6, behavior: "smooth" });
-    };
-
-    return (
-        <div className="relative flex items-center border-base-300">
-            {canScrollLeft && (
-                <div className="relative flex-shrink-0 z-10">
-                    <button
-                        type="button"
-                        onClick={() => scrollByAmount(-1)}
-                        aria-label="Scroll tabs left"
-                        className="btn btn-ghost px-2 flex items-center justify-center text-base-content/50 hover:text-base-content/80 hover:bg-base-200"
-                    >
-                        <MdChevronLeft size={26} />
-                    </button>
-                    <div className="pointer-events-none absolute top-0 bottom-0 -right-20 w-20 bg-gradient-to-r from-base-200 to-transparent" />
-                </div>
-            )}
-
-            <div
-                ref={scrollRef}
-                className="flex overflow-x-auto scrollbar-none scroll-smooth"
-            >
-                {packages.map((pkg, idx) => (
-                    <button
-                        key={pkg}
-                        ref={(node) => {
-                            if (node) tabRefs.current.set(pkg, node);
-                            else tabRefs.current.delete(pkg);
-                        }}
-                        onClick={() => onChange(pkg)}
-                        className={`btn btn-sm px-1.5 h-auto flex-shrink-0 text-sm font-medium rounded-none transition-colors whitespace-nowrap ${
-                            active === pkg
-                                ? "btn-primary -mb-px"
-                                : idx % 2 === 0
-                                  ? "btn-ghost bg-base-200/60 text-base-content/60 hover:text-base-content/80 hover:bg-base-200"
-                                  : "btn-ghost bg-base-100 text-base-content/60 hover:text-base-content/80 hover:bg-base-200"
-                        }`}
-                    >
-                        {pkg}
-                    </button>
-                ))}
-            </div>
-
-            {canScrollRight && (
-                <div className="relative flex-shrink-0 z-10">
-                    <div className="pointer-events-none absolute top-0 bottom-0 -left-20 w-20 bg-gradient-to-l from-base-200 to-transparent" />
-                    <button
-                        type="button"
-                        onClick={() => scrollByAmount(1)}
-                        aria-label="Scroll tabs right"
-                        className="btn btn-ghost px-2 flex items-center justify-center text-base-content/50 hover:text-base-content/80 hover:bg-base-200"
-                    >
-                        <MdChevronRight size={26} />
-                    </button>
-                </div>
-            )}
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// DragGhostRow
-// ---------------------------------------------------------------------------
-
-function DragGhostRow({ row }) {
-    return (
-        <div
-            className="rounded-lg border border-info/40 bg-base-100 shadow-xl opacity-95 overflow-hidden"
-            style={{ minWidth: 500 }}
-        >
-            <table style={{ tableLayout: "fixed", width: "100%" }}>
-                <colgroup>
-                    {COLUMNS.map((col) => (
-                        <col
-                            key={col.id ?? col.accessorKey}
-                            style={{ width: col.size ?? 100 }}
-                        />
-                    ))}
-                </colgroup>
-                <tbody>
-                    <tr className="bg-info/10">
-                        <td className="w-9 px-1 text-center">
-                            <div className="flex items-center gap-1">
-                                <input className="checkbox checkbox-info cursor-none" />
-                                <button
-                                    className="btn btn-ghost cursor-none pointer-events-none text-base-content/20 hover:text-base-content/50 active:cursor-grabbing p-1 rounded"
-                                    tabIndex={-1}
-                                    aria-label="Drag to reorder or transfer"
-                                >
-                                    <GripIcon />
-                                </button>
-                            </div>
-                        </td>
-
-                        {COLUMNS.filter(
-                            (c) => (c.id ?? c.accessorKey) !== "drag",
-                        ).map((col) => {
-                            const key = col.accessorKey ?? col.id;
-                            const value = row[key];
-                            let display;
-
-                            if (key === "status") {
-                                display = (
-                                    <StatusBadge
-                                        status={value === null ? "NONE" : value}
-                                    />
-                                );
-                            } else if (key === "item") {
-                                display = (
-                                    <span className="text-xs text-base-content/40">
-                                        {value}
-                                    </span>
-                                );
-                            } else if (key === "accuTime") {
-                                const v = Number(value) || 0;
-                                const h = Math.floor(v / 60);
-                                const m = v % 60;
-                                display = h > 0 ? `${h}h ${m}m` : `${m}m`;
-                            } else if (key === "expectedPT") {
-                                display = formatExpectedPT(row.accuTime);
-                            } else if (key === "CT") {
-                                display = fmt2dp(computeCT(row));
-                            } else if (key === "OSL") {
-                                const ct = computeCT(row);
-                                display = fmt2dp(
-                                    computeOSL(ct, row.Backend_Leadtime),
-                                );
-                            } else if (key === "focusGroupStage") {
-                                const fg = row.Focus_Group ?? "";
-                                const st = row.Stage ?? "";
-                                display =
-                                    fg && st
-                                        ? `${fg} / ${st}`
-                                        : fg || st || "—";
-                            } else if (key === "Capacity_UPH") {
-                                const uph = lookupCapacityUPH(
-                                    row.Qty,
-                                    platformOf(row.machine),
-                                );
-                                display =
-                                    uph != null ? uph.toLocaleString() : "—";
-                            } else {
-                                display = value ?? "—";
-                            }
-
-                            return (
-                                <td
-                                    key={key}
-                                    style={{
-                                        width: col.size ?? 100,
-                                        maxWidth: col.size ?? 100,
-                                    }}
-                                    className="px-2.5 py-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis text-base-content"
-                                >
-                                    {display}
-                                </td>
-                            );
-                        })}
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// SelectionToolbar
-// ---------------------------------------------------------------------------
-
-function SelectionToolbar({
-    selectedIds,
-    allData,
-    machines,
-    onTag,
-    disabled,
-    onClearTag,
-    onStatusChange,
-    onTransfer,
-    onDelete,
-    onClearSelection,
-}) {
-    const count = selectedIds.size;
-    const [transferOpen, setTransferOpen] = useState(false);
-    const [statusOpen, setStatusOpen] = useState(false);
-
-    const selectedMachines = useMemo(() => {
-        const s = new Set();
-        allData.forEach((r) => {
-            if (selectedIds.has(r._dndId)) s.add(r.machine);
-        });
-        return s;
-    }, [selectedIds, allData]);
-
-    if (count === 0) return null;
-
-    return (
-        <div className="sticky bottom-0 z-99">
-            {(transferOpen || statusOpen) && (
-                <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => {
-                        setTransferOpen(false);
-                        setStatusOpen(false);
-                    }}
-                />
-            )}
-
-            <div className="flex-none flex items-center justify-center px-4 py-2 border-t border-base-300 bg-base-200">
-                <div className="relative flex items-center gap-2 px-4 py-2 bg-neutral text-neutral-content rounded-2xl shadow-lg border border-base-content/10 select-none">
-                    <span className="text-xs font-semibold bg-info text-info-content px-2 py-0.5 rounded-full mr-1">
-                        {count} selected
-                    </span>
-
-                    <div className="w-px h-5 bg-base-content/20" />
-
-                    <span className="text-[11px] text-neutral-content/50 ml-1">
-                        Mark:
-                    </span>
-                    {Object.entries(TAGS).map(([key, cfg]) => (
-                        <button
-                            key={key}
-                            onClick={() => onTag(key)}
-                            className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ${cfg.toolbar}`}
-                            title={`Mark as ${cfg.label}`}
-                            disabled={disabled}
-                        >
-                            <span
-                                className={`w-2 h-2 rounded-full ${cfg.dot}`}
-                            />
-                            {cfg.label}
-                        </button>
-                    ))}
-                    <button
-                        onClick={onClearTag}
-                        className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/60 hover:bg-base-content/20"
-                        disabled={disabled}
-                    >
-                        Clear tag
-                    </button>
-
-                    <div className="w-px h-5 bg-base-content/20" />
-
-                    {/* Bulk status */}
-                    <div className="relative">
-                        <button
-                            onClick={() => {
-                                setStatusOpen((v) => !v);
-                                setTransferOpen(false);
-                            }}
-                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
-                            disabled={disabled}
-                        >
-                            Set status
-                            <svg
-                                width="10"
-                                height="10"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2.5"
-                            >
-                                <polyline points="6 9 12 15 18 9" />
-                            </svg>
-                        </button>
-                        {statusOpen && (
-                            <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36 z-50">
-                                {[
-                                    "DONE",
-                                    "RUNNING",
-                                    "FOR PROCESS",
-                                    "FVI",
-                                    "BOXING",
-                                    "LWAIT",
-                                    "NONE",
-                                ].map((s) => (
-                                    <button
-                                        key={s}
-                                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
-                                        onClick={() => {
-                                            onStatusChange(s);
-                                            setStatusOpen(false);
-                                        }}
-                                        disabled={disabled}
-                                    >
-                                        <StatusBadge status={s} />
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="w-px h-5 bg-base-content/20" />
-
-                    {/* Transfer */}
-                    <div className="relative">
-                        <button
-                            onClick={() => {
-                                setTransferOpen((v) => !v);
-                                setStatusOpen(false);
-                            }}
-                            disabled={disabled}
-                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
-                        >
-                            Transfer to…
-                            <svg
-                                width="10"
-                                height="10"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2.5"
-                            >
-                                <polyline points="6 9 12 15 18 9" />
-                            </svg>
-                        </button>
-                        {transferOpen && (
-                            <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-40 z-50 max-h-60 overflow-y-auto">
-                                {machines
-                                    .filter(
-                                        (m) =>
-                                            !selectedMachines.has(m) ||
-                                            selectedMachines.size > 1,
-                                    )
-                                    .map((m) => (
-                                        <button
-                                            key={m ?? "unassigned"}
-                                            className={`w-full text-left px-3 py-1.5 text-sm text-base-content hover:bg-base-200 ${
-                                                selectedMachines.size === 1 &&
-                                                selectedMachines.has(m)
-                                                    ? "opacity-40 cursor-not-allowed"
-                                                    : ""
-                                            }`}
-                                            disabled={
-                                                disabled ||
-                                                (selectedMachines.size === 1 &&
-                                                    selectedMachines.has(m))
-                                            }
-                                            onClick={() => {
-                                                if (
-                                                    selectedMachines.size ===
-                                                        1 &&
-                                                    selectedMachines.has(m)
-                                                )
-                                                    return;
-                                                onTransfer(m);
-                                                setTransferOpen(false);
-                                            }}
-                                        >
-                                            {machineLabel(m)}
-                                        </button>
-                                    ))}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="w-px h-5 bg-base-content/20" />
-
-                    <button
-                        onClick={onDelete}
-                        className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
-                        disabled={disabled}
-                    >
-                        Delete
-                    </button>
-
-                    <button
-                        onClick={onClearSelection}
-                        className="ml-1 text-neutral-content/40 hover:text-neutral-content"
-                        title="Clear selection (Esc)"
-                        disabled={disabled}
-                    >
-                        <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.5"
-                            strokeLinecap="round"
-                        >
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-const getInputType = (type) => {
-    switch (type) {
-        case "integer":
-        case "decimal":
-            return "number";
-        case "time":
-            return "time";
-        case "date":
-            return "date";
-        default:
-            return "text";
-    }
-};
-
-function CellEditor({ editCell, onCommit, onCancel }) {
-    const inputRef = useRef(null);
-
-    useEffect(() => {
-        if (inputRef.current) {
-            inputRef.current.focus();
-            inputRef.current.select();
-        }
-    }, []);
-
-    const commit = useCallback(() => {
-        const next = inputRef.current?.value ?? "";
-        if (next === editCell.value) {
-            onCancel();
-            return;
-        }
-        onCommit(next);
-    }, [onCommit, onCancel, editCell.value]);
-
-    const inputType = getInputType(editCell.type);
-
-    return (
-        <>
-            <div className="fixed inset-0 z-40" onClick={commit} />
-            <input
-                ref={inputRef}
-                type={inputType}
-                defaultValue={editCell.value}
-                style={{
-                    position: "fixed",
-                    top: editCell.y,
-                    left: editCell.x,
-                    width: editCell.width,
-                    height: editCell.height,
-                    zIndex: 50,
-                }}
-                className="border border-info ring-2 ring-info/30 rounded px-2 text-sm outline-none bg-base-100 text-base-content"
-                onKeyDown={(e) => {
-                    if (e.key === "Enter") commit();
-                    if (e.key === "Escape") onCancel();
-                }}
-            />
-        </>
-    );
 }
 
 /** After undo/redo swaps local state, diff the before/after snapshots
@@ -893,11 +398,13 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 export default function LoadingPlanTable({
     data: initialData,
     date,
+    machines: serverMachines,
     status,
     baseTimes = {},
     onLotTransfer,
     onReorder,
 }) {
+    console.log("🚀 ~ LoadingPlanTable ~ serverMachines:", serverMachines);
     const {
         present: data,
         update,
@@ -1564,9 +1071,15 @@ export default function LoadingPlanTable({
     // is what lets a user drag a lot onto a machine that has nothing on it
     // yet, and lets freshly-seeded (all-unassigned) data render correctly
     // before anything has been placed.
+    const machinePlatform = useMemo(() => {
+        const map = new Map();
+        serverMachines.forEach((m) => map.set(m.name, m.platform));
+        return map;
+    }, [serverMachines]);
+
     const machines = useMemo(() => {
-        return [null, MACHINE_MANUAL, ...REAL_MACHINE_NAMES];
-    }, []);
+        return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
+    }, [serverMachines]); // fixed: was `[]`, now correctly depends on serverMachines
 
     const groupedRows = useMemo(() => {
         const map = {};
@@ -2292,6 +1805,52 @@ export default function LoadingPlanTable({
         [isSortable],
     );
 
+    const { activeMachines, idleMachines } = useMemo(() => {
+        const active = [];
+        const idle = [];
+        for (const machine of machines) {
+            const rows = groupedRows[machine ?? "unassigned"] ?? [];
+            const isPseudo = machine === null || machine === MACHINE_MANUAL;
+            if (rows.length > 0 || isPseudo) {
+                active.push(machine);
+            } else {
+                idle.push(machine);
+            }
+        }
+        return { activeMachines: active, idleMachines: idle };
+    }, [machines, groupedRows]);
+
+    const idleMachinesByPlatform = useMemo(() => {
+        const groups = new Map();
+        for (const machine of idleMachines) {
+            const platform = machinePlatform.get(machine) ?? "Other";
+            if (!groups.has(platform)) groups.set(platform, []);
+            groups.get(platform).push(machine);
+        }
+        // sort by PLATFORM_ORDER, unknown platforms (incl. "Other") fall to the end
+        return [...groups.entries()].sort(
+            ([a], [b]) =>
+                (PLATFORM_ORDER.indexOf(a) === -1
+                    ? 99
+                    : PLATFORM_ORDER.indexOf(a)) -
+                (PLATFORM_ORDER.indexOf(b) === -1
+                    ? 99
+                    : PLATFORM_ORDER.indexOf(b)),
+        );
+    }, [idleMachines, machinePlatform]);
+
+    console.log("🚀 ~ LoadingPlanTable ~ idleMachines:", idleMachines);
+    console.log("🚀 ~ LoadingPlanTable ~ activeMachines:", activeMachines);
+
+    const [showAllMachines, setShowAllMachines] = useState(false);
+
+    const collisionDetection = useCallback((args) => {
+        const pointerCollisions = pointerWithin(args);
+        return pointerCollisions.length > 0
+            ? pointerCollisions
+            : closestCenter(args);
+    }, []);
+
     // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="relative h-full">
@@ -2342,6 +1901,25 @@ export default function LoadingPlanTable({
                                     )}
                                 </div>
                             </div>
+
+                            {/* collapse button, shown when expanded — also outside minWidth, sticky left */}
+                            {idleMachines.length > 0 && (
+                                <div className="sticky left-0 w-full px-1 mt-2">
+                                    <button
+                                        onClick={() =>
+                                            setShowAllMachines((v) => !v)
+                                        }
+                                        className="sticky left-0 text-left text-[11px] text-base-content/50 hover:text-base-content/80 mb-1.5"
+                                    >
+                                        {showAllMachines ? "▾" : "▸"}{" "}
+                                        {idleMachines.length} idle machine
+                                        {idleMachines.length !== 1
+                                            ? "s"
+                                            : ""}{" "}
+                                        for this package
+                                    </button>
+                                </div>
+                            )}
 
                             <div className="flex items-center gap-2">
                                 <button
@@ -2408,7 +1986,6 @@ export default function LoadingPlanTable({
                         ref={scrollParentRef}
                         className="flex-1 min-h-0 px-4 pb-4 overflow-auto"
                     >
-                        {/* <div className="flex-1 overflow-x-auto px-4 pb-4"> */}
                         <ScrollParentContext.Provider value={scrollParentRef}>
                             <DndContext
                                 sensors={sensors}
@@ -2417,14 +1994,18 @@ export default function LoadingPlanTable({
                                     threshold: { x: 0.2, y: 0.2 },
                                     interval: 5,
                                 }}
-                                collisionDetection={closestCenter}
+                                collisionDetection={collisionDetection}
                                 onDragStart={handleDragStart}
                                 onDragOver={handleDragOverFull}
                                 onDragEnd={handleDragEnd}
                                 onDragCancel={handleDragCancel}
                             >
-                                <div style={{ minWidth: TOTAL_MIN_WIDTH }}>
-                                    <div className="sticky top-0 z-20 px-1">
+                                {/* wide, horizontally-scrollable content: active sections + full idle sections when expanded */}
+                                <div
+                                    className="bg-base-100 border-l border-base-300 py-2 rounded-b-md"
+                                    style={{ minWidth: TOTAL_MIN_WIDTH }}
+                                >
+                                    <div className="sticky top-0 z-20 w-full">
                                         <GlobalTableHeader
                                             sorting={sorting}
                                             onSortingChange={setSorting}
@@ -2434,7 +2015,7 @@ export default function LoadingPlanTable({
                                         <TableInteractionContext.Provider
                                             value={tableInteractionValue}
                                         >
-                                            {machines.map((machine) => (
+                                            {activeMachines.map((machine) => (
                                                 <MachineSection
                                                     key={
                                                         machine ?? "unassigned"
@@ -2472,6 +2053,45 @@ export default function LoadingPlanTable({
                                     </GapInfoContext.Provider>
                                 </div>
                                 {/* end minWidth div */}
+
+                                {idleMachines.length > 0 &&
+                                    !showAllMachines && (
+                                        <div className="sticky left-0 w-full px-1 mt-10">
+                                            <div className="divider">
+                                                IDLE MACHINES FOR THIS PACKAGE
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-4">
+                                                {idleMachinesByPlatform.map(
+                                                    ([
+                                                        platform,
+                                                        machinesInGroup,
+                                                    ]) => (
+                                                        <div key={platform}>
+                                                            <div className="text-[10px] font-semibold text-base-content/40 uppercase tracking-wide mb-1 text-center">
+                                                                {platform}
+                                                            </div>
+                                                            <div className="grid grid-cols-2 gap-1.5">
+                                                                {machinesInGroup.map(
+                                                                    (
+                                                                        machine,
+                                                                    ) => (
+                                                                        <MachineChip
+                                                                            key={
+                                                                                machine
+                                                                            }
+                                                                            machine={
+                                                                                machine
+                                                                            }
+                                                                        />
+                                                                    ),
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ),
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
 
                                 <DragOverlay
                                     dropAnimation={{

@@ -1,0 +1,224 @@
+import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+import { TAGS } from "@/Components/LoadingPlan/Tag";
+import { useMemo, useState } from "react";
+
+export default function SelectionToolbar({
+    selectedIds,
+    allData,
+    machines,
+    onTag,
+    disabled,
+    onClearTag,
+    onStatusChange,
+    onTransfer,
+    onDelete,
+    onClearSelection,
+}) {
+    const count = selectedIds.size;
+    const [transferOpen, setTransferOpen] = useState(false);
+    const [statusOpen, setStatusOpen] = useState(false);
+
+    const selectedMachines = useMemo(() => {
+        const s = new Set();
+        allData.forEach((r) => {
+            if (selectedIds.has(r._dndId)) s.add(r.machine);
+        });
+        return s;
+    }, [selectedIds, allData]);
+
+    if (count === 0) return null;
+
+    return (
+        <div className="sticky bottom-0 z-99">
+            {(transferOpen || statusOpen) && (
+                <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => {
+                        setTransferOpen(false);
+                        setStatusOpen(false);
+                    }}
+                />
+            )}
+
+            <div className="flex-none flex items-center justify-center px-4 py-2 border-t border-base-300 bg-base-200">
+                <div className="relative flex items-center gap-2 px-4 py-2 bg-neutral text-neutral-content rounded-2xl shadow-lg border border-base-content/10 select-none">
+                    <span className="text-xs font-semibold bg-info text-info-content px-2 py-0.5 rounded-full mr-1">
+                        {count} selected
+                    </span>
+
+                    <div className="w-px h-5 bg-base-content/20" />
+
+                    <span className="text-[11px] text-neutral-content/50 ml-1">
+                        Mark:
+                    </span>
+                    {Object.entries(TAGS).map(([key, cfg]) => (
+                        <button
+                            key={key}
+                            onClick={() => onTag(key)}
+                            className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ${cfg.toolbar}`}
+                            title={`Mark as ${cfg.label}`}
+                            disabled={disabled}
+                        >
+                            <span
+                                className={`w-2 h-2 rounded-full ${cfg.dot}`}
+                            />
+                            {cfg.label}
+                        </button>
+                    ))}
+                    <button
+                        onClick={onClearTag}
+                        className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/60 hover:bg-base-content/20"
+                        disabled={disabled}
+                    >
+                        Clear tag
+                    </button>
+
+                    <div className="w-px h-5 bg-base-content/20" />
+
+                    {/* Bulk status */}
+                    <div className="relative">
+                        <button
+                            onClick={() => {
+                                setStatusOpen((v) => !v);
+                                setTransferOpen(false);
+                            }}
+                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            disabled={disabled}
+                        >
+                            Set status
+                            <svg
+                                width="10"
+                                height="10"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.5"
+                            >
+                                <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                        </button>
+                        {statusOpen && (
+                            <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36 z-50">
+                                {[
+                                    "DONE",
+                                    "RUNNING",
+                                    "FOR PROCESS",
+                                    "FVI",
+                                    "BOXING",
+                                    "LWAIT",
+                                    "NONE",
+                                ].map((s) => (
+                                    <button
+                                        key={s}
+                                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
+                                        onClick={() => {
+                                            onStatusChange(s);
+                                            setStatusOpen(false);
+                                        }}
+                                        disabled={disabled}
+                                    >
+                                        <StatusBadge status={s} />
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="w-px h-5 bg-base-content/20" />
+
+                    {/* Transfer */}
+                    <div className="relative">
+                        <button
+                            onClick={() => {
+                                setTransferOpen((v) => !v);
+                                setStatusOpen(false);
+                            }}
+                            disabled={disabled}
+                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                        >
+                            Transfer to…
+                            <svg
+                                width="10"
+                                height="10"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.5"
+                            >
+                                <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                        </button>
+                        {transferOpen && (
+                            <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-40 z-50 max-h-60 overflow-y-auto">
+                                {machines
+                                    .filter(
+                                        (m) =>
+                                            !selectedMachines.has(m) ||
+                                            selectedMachines.size > 1,
+                                    )
+                                    .map((m) => (
+                                        <button
+                                            key={m ?? "unassigned"}
+                                            className={`w-full text-left px-3 py-1.5 text-sm text-base-content hover:bg-base-200 ${
+                                                selectedMachines.size === 1 &&
+                                                selectedMachines.has(m)
+                                                    ? "opacity-40 cursor-not-allowed"
+                                                    : ""
+                                            }`}
+                                            disabled={
+                                                disabled ||
+                                                (selectedMachines.size === 1 &&
+                                                    selectedMachines.has(m))
+                                            }
+                                            onClick={() => {
+                                                if (
+                                                    selectedMachines.size ===
+                                                        1 &&
+                                                    selectedMachines.has(m)
+                                                )
+                                                    return;
+                                                onTransfer(m);
+                                                setTransferOpen(false);
+                                            }}
+                                        >
+                                            {machineLabel(m)}
+                                        </button>
+                                    ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="w-px h-5 bg-base-content/20" />
+
+                    <button
+                        onClick={onDelete}
+                        className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
+                        disabled={disabled}
+                    >
+                        Delete
+                    </button>
+
+                    <button
+                        onClick={onClearSelection}
+                        className="ml-1 text-neutral-content/40 hover:text-neutral-content"
+                        title="Clear selection (Esc)"
+                        disabled={disabled}
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                        >
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}

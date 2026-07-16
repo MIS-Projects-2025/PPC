@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
+use App\Models\QdnMachine;
 use App\Services\LotScheduleCalculator;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
@@ -17,6 +18,20 @@ class LoadingPlanController extends Controller
     {
         $date = $request->get('date', ShiftDay::current());
         Log::info("date", array($date));
+        $activeMachines = QdnMachine::active()
+            ->select('machine_num', 'machine_platform')
+            ->get()
+            ->map(fn($machine) => [
+                'name' => $machine->machine_num,
+                'platform' => match (strtoupper($machine->machine_platform)) {
+                    'GRAVITY' => 'G6L',
+                    'TRAY' => 'Vitrox',
+                    'TURRET' => 'HSI',
+                    default => $machine->machine_platform,
+                },
+            ])
+            ->values();
+
         [$result, $wipRows] = $this->buildPlanRows($date);
 
         return Inertia::render(
@@ -24,6 +39,7 @@ class LoadingPlanController extends Controller
             [
                 'data'   => $result,
                 'date'   => $date,
+                'machines' => $activeMachines,
                 'status' => $wipRows->isEmpty() ? 'not_imported' : 'ok',
             ]
         );
@@ -91,7 +107,6 @@ class LoadingPlanController extends Controller
             $capacityUph = $entry?->finalized_at
                 ? $entry->capacity_uph_snapshot
                 : $calc->capacityUph($machine, $wip->Qty);
-
             $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
 
             $ct = LoadingPlanFormulas::computeCT($wip->Date_Loaded, $wip->BE_Starttime);

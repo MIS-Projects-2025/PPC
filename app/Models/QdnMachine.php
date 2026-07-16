@@ -46,4 +46,9 @@ class QdnMachine extends Model
     {
         return $this->belongsTo(QdnMachine::class, 'machine_id');
     }
+
+    public function scopeActive($query)
+    {
+        return $query->whereRaw('LOWER(status) = ?', ['active']);
+    }
 }
