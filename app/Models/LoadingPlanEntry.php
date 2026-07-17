@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Services\LotScheduleCalculator;
 
 class LoadingPlanEntry extends Model
 {
@@ -49,5 +50,33 @@ class LoadingPlanEntry extends Model
     public function getMachineName(): ?string
     {
         return $this->machineModel?->machine_num;
+    }
+
+    protected static function booted()
+    {
+        static::saving(function (LoadingPlanEntry $entry) {
+            if ($entry->getOriginal('finalized_at') !== null && $entry->isDirty('capacity_uph_snapshot')) {
+                throw new \RuntimeException(
+                    "Cannot modify capacity_uph_snapshot on entry {$entry->id}: already finalized at {$entry->getOriginal('finalized_at')}"
+                );
+            }
+        });
+    }
+
+    public function refreshCapacityUphSnapshot(int $qty): void
+    {
+        if ($this->finalized_at !== null) return; // frozen, no-op rather than throwing — callers shouldn't need to know finalization state to safely call this
+
+        $calc = app(LotScheduleCalculator::class);
+        $fresh = $calc->capacityUph($this->getMachineName(), $qty);
+
+        if ($fresh !== $this->capacity_uph_snapshot) {
+            // scope the update to unfinalized rows specifically, so a concurrent
+            // finalization landing between the read and this write can't be clobbered
+            static::where('id', $this->id)
+                ->whereNull('finalized_at')
+                ->update(['capacity_uph_snapshot' => $fresh]);
+            $this->capacity_uph_snapshot = $fresh;
+        }
     }
 }

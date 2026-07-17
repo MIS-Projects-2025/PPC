@@ -183,18 +183,6 @@ const useLoadingPlanStore = createUndoStore([]);
 
 const PLATFORM_ORDER = ["G6L", "Vitrox", "HSI"];
 
-// ---------------------------------------------------------------------------
-// MachineSection
-// ---------------------------------------------------------------------------
-
-/** Display label for a machine bucket — Unassigned/Manual get real words
- *  instead of null/"MANUAL" literal. */
-function machineLabel(machine) {
-    if (machine === null) return "Unassigned";
-    if (machine === MACHINE_MANUAL) return "Manual";
-    return machine;
-}
-
 /** After undo/redo swaps local state, diff the before/after snapshots
  *  into a list of backend operations and apply them as ONE atomic batch
  *  — either the whole undo persists, or none of it does. This replaces
@@ -399,6 +387,8 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
+    selectedLocation,
+    packages,
     status,
     baseTimes = {},
     onLotTransfer,
@@ -435,20 +425,14 @@ export default function LoadingPlanTable({
         isDirtyRef.current = isDirty;
     }, [isDirty]);
 
-    // Package_Name (via groupOf) drives tabs — a tab represents a GROUP of
-    // related packages, not a single Package_Name. See PACKAGE_GROUPS.
-    const packages = useMemo(
-        () =>
-            [
-                ...new Set(
-                    data
-                        .filter((r) => !isBlockRow(r))
-                        .map((r) => groupOf(r.Package_Name))
-                        .filter(Boolean),
-                ),
-            ].sort(),
-        [data],
-    );
+    const setLocation = (line) => {
+        if (line === selectedLocation) return; // no-op, already selected
+        router.get(
+            route("loading-plan.index"),
+            { date, location: line },
+            { preserveScroll: true, replace: true },
+        );
+    };
 
     // const [activePackage, setActivePackage] = useState(() => packages[0] ?? "");
     const [activePackage, setActivePackage] = useState("LGA");
@@ -1854,9 +1838,7 @@ export default function LoadingPlanTable({
     // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="relative h-full">
-            <TableActionsContext.Provider value={tableActionsValue}>
-                <div className="absolute inset-0 overflow-hidden flex flex-col">
-                    {/* <div
+            {/* <div
                         onPaste={(e) => {
                             console.log(
                                 "plain text:",
@@ -1870,6 +1852,8 @@ export default function LoadingPlanTable({
                     >
                         paste here
                     </div> */}
+            <TableActionsContext.Provider value={tableActionsValue}>
+                <div className="absolute inset-0 overflow-hidden flex flex-col">
                     {sorting.length > 0 && (
                         <div className="text-xs text-warning px-4 pb-2">
                             Sorted by {sorting[0].id} — clear sort to
@@ -1883,94 +1867,133 @@ export default function LoadingPlanTable({
                         </div>
                     )}
 
-                    {/* <div className="w-full min-w-0 flex flex-col flex-1 min-h-0"> */}
-                    {/* ── Top bar: undo/redo + package tabs ── */}
                     <div className="flex-none px-4 pt-4">
-                        <div className="flex items-start">
-                            <div className="flex flex-col">
-                                <DateNav
-                                    selected={selectedDate}
-                                    onChange={handleDateChange}
-                                    isNoFuture
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                            {/* Left column: identity/context — date, status, packages */}
+                            <div className="flex flex-col gap-2 min-w-0">
+                                <div>
+                                    <DateNav
+                                        selected={selectedDate}
+                                        onChange={handleDateChange}
+                                        isNoFuture
+                                    />
+                                    <div className="h-6 mt-1">
+                                        {status && status !== "ok" && (
+                                            <div className="text-sm text-muted-foreground leading-5">
+                                                {getStatusMessage(date, status)}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <PackageTabs
+                                    packages={packages}
+                                    active={activePackage}
+                                    onChange={(pkg) => {
+                                        setActivePackage(pkg);
+                                        clearSelection();
+                                    }}
                                 />
-                                <div className="h-6 mt-1">
-                                    {status && status !== "ok" && (
-                                        <div className="text-sm text-muted-foreground leading-5">
-                                            {getStatusMessage(date, status)}
+                            </div>
+
+                            {/* Right column: all controls — undo/redo, line/idle toggles */}
+                            <div className="flex flex-col items-end gap-2 shrink-0">
+                                <div className="flex items-center gap-2 h-7">
+                                    <button
+                                        onClick={() => handleUndo()}
+                                        disabled={!canUndo() || isUpdating}
+                                        className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
+                                        title="Undo (Ctrl+Z)"
+                                    >
+                                        ↩ Undo
+                                    </button>
+                                    <button
+                                        onClick={() => handleRedo()}
+                                        disabled={!canRedo() || isUpdating}
+                                        className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
+                                        title="Redo (Ctrl+Y)"
+                                    >
+                                        ↪ Redo
+                                    </button>
+
+                                    <div className="w-px h-4 bg-base-300 mx-1" />
+
+                                    {isUpdating ? (
+                                        <span className="flex items-center gap-1.5 text-xs text-info">
+                                            <span className="loading loading-spinner loading-xs" />
+                                            Saving…
+                                        </span>
+                                    ) : selectedIds.size > 0 ? (
+                                        <span className="flex items-center gap-1.5 text-xs text-info whitespace-nowrap">
+                                            {selectedIds.size} row
+                                            {selectedIds.size !== 1
+                                                ? "s"
+                                                : ""}{" "}
+                                            selected
+                                            <button
+                                                onClick={clearSelection}
+                                                className="underline underline-offset-2"
+                                            >
+                                                Deselect all
+                                            </button>
+                                        </span>
+                                    ) : null}
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                    <fieldset className="fieldset bg-base-100 border-base-300 rounded-box border py-1 px-2">
+                                        <legend className="fieldset-legend text-[11px] px-1">
+                                            Production Line
+                                        </legend>
+                                        <div className="join">
+                                            {["PL1", "PL6"].map((line) => (
+                                                <button
+                                                    key={line}
+                                                    type="button"
+                                                    disabled={isUpdating}
+                                                    onClick={() =>
+                                                        setLocation(line)
+                                                    }
+                                                    className={`btn btn-xs join-item ${
+                                                        selectedLocation ===
+                                                        line
+                                                            ? "btn-info"
+                                                            : "btn-ghost"
+                                                    }`}
+                                                >
+                                                    {line}
+                                                </button>
+                                            ))}
                                         </div>
+                                    </fieldset>
+
+                                    {idleMachines.length > 0 && (
+                                        <fieldset className="fieldset bg-base-100 border-base-300 rounded-box border py-1 px-2">
+                                            <legend className="fieldset-legend text-[11px] px-1">
+                                                Idle machines
+                                            </legend>
+                                            <label className="label gap-2 text-[11px] text-base-content/60 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    className="toggle toggle-xs"
+                                                    checked={showAllMachines}
+                                                    onChange={() =>
+                                                        setShowAllMachines(
+                                                            (v) => !v,
+                                                        )
+                                                    }
+                                                />
+                                                Show {idleMachines.length} idle
+                                                machine
+                                                {idleMachines.length !== 1
+                                                    ? "s"
+                                                    : ""}
+                                            </label>
+                                        </fieldset>
                                     )}
                                 </div>
                             </div>
-
-                            {/* collapse button, shown when expanded — also outside minWidth, sticky left */}
-                            {idleMachines.length > 0 && (
-                                <div className="sticky left-0 w-full px-1 mt-2">
-                                    <button
-                                        onClick={() =>
-                                            setShowAllMachines((v) => !v)
-                                        }
-                                        className="sticky left-0 text-left text-[11px] text-base-content/50 hover:text-base-content/80 mb-1.5"
-                                    >
-                                        {showAllMachines ? "▾" : "▸"}{" "}
-                                        {idleMachines.length} idle machine
-                                        {idleMachines.length !== 1
-                                            ? "s"
-                                            : ""}{" "}
-                                        for this package
-                                    </button>
-                                </div>
-                            )}
-
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => handleUndo()}
-                                    disabled={!canUndo() || isUpdating}
-                                    className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
-                                    title="Undo (Ctrl+Z)"
-                                >
-                                    ↩ Undo
-                                </button>
-                                <button
-                                    onClick={() => handleRedo()}
-                                    disabled={!canRedo() || isUpdating}
-                                    className="px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200"
-                                    title="Redo (Ctrl+Y)"
-                                >
-                                    ↪ Redo
-                                </button>
-                                {isUpdating && (
-                                    <>
-                                        <span className="loading text-info loading-spinner loading-xs"></span>
-                                        <span className="text-xs text-info animate-pulse">
-                                            Saving…
-                                        </span>
-                                    </>
-                                )}
-                                {selectedIds.size > 0 && (
-                                    <span className="text-xs text-info ml-2">
-                                        {selectedIds.size} row
-                                        {selectedIds.size !== 1 ? "s" : ""}{" "}
-                                        selected
-                                        {" · "}
-                                        <button
-                                            onClick={clearSelection}
-                                            className="underline"
-                                        >
-                                            Deselect all
-                                        </button>
-                                    </span>
-                                )}
-                            </div>
                         </div>
-
-                        <PackageTabs
-                            packages={packages}
-                            active={activePackage}
-                            onChange={(pkg) => {
-                                setActivePackage(pkg);
-                                clearSelection();
-                            }}
-                        />
                     </div>
 
                     {/* ── Scrollable machine list ── */}
@@ -2070,7 +2093,7 @@ export default function LoadingPlanTable({
                                                             <div className="text-[10px] font-semibold text-base-content/40 uppercase tracking-wide mb-1 text-center">
                                                                 {platform}
                                                             </div>
-                                                            <div className="grid grid-cols-2 gap-1.5">
+                                                            <div className="grid grid-cols-3 gap-1.5">
                                                                 {machinesInGroup.map(
                                                                     (
                                                                         machine,
@@ -2110,6 +2133,7 @@ export default function LoadingPlanTable({
                     {/* ── Selection toolbar ── */}
                     <SelectionToolbar
                         selectedIds={selectedIds}
+                        machinePlatform={machinePlatform}
                         allData={data}
                         machines={machines}
                         onTag={handleBulkTag}

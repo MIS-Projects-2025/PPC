@@ -7,7 +7,9 @@ use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
+use App\Models\ProductionLinePackageReference;
 use App\Services\LotScheduleCalculator;
+use App\Services\PackageGroups;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
@@ -17,9 +19,17 @@ class LoadingPlanController extends Controller
     public function index(Request $request)
     {
         $date = $request->get('date', ShiftDay::current());
-        Log::info("date", array($date));
+        $selectedLocation = $request->get('location', 'PL1');
+
+        Log::info('index: date', ['date' => $date]);
+        Log::info('index: selectedLocation', ['selectedLocation' => $selectedLocation]);
+
+        $packageLineMap = ProductionLinePackageReference::pluck('production_line', 'package');
+        Log::info('index: packageLineMap', ['packageLineMap' => $packageLineMap->toArray()]);
+
         $activeMachines = QdnMachine::active()
-            ->select('machine_num', 'machine_platform')
+            ->where('location', $selectedLocation)
+            ->select('machine_num', 'machine_platform', 'location')
             ->get()
             ->map(fn($machine) => [
                 'name' => $machine->machine_num,
@@ -29,18 +39,39 @@ class LoadingPlanController extends Controller
                     'TURRET' => 'HSI',
                     default => $machine->machine_platform,
                 },
+                'location' => $machine->location,
             ])
             ->values();
+        Log::info('index: activeMachines', ['activeMachines' => $activeMachines->toArray()]);
 
-        [$result, $wipRows] = $this->buildPlanRows($date);
+        [$result, $wipRows] = $this->buildPlanRows($date, $selectedLocation, $packageLineMap);
+        Log::info('index: result', ['result' => $result->toArray()]);
+        Log::info('index: wipRows', ['wipRows' => $wipRows->toArray()]);
+
+        $packages = $result
+            ->filter(fn($row) => !$row['isBlock'])
+            ->pluck('Package_Name')
+            ->filter()
+            ->unique()
+            ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
+            ->map(fn($pkg) => PackageGroups::groupOf($pkg))
+            ->unique()
+            ->sort()
+            ->values();
+        Log::info('index: packages', ['packages' => $packages->toArray()]);
+
+        $status = $wipRows->isEmpty() ? 'not_imported' : 'ok';
+        Log::info('index: status', ['status' => $status]);
 
         return Inertia::render(
             'LoadingPlanTable',
             [
-                'data'   => $result,
-                'date'   => $date,
-                'machines' => $activeMachines,
-                'status' => $wipRows->isEmpty() ? 'not_imported' : 'ok',
+                'data'              => $result,
+                'date'              => $date,
+                'machines'          => $activeMachines,
+                'packages'          => $packages,
+                'selectedLocation'  => $selectedLocation,
+                'status'            => $status,
             ]
         );
     }
@@ -51,9 +82,14 @@ class LoadingPlanController extends Controller
             'date'       => 'required|date',
             'machines'   => 'required|array|min:1',
             'machines.*' => 'string',
+            'location'   => 'sometimes|array',
+            'location.*' => 'string',
         ]);
 
-        [$result, $wipRows] = $this->buildPlanRows($data['date']);
+        $selectedLocation = $request->get('location', 'PL1');
+        $packageLineMap = ProductionLinePackageReference::pluck('production_line', 'package');
+
+        [$result, $wipRows] = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap);
         Log::info("resultresultresult", array($result));
 
         $filtered = $result
@@ -71,27 +107,73 @@ class LoadingPlanController extends Controller
         return Inertia::render(
             'LoadingPlanTableByMachine',
             [
-                'data'   => $filtered,
-                'date'   => $data['date'],
-                'status' => $status,
-                'machines' => $data['machines'],
+                'data'              => $filtered,
+                'date'              => $data['date'],
+                'status'            => $status,
+                'machines'          => $data['machines'],
+                'selectedLocation' => $selectedLocation,
             ]
         );
     }
 
     /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
-    private function buildPlanRows(string $date): array
+    private function buildPlanRows(string $date, string $selectedLocation, $packageLineMap): array
     {
+        Log::info('buildPlanRows: input', [
+            'date' => $date,
+            'selectedLocation' => $selectedLocation,
+            'packageLineMap' => $packageLineMap->toArray(),
+        ]);
+
         $allEntries = LoadingPlanEntry::with('machineModel')->where('scheduled_date', $date)->get();
+        Log::info('buildPlanRows: allEntries count', ['count' => $allEntries->count()]);
 
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
+        Log::info('buildPlanRows: lotEntries', ['lotEntries' => $lotEntries->toArray()]);
+
         $blockEntries = $allEntries->where('entry_type', 'block');
+        Log::info('buildPlanRows: blockEntries (before location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
+
+        $blockEntries = $blockEntries->filter(function ($entry) use ($selectedLocation) {
+            $location = $entry->machineModel?->location;
+            return $location === null || $location === $selectedLocation;
+        });
+        Log::info('buildPlanRows: blockEntries (after location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
+
+        $packages = ProductionLinePackageReference::query()
+            ->where('production_line', $selectedLocation)
+            ->pluck('package');
+
+        $pl1 = ProductionLinePackageReference::where('production_line', 'PL1')->pluck('package')->sort()->values();
+        $pl6 = ProductionLinePackageReference::where('production_line', 'PL6')->pluck('package')->sort()->values();
+
+        Log::info('pl compare', [
+            'pl1' => $pl1->toArray(),
+            'pl6' => $pl6->toArray(),
+            'diff_pl1_minus_pl6' => $pl1->diff($pl6)->values()->toArray(),
+            'diff_pl6_minus_pl1' => $pl6->diff($pl1)->values()->toArray(),
+        ]);
+
+        Log::info('buildPlanRows: packages', ['packages' => $packages->toArray()]);
+        $packages = ProductionLinePackageReference::query()
+            ->where('production_line', $selectedLocation)
+            ->pluck('package')
+            ->map(fn($p) => trim($p));
+
+        Log::info('package compare', [
+            'ref_packages' => $packages->map(fn($p) => "[$p]")->toArray(),
+            'wip_packages' => CustomerDataWip::forDate($date)->tapeReelStations()->excludingPostTnr()
+                ->pluck('Package_Name')->unique()->map(fn($p) => "[$p]")->toArray(),
+        ]);
 
         $wipRows = CustomerDataWip::query()
             ->forDate($date)
             ->tapeReelStations()
             ->excludingPostTnr()
+            ->whereIn('Package_Name', $packages)
             ->get();
+
+        Log::info('buildPlanRows: wipRows', ['count' => $wipRows->count(), 'wipRows' => $wipRows->toArray()]);
 
         $calc = new LotScheduleCalculator();
 
@@ -107,6 +189,11 @@ class LoadingPlanController extends Controller
             $capacityUph = $entry?->finalized_at
                 ? $entry->capacity_uph_snapshot
                 : $calc->capacityUph($machine, $wip->Qty);
+
+            if ($entry && !$entry->finalized_at) {
+                $entry->refreshCapacityUphSnapshot($wip->Qty);
+            }
+
             $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
 
             $ct = LoadingPlanFormulas::computeCT($wip->Date_Loaded, $wip->BE_Starttime);
@@ -120,6 +207,19 @@ class LoadingPlanController extends Controller
             $isBakeHighlight = ($wip->Bake == "For Bake")
                 && in_array($wip->Station, $stationList)
                 && $wip->Bake_Count == 0;
+
+            Log::info('buildPlanRows: lot row calc', [
+                'Lot_Id' => $wip->Lot_Id,
+                'machine' => $machine,
+                'doable' => $doable,
+                'capacityUph' => $capacityUph,
+                'accuTime' => $accuTime,
+                'ct' => $ct,
+                'osl' => $osl,
+                'cycleTimeExceedResidual' => $cycleTimeExceedResidual,
+                'cycleTimeExceed' => $cycleTimeExceed,
+                'isBakeHighlight' => $isBakeHighlight,
+            ]);
 
             return [
                 'id'                  => $wip->customer_data_id,
@@ -162,9 +262,16 @@ class LoadingPlanController extends Controller
                 'isBakeHighlight'     => $isBakeHighlight
             ];
         });
+        Log::info('buildPlanRows: lotResults count', ['count' => $lotResults->count()]);
 
         $wipLotIds = $wipRows->pluck('Lot_Id')->all();
-        $manualLotEntries = $lotEntries->reject(fn($entry, $lotId) => in_array($lotId, $wipLotIds));
+        Log::info('buildPlanRows: wipLotIds', ['wipLotIds' => $wipLotIds]);
+
+        $manualLotEntries = $lotEntries->reject(function ($entry, $lotId) use ($wipLotIds, $selectedLocation, $packageLineMap) {
+            if (in_array($lotId, $wipLotIds)) return true;
+            return $packageLineMap->get($entry->package_name) !== $selectedLocation;
+        });
+        Log::info('buildPlanRows: manualLotEntries', ['manualLotEntries' => $manualLotEntries->values()->toArray()]);
 
         $manualLotResults = $manualLotEntries->map(function ($entry) {
             $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
@@ -206,6 +313,7 @@ class LoadingPlanController extends Controller
                 'isManual'            => true,
             ];
         })->values();
+        Log::info('buildPlanRows: manualLotResults count', ['count' => $manualLotResults->count()]);
 
         $blockResults = $blockEntries->map(function ($entry) {
             $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
@@ -247,6 +355,7 @@ class LoadingPlanController extends Controller
                 'blockLabel'          => $entry->block_label,
             ];
         });
+        Log::info('buildPlanRows: blockResults count', ['count' => $blockResults->count()]);
 
         $result = $lotResults->concat($manualLotResults)->concat($blockResults)
             ->sort(function ($a, $b) {
@@ -267,6 +376,8 @@ class LoadingPlanController extends Controller
                 return ($seqA < $seqB) ? -1 : 1;
             })
             ->values();
+
+        Log::info('buildPlanRows: final result', ['count' => $result->count(), 'result' => $result->toArray()]);
 
         return [$result, $wipRows];
     }

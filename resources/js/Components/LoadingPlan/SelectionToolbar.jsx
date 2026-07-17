@@ -1,9 +1,20 @@
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { TAGS } from "@/Components/LoadingPlan/Tag";
-import { useMemo, useState } from "react";
+import { MACHINE_MANUAL } from "@/Constants/machines.js";
+import { useMemo, useRef, useState } from "react";
+import TransferModal from "./TransferModal";
+
+/** Display label for a machine bucket — Unassigned/Manual get real words
+ *  instead of null/"MANUAL" literal. */
+function machineLabel(machine) {
+    if (machine === null) return "Unassigned";
+    if (machine === MACHINE_MANUAL) return "Manual";
+    return machine;
+}
 
 export default function SelectionToolbar({
     selectedIds,
+    machinePlatform,
     allData,
     machines,
     onTag,
@@ -17,7 +28,7 @@ export default function SelectionToolbar({
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
-
+    const transferModalRef = useRef(null);
     const selectedMachines = useMemo(() => {
         const s = new Set();
         allData.forEach((r) => {
@@ -55,7 +66,7 @@ export default function SelectionToolbar({
                         <button
                             key={key}
                             onClick={() => onTag(key)}
-                            className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ${cfg.toolbar}`}
+                            className={`btn btn-ghost flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ${cfg.toolbar}`}
                             title={`Mark as ${cfg.label}`}
                             disabled={disabled}
                         >
@@ -67,7 +78,7 @@ export default function SelectionToolbar({
                     ))}
                     <button
                         onClick={onClearTag}
-                        className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/60 hover:bg-base-content/20"
+                        className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/60 hover:bg-base-content/20"
                         disabled={disabled}
                     >
                         Clear tag
@@ -79,10 +90,11 @@ export default function SelectionToolbar({
                     <div className="relative">
                         <button
                             onClick={() => {
+                                transferModalRef.current?.close();
                                 setStatusOpen((v) => !v);
                                 setTransferOpen(false);
                             }}
-                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
                             disabled={disabled}
                         >
                             Set status
@@ -110,7 +122,7 @@ export default function SelectionToolbar({
                                 ].map((s) => (
                                     <button
                                         key={s}
-                                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
+                                        className="btn btn-ghost w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
                                         onClick={() => {
                                             onStatusChange(s);
                                             setStatusOpen(false);
@@ -130,11 +142,12 @@ export default function SelectionToolbar({
                     <div className="relative">
                         <button
                             onClick={() => {
-                                setTransferOpen((v) => !v);
+                                setTransferOpen(true);
+                                transferModalRef.current?.showModal();
                                 setStatusOpen(false);
                             }}
                             disabled={disabled}
-                            className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
                         >
                             Transfer to…
                             <svg
@@ -148,51 +161,13 @@ export default function SelectionToolbar({
                                 <polyline points="6 9 12 15 18 9" />
                             </svg>
                         </button>
-                        {transferOpen && (
-                            <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-40 z-50 max-h-60 overflow-y-auto">
-                                {machines
-                                    .filter(
-                                        (m) =>
-                                            !selectedMachines.has(m) ||
-                                            selectedMachines.size > 1,
-                                    )
-                                    .map((m) => (
-                                        <button
-                                            key={m ?? "unassigned"}
-                                            className={`w-full text-left px-3 py-1.5 text-sm text-base-content hover:bg-base-200 ${
-                                                selectedMachines.size === 1 &&
-                                                selectedMachines.has(m)
-                                                    ? "opacity-40 cursor-not-allowed"
-                                                    : ""
-                                            }`}
-                                            disabled={
-                                                disabled ||
-                                                (selectedMachines.size === 1 &&
-                                                    selectedMachines.has(m))
-                                            }
-                                            onClick={() => {
-                                                if (
-                                                    selectedMachines.size ===
-                                                        1 &&
-                                                    selectedMachines.has(m)
-                                                )
-                                                    return;
-                                                onTransfer(m);
-                                                setTransferOpen(false);
-                                            }}
-                                        >
-                                            {machineLabel(m)}
-                                        </button>
-                                    ))}
-                            </div>
-                        )}
                     </div>
 
                     <div className="w-px h-5 bg-base-content/20" />
 
                     <button
                         onClick={onDelete}
-                        className="text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
+                        className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
                         disabled={disabled}
                     >
                         Delete
@@ -200,7 +175,7 @@ export default function SelectionToolbar({
 
                     <button
                         onClick={onClearSelection}
-                        className="ml-1 text-neutral-content/40 hover:text-neutral-content"
+                        className="btn btn-ghost ml-1"
                         title="Clear selection (Esc)"
                         disabled={disabled}
                     >
@@ -219,6 +194,14 @@ export default function SelectionToolbar({
                     </button>
                 </div>
             </div>
+
+            <TransferModal
+                ref={transferModalRef}
+                machines={machines}
+                machinePlatform={machinePlatform}
+                selectedMachines={selectedMachines}
+                onSelect={onTransfer}
+            />
         </div>
     );
 }

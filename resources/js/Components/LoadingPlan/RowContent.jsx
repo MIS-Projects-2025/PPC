@@ -218,6 +218,7 @@ const RowContent = memo(
                         - - - - - - {r.blockLabel || "Time block"} - - - - - -
                     </td>
                     <td style={{ width: COL_WIDTHS.status }} />
+                    <td style={{ width: COL_WIDTHS.Remarks }} />
                     <td style={{ width: COL_WIDTHS.Station }} />
                     <td style={{ width: COL_WIDTHS.Qty }} />
                     <td style={{ width: COL_WIDTHS.Doable }} />
@@ -267,7 +268,6 @@ const RowContent = memo(
                     <td style={{ width: COL_WIDTHS.OSL }} />
                     <td style={{ width: COL_WIDTHS.Body_Size }} />
                     <td style={{ width: COL_WIDTHS.Ramp_Time }} />
-                    <td style={{ width: COL_WIDTHS.Remarks }} />
                 </tr>
             );
         }

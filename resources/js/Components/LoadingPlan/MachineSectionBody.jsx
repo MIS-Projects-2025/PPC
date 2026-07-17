@@ -169,14 +169,6 @@ const MachineSectionBody = memo(function MachineSectionBody({
                                         allGapInfo[machine]?.[
                                             row.original._dndId
                                         ];
-                                    console.log(
-                                        "🚀 ~ MachineSectionBody ~ row:",
-                                        row,
-                                    );
-                                    console.log(
-                                        "🚀 ~ MachineSectionBody ~ segments:",
-                                        segments,
-                                    );
                                     return (
                                         <Fragment key={row.original._dndId}>
                                             <SortableRow

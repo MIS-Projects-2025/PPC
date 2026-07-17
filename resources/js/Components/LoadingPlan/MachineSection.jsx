@@ -187,14 +187,17 @@ const MachineSection = memo(
                                     <div className="leading-0">
                                         <div>
                                             {rows.length === 0 ? (
-                                                <div className="text-[11px] font-medium text-base-content/30 italic">
-                                                    0 lots
+                                                <div className="text-[11px] font-medium font-mono text-base-content/30 italic">
+                                                    0 rows
                                                     {otherPackageCount > 0 &&
                                                         ` · ${otherPackageCount} in other packages`}
                                                 </div>
                                             ) : (
-                                                <span className="text-[11px] font-mono font-medium text-base-content/50">
-                                                    {rows.length} lot
+                                                <span className="text-[11px] font-mono text-base-content/50">
+                                                    <span className="font-bold text-sm text-base-content">
+                                                        {rows.length}
+                                                    </span>{" "}
+                                                    row
                                                     {rows.length !== 1
                                                         ? "s"
                                                         : ""}

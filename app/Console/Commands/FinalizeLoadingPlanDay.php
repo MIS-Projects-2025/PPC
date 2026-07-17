@@ -4,7 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\LoadingPlanEntry;
 use App\Services\LotScheduleCalculator;
-use App\Support\ShiftDay;
+use App\Helpers\ShiftDay;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
