@@ -15,7 +15,6 @@ return [
         'GTLPI_T',
         'GTCARIER_T',
         'GTBKULBE_T',
-        // 'GTARCH_T',
         'GTFORM_T',
     ],
 ];

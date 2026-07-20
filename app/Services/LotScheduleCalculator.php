@@ -6,6 +6,8 @@ use App\Models\MachinePlatformCapacityBand;
 use App\Models\QdnMachine;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use App\Models\LoadingPlanEntry;
+use Illuminate\Support\Facades\DB;
 
 class LotScheduleCalculator
 {
@@ -49,5 +51,21 @@ class LotScheduleCalculator
     public function accuTime(?int $doable, ?int $capacityUph): ?float
     {
         return ($doable && $capacityUph) ? round($doable / $capacityUph, 2) : null;
+    }
+
+    public function bulkRefreshCapacitySnapshots(array $updates): void
+    {
+        if (empty($updates)) return;
+
+        $ids = array_keys($updates);
+        $cases = collect($updates)
+            ->map(fn($value, $id) => "WHEN {$id} THEN " . (is_null($value) ? 'NULL' : $value))
+            ->implode(' ');
+
+        LoadingPlanEntry::whereIn('id', $ids)
+            ->whereNull('finalized_at')
+            ->update([
+                'capacity_uph_snapshot' => DB::raw("CASE id {$cases} END"),
+            ]);
     }
 }

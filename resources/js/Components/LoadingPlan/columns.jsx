@@ -11,7 +11,7 @@ export const COLUMNS = [
     // ── Drag handle (display only) ──────────────────────────────────────────
     columnHelper.display({
         id: "drag",
-        size: 36,
+        size: 50,
         enableSorting: false,
         header: () => null,
         cell: () => null,
@@ -21,7 +21,7 @@ export const COLUMNS = [
     columnHelper.display({
         id: "item",
         header: "#",
-        size: 40,
+        size: 50,
     }),
 
     // ── Read-only data columns ──────────────────────────────────────────────

@@ -18,9 +18,6 @@ import { TAGS, TagDot } from "./Tag";
 /**
  * Editable columns and their input types.
  * accuTime replaces the old "duration" as the editable queue-time field.
- * Package_Name is intentionally NOT here — it has its own dropdown editor
- * (handlePackageClick), scoped to the row's current group, mirroring how
- * `status` already works.
  * Capacity_UPH is intentionally NOT here either — it's fully derived from
  * (Qty, the lot's current machine's platform) via CAPACITY_BANDS, so it's
  * a display column now, recomputed live on every render (see its
@@ -106,7 +103,6 @@ const RowContent = memo(
         const {
             handleStatusClick = noop,
             handleCellClick = noop,
-            handlePackageClick = noop,
             selectedIds,
             handleRowSelect = noop,
         } = useContext(TableActionsContext);
@@ -282,7 +278,7 @@ const RowContent = memo(
                     transition,
                     opacity: isDragging ? 0.3 : 1,
                 }}
-                className={`border-b border-base-300 last:border-0 border-l-2 transition-colors ${
+                className={`border-b border-base-300 last:border-0 transition-colors ${
                     isSelected
                         ? "bg-info/10 border-l-info"
                         : tagCfg
@@ -292,7 +288,7 @@ const RowContent = memo(
                             : "border-l-transparent hover:bg-base-200"
                 }`}
             >
-                <td className="w-9 px-1 text-center">
+                <td className="bg-base-100 sticky px-2 -left-4 text-center">
                     <div className="flex items-center gap-1">
                         {!disableSelection && (
                             <RowCheckbox
@@ -304,7 +300,7 @@ const RowContent = memo(
 
                         {!disableGripButton && (
                             <button
-                                className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/50 active:cursor-grabbing p-1 rounded"
+                                className="bg-base-100 btn btn-ghost px-1 cursor-grab text-base-content hover:text-base-content/50 active:cursor-grabbing rounded"
                                 {...dragHandleProps}
                                 tabIndex={-1}
                                 disabled={!isSortable}
@@ -385,39 +381,6 @@ const RowContent = memo(
                                                 : row.original.status
                                         }
                                     />
-                                </button>
-                            </td>
-                        );
-                    }
-
-                    if (cell.column.id === "Package_Name") {
-                        return (
-                            <td
-                                key={cell.id}
-                                style={{
-                                    width: cell.column.getSize(),
-                                    maxWidth: cell.column.getSize(),
-                                }}
-                                // className="px-2.5 text-sm"
-                                className={`px-2.5 text-sm ${
-                                    isCycleExceed
-                                        ? "bg-yellow-300 text-black"
-                                        : ""
-                                }`}
-                            >
-                                <button
-                                    className="btn btn-ghost w-full text-left justify-start px-1.5 hover:bg-info/10 hover:ring-1 hover:ring-info/30 rounded"
-                                    onClick={(e) =>
-                                        handlePackageClick(
-                                            e,
-                                            row.original._dndId,
-                                            row.original.Package_Name,
-                                        )
-                                    }
-                                >
-                                    <span className="text-sm whitespace-nowrap overflow-hidden text-ellipsis">
-                                        {row.original.Package_Name ?? "—"}
-                                    </span>
                                 </button>
                             </td>
                         );

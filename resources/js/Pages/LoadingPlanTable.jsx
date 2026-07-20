@@ -1018,36 +1018,6 @@ export default function LoadingPlanTable({
         [statusMenu, update, data, date, undo],
     );
 
-    // Package_Name editor — same pattern as status, but options are scoped
-    // to the row's CURRENT group (you're correcting which package within
-    // the family this lot belongs to, not moving it to a different tab).
-    const handlePackageClick = useCallback((e, dndId, currentPackage) => {
-        if (isUpdating) return;
-        e.stopPropagation();
-        const rect = e.currentTarget.getBoundingClientRect();
-        setPackageMenu({
-            dndId,
-            x: rect.left,
-            y: rect.bottom + 4,
-            currentPackage,
-        });
-    }, []);
-
-    const handlePackageChange = useCallback(
-        (newPackageName) => {
-            update((prev) =>
-                prev.map((r) =>
-                    r._dndId === packageMenu.dndId
-                        ? { ...r, Package_Name: newPackageName }
-                        : r,
-                ),
-            );
-            setIsDirty(true);
-            setPackageMenu(null);
-        },
-        [packageMenu, update],
-    );
-
     // Standalone source of truth for which sections render: Unassigned and
     // Manual are always shown (pinned at the top, in that order), followed
     // by every real machine from the MACHINES config, in config order —
@@ -1767,18 +1737,11 @@ export default function LoadingPlanTable({
         () => ({
             handleStatusClick,
             handleCellClick,
-            handlePackageClick,
             selectedIds,
             handleRowSelect,
             anchorIdRef,
         }),
-        [
-            handleStatusClick,
-            handleCellClick,
-            handlePackageClick,
-            selectedIds,
-            handleRowSelect,
-        ],
+        [handleStatusClick, handleCellClick, selectedIds, handleRowSelect],
     );
 
     const tableInteractionValue = useMemo(

@@ -177,6 +177,8 @@ class LoadingPlanController extends Controller
 
         $calc = new LotScheduleCalculator();
 
+        $capacityUpdates = [];
+
         $lotResults = $wipRows->map(function ($wip) use ($lotEntries, $calc) {
             $entry = $lotEntries->get($wip->Lot_Id);
 
@@ -190,8 +192,8 @@ class LoadingPlanController extends Controller
                 ? $entry->capacity_uph_snapshot
                 : $calc->capacityUph($machine, $wip->Qty);
 
-            if ($entry && !$entry->finalized_at) {
-                $entry->refreshCapacityUphSnapshot($wip->Qty);
+            if ($entry && !$entry->finalized_at && $capacityUph !== $entry->capacity_uph_snapshot) {
+                $capacityUpdates[$entry->id] = $capacityUph;
             }
 
             $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
@@ -262,6 +264,15 @@ class LoadingPlanController extends Controller
                 'isBakeHighlight'     => $isBakeHighlight
             ];
         });
+
+        if (!empty($capacityUpdates)) {
+            try {
+                $calc->bulkRefreshCapacitySnapshots($capacityUpdates);
+            } catch (\Throwable $e) {
+                Log::error('bulkRefreshCapacitySnapshots failed', ['error' => $e->getMessage(), 'ids' => array_keys($capacityUpdates)]);
+            }
+        }
+
         Log::info('buildPlanRows: lotResults count', ['count' => $lotResults->count()]);
 
         $wipLotIds = $wipRows->pluck('Lot_Id')->all();
