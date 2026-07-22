@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class PpcPackageMaster extends Model
 {
     protected $table = 'ppc_package_master';
+    public $timestamps = false;
     protected $fillable = [
         'package',
         'is_telford',

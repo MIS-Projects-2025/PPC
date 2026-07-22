@@ -79,15 +79,15 @@ export function applyTimeStartEdit(
 export function recomputeMachine(rows, machine, baseTimes) {
     const machineRows = rows.filter((r) => r.machine === machine);
 
-    if (!hasTimeline(machine)) {
-        machineRows.forEach((row) => {
-            row.timeStart = null;
-            row.timeEnd = null;
-            row.timeStartDayOffset = 0;
-            row.timeEndDayOffset = 0;
-        });
-        return;
-    }
+    // if (!hasTimeline(machine)) {
+    //     machineRows.forEach((row) => {
+    //         row.timeStart = null;
+    //         row.timeEnd = null;
+    //         row.timeStartDayOffset = 0;
+    //         row.timeEndDayOffset = 0;
+    //     });
+    //     return;
+    // }
 
     const baseTime = baseTimes[machine] ?? "06:00";
     machineRows.reduce((prevEnd, row) => {
@@ -95,6 +95,10 @@ export function recomputeMachine(rows, machine, baseTimes) {
 
         const start = formatTime(prevEnd);
         const end = formatTime(prevEnd + dur);
+        console.log("🚀 ~ recomputeMachine ~ prevEnd:", prevEnd);
+        console.log("🚀 ~ recomputeMachine ~ row:", row);
+        console.log("🚀 ~ recomputeMachine ~ start:", start);
+        console.log("🚀 ~ recomputeMachine ~ end:", end);
 
         row.timeStart = start.time;
         row.timeStartDayOffset = start.dayOffset;

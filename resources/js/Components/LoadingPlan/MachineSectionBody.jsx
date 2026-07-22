@@ -1,5 +1,4 @@
 import { machineToDroppableToken } from "@/Lib/dnd.js";
-import { formatExpectedPT } from "@/Lib/time";
 import { useDroppable } from "@dnd-kit/core";
 import {
     SortableContext,
@@ -21,6 +20,7 @@ import {
     useRef,
 } from "react";
 import { COLUMNS, TOTAL_MIN_WIDTH } from "./columns";
+import GapHintRow from "./GapHintRow";
 import { SortableRow } from "./SortableRow";
 
 export const PREFIX_EMPTY_DROPPABLE = "empty-";
@@ -44,6 +44,7 @@ function EmptyMachineDropRow({ machine }) {
 }
 
 export const ScrollParentContext = createContext(null);
+
 export const TableInteractionContext = createContext({
     isSortable: false,
     disableSelection: false,
@@ -52,36 +53,6 @@ export const TableInteractionContext = createContext({
     disableAddRowBlock: false,
 });
 export const GapInfoContext = createContext({});
-
-function GapHintRow({ segments }) {
-    const totalMinutes = segments.reduce((s, seg) => s + seg.minutes, 0);
-    const totalH = Math.floor(totalMinutes / 60);
-    const totalM = totalMinutes % 60;
-    const totalDur = totalH > 0 ? `${totalH}h ${totalM}m` : `${totalM}m`;
-
-    return (
-        <tr className="bg-base-300/50">
-            <td
-                colSpan={COLUMNS.length}
-                className="px-2.5 py-1.5 text-center text-[11px] text-base-content/40 italic"
-            >
-                <span className="mr-1.5">— {totalDur} elapsed —</span>
-                {segments.map((seg, i) => (
-                    <span
-                        key={i}
-                        className={`not-italic font-medium px-1.5 py-0.5 rounded-full mx-0.5 ${
-                            seg.kind === "block"
-                                ? "bg-base-content/10 text-base-content/50"
-                                : "bg-info/10 text-info/70"
-                        }`}
-                    >
-                        {seg.label} {formatExpectedPT(seg.minutes)}
-                    </span>
-                ))}
-            </td>
-        </tr>
-    );
-}
 
 const MachineSectionBody = memo(function MachineSectionBody({
     rows,
@@ -165,12 +136,19 @@ const MachineSectionBody = memo(function MachineSectionBody({
                                 )}
                                 {virtualRows.map((vRow) => {
                                     const row = tableRows[vRow.index];
-                                    const segments =
+                                    const gapEntry =
                                         allGapInfo[machine]?.[
                                             row.original._dndId
                                         ];
                                     return (
                                         <Fragment key={row.original._dndId}>
+                                            {gapEntry && (
+                                                <GapHintRow
+                                                    segments={gapEntry.segments}
+                                                    gapStart={gapEntry.gapStart}
+                                                    gapEnd={gapEntry.gapEnd}
+                                                />
+                                            )}
                                             <SortableRow
                                                 row={row}
                                                 orderedDndIds={dndIds}
@@ -180,11 +158,6 @@ const MachineSectionBody = memo(function MachineSectionBody({
                                                 }
                                                 virtualIndex={vRow.index}
                                             />
-                                            {segments && (
-                                                <GapHintRow
-                                                    segments={segments}
-                                                />
-                                            )}
                                         </Fragment>
                                     );
                                 })}

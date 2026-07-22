@@ -7,12 +7,13 @@ use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
-use App\Models\ProductionLinePackageReference;
+use App\Models\PpcPackageMaster; // maps to ppc_package_master
 use App\Services\LotScheduleCalculator;
 use App\Services\PackageGroups;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
+use Illuminate\Support\Facades\DB;
 
 class LoadingPlanController extends Controller
 {
@@ -24,7 +25,10 @@ class LoadingPlanController extends Controller
         Log::info('index: date', ['date' => $date]);
         Log::info('index: selectedLocation', ['selectedLocation' => $selectedLocation]);
 
-        $packageLineMap = ProductionLinePackageReference::pluck('production_line', 'package');
+        $packageLineMap = PpcPackageMaster::query()
+            ->where('is_telford', 1)
+            ->where('is_active', 1)
+            ->pluck('default_pl', 'package');
         Log::info('index: packageLineMap', ['packageLineMap' => $packageLineMap->toArray()]);
 
         $activeMachines = QdnMachine::active()
@@ -87,7 +91,11 @@ class LoadingPlanController extends Controller
         ]);
 
         $selectedLocation = $request->get('location', 'PL1');
-        $packageLineMap = ProductionLinePackageReference::pluck('production_line', 'package');
+
+        $packageLineMap = PpcPackageMaster::query()
+            ->where('is_telford', 1)
+            ->where('is_active', 1)
+            ->pluck('default_pl', 'package');
 
         [$result, $wipRows] = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap);
         Log::info("resultresultresult", array($result));
@@ -140,23 +148,10 @@ class LoadingPlanController extends Controller
         });
         Log::info('buildPlanRows: blockEntries (after location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
 
-        $packages = ProductionLinePackageReference::query()
-            ->where('production_line', $selectedLocation)
-            ->pluck('package');
-
-        $pl1 = ProductionLinePackageReference::where('production_line', 'PL1')->pluck('package')->sort()->values();
-        $pl6 = ProductionLinePackageReference::where('production_line', 'PL6')->pluck('package')->sort()->values();
-
-        Log::info('pl compare', [
-            'pl1' => $pl1->toArray(),
-            'pl6' => $pl6->toArray(),
-            'diff_pl1_minus_pl6' => $pl1->diff($pl6)->values()->toArray(),
-            'diff_pl6_minus_pl1' => $pl6->diff($pl1)->values()->toArray(),
-        ]);
-
-        Log::info('buildPlanRows: packages', ['packages' => $packages->toArray()]);
-        $packages = ProductionLinePackageReference::query()
-            ->where('production_line', $selectedLocation)
+        $packages = PpcPackageMaster::query()
+            ->where('is_telford', 1)
+            ->where('is_active', 1)
+            ->where('default_pl', $selectedLocation)
             ->pluck('package')
             ->map(fn($p) => trim($p));
 
@@ -179,14 +174,27 @@ class LoadingPlanController extends Controller
 
         $capacityUpdates = [];
 
-        $lotResults = $wipRows->map(function ($wip) use ($lotEntries, $calc) {
+        $commitsByCustomerDataId = DB::table('ppc.lot_commits')
+            ->whereIn('customer_data_id', $wipRows->pluck('customer_data_id'))
+            ->get()
+            ->keyBy('customer_data_id');
+
+        $packageListById = DB::table('qdn_db.package_list')
+            ->whereIn('id', $commitsByCustomerDataId->pluck('recipe_source_id')->filter()->unique())
+            ->get()
+            ->keyBy('id');
+
+        $lotResults = $wipRows->map(function ($wip) use ($commitsByCustomerDataId, $packageListById, $lotEntries, $calc) {
             $entry = $lotEntries->get($wip->Lot_Id);
 
             $machine = $entry?->finalized_at
                 ? $entry->machine_snapshot
                 : $entry?->getMachineName();
 
-            $doable = $calc->doable($wip->Lot_Id, $wip->Qty);
+            $doableResult = $calc->doable($wip->customer_data_id, $commitsByCustomerDataId, $packageListById);
+            $doable = $doableResult['value'];
+            $doableStatus = $doableResult['status'];
+            $doableRecipeSource = $doableResult['recipeSource'];
 
             $capacityUph = $entry?->finalized_at
                 ? $entry->capacity_uph_snapshot
@@ -251,6 +259,8 @@ class LoadingPlanController extends Controller
                 'BE_Starttime'        => optional($wip->BE_Starttime)->format('n/j/Y g:i:s A'),
                 'Backend_Leadtime'    => $wip->Backend_Leadtime,
                 'Doable'              => $doable,
+                'doableStatus'        => $doableStatus,
+                'doableRecipeSource'  => $doableRecipeSource,
                 'Capacity_UPH'        => $capacityUph,
                 'accuTime'            => $accuTime,
                 'CT'                  => $ct,
@@ -315,6 +325,8 @@ class LoadingPlanController extends Controller
                 'BE_Starttime'        => null,
                 'Backend_Leadtime'    => null,
                 'Doable'              => null,
+                'doableStatus'        => null,
+                'doableRecipeSource'  => null,
                 'Capacity_UPH'        => $entry->finalized_at ? $entry->capacity_uph_snapshot : null,
                 'accuTime'            => $entry->accu_time,
                 'Remarks'             => $entry->remarks ?? null,
@@ -357,6 +369,8 @@ class LoadingPlanController extends Controller
                 'BE_Starttime'        => null,
                 'Backend_Leadtime'    => null,
                 'Doable'              => null,
+                'doableStatus'        => null,
+                'doableRecipeSource'  => null,
                 'Capacity_UPH'        => null,
                 'accuTime'            => $entry->accu_time,
                 'Remarks'             => null,

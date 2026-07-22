@@ -23,9 +23,51 @@ class LotScheduleCalculator
             ->groupBy('platform');
     }
 
-    public function doable(string $lotId, int $qty): ?int
-    {
-        return null;
+    /**
+     * @param  int  $customerDataId
+     * @param  Collection  $commitsByCustomerDataId  keyed by customer_data_id (ppc.lot_commits rows)
+     * @param  Collection  $packageListById          keyed by id (qdn_db.package_list rows)
+     */
+    public function doable(
+        int $customerDataId,
+        Collection $commitsByCustomerDataId,
+        Collection $packageListById
+    ): array {
+        $commit = $commitsByCustomerDataId->get($customerDataId);
+
+        if (!$commit) {
+            return [
+                'value' => null,
+                'status' => 'unknown',
+                'recipeSource' => null,
+            ];
+        }
+
+        $status = match (true) {
+            $commit->recipe_status === 'no_recipe' => 'no_recipe',
+            $commit->commit === 0 => 'qty_below_recipe',
+            default => 'ok',
+        };
+
+        $recipeSource = null;
+        if ($commit->recipe_source_id) {
+            $packageListRow = $packageListById->get($commit->recipe_source_id);
+
+            if ($packageListRow) {
+                $recipeSource = [
+                    'id' => $packageListRow->id,
+                    'devicename' => $packageListRow->devicename,
+                    'recipe' => $packageListRow->recipe,
+                    'packageType' => $packageListRow->package_type,
+                ];
+            }
+        }
+
+        return [
+            'value' => $commit->commit,
+            'status' => $status,
+            'recipeSource' => $recipeSource,
+        ];
     }
 
     public function capacityUph(?string $machine, int $qty): ?int
@@ -48,9 +90,9 @@ class LotScheduleCalculator
         return $band?->capacity_uph;
     }
 
-    public function accuTime(?int $doable, ?int $capacityUph): ?float
+    public function accuTime(?int $doable, ?int $capacityUph): ?int
     {
-        return ($doable && $capacityUph) ? round($doable / $capacityUph, 2) : null;
+        return ($doable && $capacityUph) ? ceil(($doable / $capacityUph) * 60) : null;
     }
 
     public function bulkRefreshCapacitySnapshots(array $updates): void

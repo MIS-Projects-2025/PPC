@@ -132,9 +132,9 @@
     name: "lofi-dark";
     default: true;
     color-scheme: "dark";
-    --color-base-100: #000000;
-    --color-base-200: #080808;
-    --color-base-300: #101010;
+    --color-base-100: #050505;
+    --color-base-200: #141416;
+    --color-base-300: #232326;
     --color-base-content: #d6d6d6;
     --color-base-content-dim: #d6d6d630;
     --color-primary: #ff6a83;

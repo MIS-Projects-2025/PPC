@@ -1,7 +1,7 @@
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { TAGS } from "@/Components/LoadingPlan/Tag";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TransferModal from "./TransferModal";
 
 /** Display label for a machine bucket — Unassigned/Manual get real words
@@ -28,6 +28,8 @@ export default function SelectionToolbar({
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
+    console.log("🚀 ~ SelectionToolbar ~ transferOpen:", transferOpen);
+    console.log("🚀 ~ SelectionToolbar ~ statusOpen:", statusOpen);
     const transferModalRef = useRef(null);
     const selectedMachines = useMemo(() => {
         const s = new Set();
@@ -37,17 +39,23 @@ export default function SelectionToolbar({
         return s;
     }, [selectedIds, allData]);
 
-    if (count === 0) return null;
+    useEffect(() => {
+        if (count === 0) {
+            setTransferOpen(false);
+            setStatusOpen(false);
+        }
+    }, [count]);
+
+    if (count === 0) {
+        return null;
+    }
 
     return (
         <div className="sticky bottom-0 z-99">
-            {(transferOpen || statusOpen) && (
+            {statusOpen && (
                 <div
                     className="fixed inset-0 z-40"
-                    onClick={() => {
-                        setTransferOpen(false);
-                        setStatusOpen(false);
-                    }}
+                    onClick={() => setStatusOpen(false)}
                 />
             )}
 
@@ -200,6 +208,7 @@ export default function SelectionToolbar({
                 machines={machines}
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
+                onClose={() => setTransferOpen(false)}
                 onSelect={onTransfer}
             />
         </div>

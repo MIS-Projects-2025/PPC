@@ -54,6 +54,8 @@ return new class extends Migration
                 ADD INDEX idx_lot_commits_lot_id (Lot_Id)
             ");
         }
+
+        DB::statement("ALTER TABLE ppc.lot_commits MODIFY COLUMN recipe_used INT NULL");
     }
 
     public function down(): void
@@ -62,5 +64,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE ppc.lot_commits DROP INDEX uq_lot_commits_customer_data_id");
         DB::statement("ALTER TABLE ppc.lot_commits ADD UNIQUE KEY uq_lot_commits_lot_id (Lot_Id)");
         DB::statement("ALTER TABLE ppc.lot_commits DROP COLUMN customer_data_id");
+        DB::statement("UPDATE ppc.lot_commits SET recipe_used = 0 WHERE recipe_used IS NULL");
+        DB::statement("ALTER TABLE ppc.lot_commits MODIFY COLUMN recipe_used INT NOT NULL");
     }
 };

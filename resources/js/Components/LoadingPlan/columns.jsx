@@ -1,8 +1,8 @@
-import { computeCT, computeOSL } from "@/Constants/loadingPlanSchedule.js";
-import { platformOf } from "@/Constants/machines.js";
 import { fmt2dp } from "@/Lib/format.js";
 import { formatExpectedPT } from "@/Lib/time.js";
 import { createColumnHelper } from "@tanstack/react-table";
+import { DoableCell } from "./DoableCell";
+import RemarksCell from "./RemarksCell";
 import { StatusBadge } from "./StatusBadge";
 
 const columnHelper = createColumnHelper();
@@ -68,11 +68,7 @@ export const COLUMNS = [
     columnHelper.accessor("Remarks", {
         header: "Remarks",
         size: 160,
-        cell: (info) => (
-            <span className="text-xs text-base-content/60 italic">
-                {info.getValue() || ""}
-            </span>
-        ),
+        cell: (info) => <RemarksCell value={info.getValue()} />,
     }),
 
     columnHelper.accessor("Station", {
@@ -90,8 +86,13 @@ export const COLUMNS = [
     columnHelper.accessor("Doable", {
         header: "Doable",
         size: 80,
-        cell: (info) =>
-            info.getValue() > 0 ? info.getValue().toLocaleString() : "—",
+        cell: (info) => (
+            <DoableCell
+                value={info.getValue()}
+                status={info.row.original.doableStatus}
+                recipeSource={info.row.original.doableRecipeSource}
+            />
+        ),
     }),
 
     // ── Derived: Capacity_UPH (from Qty + current machine's platform) ──────
@@ -100,13 +101,6 @@ export const COLUMNS = [
         size: 140,
         enableSorting: false,
         cell: (info) => info.getValue()?.toLocaleString() ?? "—",
-        // cell: (info) =>
-        //     info.getValue() > 0 ? info.getValue().toLocaleString() : "—",
-        // cell: (info) => {
-        //     const r = info.row.original;
-        //     const uph = lookupCapacityUPH(r.Qty, platformOf(r.machine));
-        //     return uph != null ? uph.toLocaleString() : "—";
-        // },
     }),
 
     columnHelper.accessor("accuTime", {
@@ -140,8 +134,8 @@ export const COLUMNS = [
         enableSorting: false,
         cell: (info) => {
             const row = info.row.original;
-            return row.timeStartDayOffset > 0
-                ? `${info.getValue()} +${row.timeStartDayOffset}d`
+            return row.timeEndDayOffset > 0
+                ? `${info.getValue()} +${row.timeEndDayOffset}d`
                 : info.getValue();
         },
     }),

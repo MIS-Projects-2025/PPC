@@ -2,6 +2,7 @@ import { COL_WIDTHS } from "@/Components/LoadingPlan/columns.jsx";
 import { formatExpectedPT } from "@/Lib/time.js";
 import { CSS } from "@dnd-kit/utilities";
 import { flexRender } from "@tanstack/react-table";
+import clsx from "clsx";
 import {
     createContext,
     memo,
@@ -14,7 +15,7 @@ import { GripIcon } from "./GripIcon";
 import { TableInteractionContext } from "./MachineSectionBody";
 import { StatusBadge } from "./StatusBadge";
 import { TAGS, TagDot } from "./Tag";
-
+import interactiveCursorClasses from "./interactiveCursorClasses";
 /**
  * Editable columns and their input types.
  * accuTime replaces the old "duration" as the editable queue-time field.
@@ -105,6 +106,7 @@ const RowContent = memo(
             handleCellClick = noop,
             selectedIds,
             handleRowSelect = noop,
+            isUpdating,
         } = useContext(TableActionsContext);
 
         const { disableSelection, disableGripButton } = useContext(
@@ -166,7 +168,7 @@ const RowContent = memo(
                               : "border-l-transparent"
                     }`}
                 >
-                    <td className="px-1 text-center">
+                    <td className="bg-base-100 sticky px-2 -left-4 text-center">
                         <div className="flex items-center gap-1">
                             {!disableSelection && (
                                 <RowCheckbox
@@ -177,9 +179,15 @@ const RowContent = memo(
                             )}
                             {!disableGripButton && (
                                 <button
-                                    className="btn btn-ghost cursor-grab text-base-content/20 hover:text-base-content/70 active:cursor-grabbing p-1 rounded"
+                                    className={clsx(
+                                        "bg-base-100 btn btn-ghost px-1 text-base-content rounded",
+                                        interactiveCursorClasses(
+                                            !isSortable || isUpdating,
+                                            { cursor: "grab" },
+                                        ),
+                                    )}
                                     {...dragHandleProps}
-                                    disabled={!isSortable}
+                                    disabled={!isSortable || isUpdating}
                                     tabIndex={-1}
                                     aria-label="Drag to reorder"
                                 >
@@ -240,13 +248,17 @@ const RowContent = memo(
                         style={{ width: COL_WIDTHS.timeStart }}
                         className="px-2.5 text-sm text-base-content"
                     >
-                        {r.timeStart}
+                        {r.timeStartDayOffset > 0
+                            ? `${r.timeStart} +${r.timeStartDayOffset}d`
+                            : r.timeStart}
                     </td>
                     <td
                         style={{ width: COL_WIDTHS.timeEnd }}
                         className="px-2.5 text-sm text-base-content"
                     >
-                        {r.timeEnd}
+                        {r.timeEndDayOffset > 0
+                            ? `${r.timeEnd} +${r.timeEndDayOffset}d`
+                            : r.timeEnd}
                     </td>
                     <td
                         style={{ width: COL_WIDTHS.expectedPT }}
@@ -300,10 +312,16 @@ const RowContent = memo(
 
                         {!disableGripButton && (
                             <button
-                                className="bg-base-100 btn btn-ghost px-1 cursor-grab text-base-content hover:text-base-content/50 active:cursor-grabbing rounded"
+                                className={clsx(
+                                    "bg-base-100 btn btn-ghost px-1 text-base-content rounded",
+                                    interactiveCursorClasses(
+                                        !isSortable || isUpdating,
+                                        { cursor: "grab" },
+                                    ),
+                                )}
                                 {...dragHandleProps}
                                 tabIndex={-1}
-                                disabled={!isSortable}
+                                disabled={!isSortable || isUpdating}
                                 aria-label="Drag to reorder or transfer"
                             >
                                 <GripIcon />
@@ -411,8 +429,9 @@ const RowContent = memo(
                             // } ${colId === "Doable" ? "text-error" : ""}`}
                             // TODO: make a sign of the cell editable
                             title={
-                                typeof cell.getValue() === "string" ||
-                                typeof cell.getValue() === "number"
+                                colId !== "Remarks" &&
+                                (typeof cell.getValue() === "string" ||
+                                    typeof cell.getValue() === "number")
                                     ? String(cell.getValue())
                                     : undefined
                             }

@@ -77,19 +77,12 @@ class PickUpRepository
       })
       ->whereExists(function ($q) use ($pl) {
         $q->select(DB::raw(1))
-          ->from('ppc_productionline_packagereference as ref')
-          ->whereColumn('ref.package', 'pickup.PACKAGE')
-          ->where('ref.production_line', $pl);
+          ->from('ppc_package_master as pm')
+          ->whereColumn('pm.package', 'pickup.PACKAGE')
+          ->where('pm.default_pl', $pl)
+          ->where('pm.is_telford', 1)
+          ->where('pm.is_active', 1);
       });
-    // $query = DB::table(self::TABLE_NAME . ' as pickup')
-    //   ->where('pickup.DATE_CREATED', '>=', $startDate)
-    //   ->where('pickup.DATE_CREATED', '<', $endDate)
-    //   ->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
-    //     $q->select('Partname')
-    //       ->from(self::PART_NAME_TABLE)
-    //       ->where('Factory', $factory)
-    //       ->where('PL', $pl);
-    //   });
 
     return $query->sum('pickup.QTY');
   }

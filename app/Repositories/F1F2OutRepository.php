@@ -43,7 +43,6 @@ class F1F2OutRepository
   }
 
   public const F1F2_OUTS_TABLE = "customer_data_wip_out";
-  private const PPC_TABLE = "ppc_productionline_packagereference";
 
   public function doesExist($column, $value)
   {

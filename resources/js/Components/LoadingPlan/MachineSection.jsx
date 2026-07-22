@@ -248,6 +248,8 @@ const MachineSection = memo(
 
                                 {/* Status */}
                                 <td />
+                                {/* Remarks */}
+                                <td />
                                 {/* Station */}
                                 <td />
 
@@ -266,7 +268,6 @@ const MachineSection = memo(
                                 </td>
 
                                 {/* Rest empty */}
-                                <td />
                                 <td />
                                 <td />
                                 <td />

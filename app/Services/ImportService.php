@@ -197,30 +197,23 @@ class ImportService
 
   private function resolveProductionLines(array $chunk, array $col): array
   {
-    $combos = collect($chunk)
-      ->map(fn($row) => [
-        'package'    => $row[$col['package']],
-        'factory' => isset($col['factory_override'])
-          ? $col['factory_override']
-          : ProductionLineResolver::factoryFromFocusGroup($row[$col['focus_group']]),
-        'lead_count' => isset($col['lead_count']) ? $row[$col['lead_count']] : null,
-        'part_name'  => $row[$col['part_name']],
-      ])
-      ->unique(fn($c) => "{$c['package']}|{$c['factory']}|{$c['lead_count']}|{$c['part_name']}")
-      ->values();
+    static $localCache = [];
 
-    $resolved = $combos->mapWithKeys(fn($c) => [
-      "{$c['package']}|{$c['factory']}|{$c['lead_count']}|{$c['part_name']}"
-      => $this->resolver->resolve($c['package'], $c['factory'], $c['lead_count'], $c['part_name'])
-    ]);
-
-    return array_map(function ($row) use ($resolved, $col) {
+    return array_map(function ($row) use ($col, &$localCache) {
       $factory = isset($col['factory_override'])
         ? $col['factory_override']
         : ProductionLineResolver::factoryFromFocusGroup($row[$col['focus_group']]);
       $leadCount = isset($col['lead_count']) ? $row[$col['lead_count']] : null;
-      $key = "{$row[$col['package']]}|{$factory}|{$leadCount}|{$row[$col['part_name']]}";
-      $row['production_line'] = $resolved->get($key);
+      $package = $row[$col['package']];
+      $partName = $row[$col['part_name']];
+
+      $key = "{$package}|{$factory}|{$leadCount}|{$partName}";
+
+      if (!array_key_exists($key, $localCache)) {
+        $localCache[$key] = $this->resolver->resolve($package, $factory, $leadCount, $partName);
+      }
+
+      $row['production_line'] = $localCache[$key];
       return $row;
     }, $chunk);
   }
@@ -254,6 +247,8 @@ class ImportService
     if (!$lock->get()) {
       throw new Exception('The import is currently running. Try again in a few minutes.');
     }
+
+    $this->resolver->preload();
 
     try {
       DB::beginTransaction();

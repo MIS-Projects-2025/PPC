@@ -1,4 +1,4 @@
-import { forwardRef, useMemo, useState } from "react";
+import { forwardRef, useMemo, useRef, useState } from "react";
 import MachineChipClasses from "./MachineChipClasses";
 const PLATFORM_ORDER = ["G6L", "Vitrox", "HSI"];
 
@@ -33,7 +33,7 @@ function groupByPlatform(machineNames, machinePlatform) {
 }
 
 const TransferModal = forwardRef(function TransferModal(
-    { machines, machinePlatform, selectedMachines, onSelect },
+    { machines, machinePlatform, selectedMachines, onSelect, onClose },
     ref,
 ) {
     const [query, setQuery] = useState("");
@@ -122,14 +122,16 @@ const TransferModal = forwardRef(function TransferModal(
 
                 <div className="modal-action">
                     <form method="dialog">
-                        <button className="btn btn-ghost">Cancel</button>
+                        <button className="btn btn-ghost" onClick={onClose}>
+                            Cancel
+                        </button>
                     </form>
                 </div>
             </div>
 
             {/* click-outside-to-close, matches your add_block_modal pattern */}
             <form method="dialog" className="modal-backdrop">
-                <button>close</button>
+                <button onClick={onClose}>close</button>
             </form>
         </dialog>
     );
