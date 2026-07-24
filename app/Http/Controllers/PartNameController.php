@@ -12,50 +12,93 @@ use App\Services\BulkUpserter;
 class PartNameController extends Controller
 {
     private const SEARCHABLE_COLUMNS = [
-        'Partname',
-        'Focus_grp',
-        'Factory',
-        'PL',
-        'Packagename',
-        'Packagecategory',
-        'Leadcount',
-        'Bodysize',
-        'Package',
-        'added_by',
+        'devicename',
+        'focus_grp',
+        'areas',
+        'productline',
+        'package_type',
+        'lead_count',
+        'dimensions',
+        'allocation',
+        'generic_name',
+        'drypack',
+        'created_by',
     ];
 
-    private function rules(): array
+    private function rules($id = null): array
     {
         return [
-            'Partname' => 'required|string|max:45',
-            'Focus_grp' => 'required|string|max:45',
-            'Factory' => 'required|string|max:10',
-            'PL' => 'required|in:PL1,PL6',
-            'Packagename' => 'required|string|max:45',
-            'Leadcount' => 'required|string|max:45',
-            'Bodysize' => 'required|string|max:45',
-            'Packagecategory' => 'required|string|max:45',
+            'devicename' => [
+                'required',
+                'string',
+                'max:45',
+                Rule::unique('qdn_db.package_list', 'devicename')->ignore($id),
+            ],
+            'focus_grp' => 'required|string|max:95',
+            'areas' => 'required|string|max:45',
+            'productline' => 'required|in:PL1,PL6',
+            'package_type' => 'required|string|max:45',
+            'lead_count' => 'required|string|max:45',
+            'dimensions' => 'required|string|max:45',
+            'allocation' => 'nullable|string|max:95',
+            'generic_name' => 'nullable|string|max:45',
+            'drypack' => 'nullable|string|max:45',
+            'recipe' => 'nullable|integer',
         ];
     }
 
-    private function validateParts(Request $request): array
+    private function validateParts(Request $request, $id = null): array
     {
         $data = $request->all();
 
         if (isset($data[0]) && is_array($data[0])) {
             return $request->validate([
-                '*.Partname' => 'required|string|max:45',
-                '*.Focus_grp' => 'required|string|max:45',
-                '*.Factory' => 'required|string|max:10',
-                '*.PL' => 'required|in:PL1,PL6',
-                '*.Packagename' => 'required|string|max:45',
-                '*.Leadcount' => 'required|string|max:45',
-                '*.Bodysize' => 'required|string|max:45',
-                '*.Packagecategory' => 'required|string|max:45',
+                '*.devicename' => 'required|string|max:45', // see note below re: bulk unique
+                '*.focus_grp' => 'required|string|max:95',
+                '*.areas' => 'required|string|max:45',
+                '*.productline' => 'required|in:PL1,PL6',
+                '*.package_type' => 'required|string|max:45',
+                '*.lead_count' => 'required|string|max:45',
+                '*.dimensions' => 'required|string|max:45',
+                '*.allocation' => 'nullable|string|max:95',
+                '*.generic_name' => 'nullable|string|max:45',
+                '*.drypack' => 'nullable|string|max:45',
+                '*.recipe' => 'nullable|integer',
             ]);
         }
 
-        return $request->validate($this->rules());
+        return $request->validate($this->rules($id));
+    }
+
+    private function checkDuplicateDevicenames(array $records): array
+    {
+        $errors = [];
+        $devicenames = array_map(fn($r) => $r['devicename'] ?? null, $records);
+
+        // 1. Duplicates WITHIN the submitted batch itself
+        $seen = [];
+        foreach ($devicenames as $index => $name) {
+            if ($name === null) continue;
+
+            if (isset($seen[$name])) {
+                $errors[] = "Row " . ($index + 1) . ": devicename '{$name}' is duplicated within this batch (also on row " . ($seen[$name] + 1) . ").";
+            } else {
+                $seen[$name] = $index;
+            }
+        }
+
+        // 2. Duplicates against what's ALREADY in the DB
+        $existing = PartName::whereIn('devicename', array_filter($devicenames))
+            ->pluck('devicename')
+            ->toArray();
+
+        foreach ($devicenames as $index => $name) {
+            if ($name !== null && in_array($name, $existing)) {
+                $errors[] = "Row " . ($index + 1) . ": devicename '{$name}' already exists.";
+            }
+        }
+
+        return $errors;
     }
 
     public function store(Request $request)
@@ -67,13 +110,32 @@ class PartNameController extends Controller
 
         $records = isset($validated[0]) ? $validated : [$validated];
 
+        // Check for duplicates BEFORE inserting anything
+        $duplicateErrors = $this->checkDuplicateDevicenames($records);
+
+        if (!empty($duplicateErrors)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'You have ' . count($duplicateErrors) . ' error/s',
+                'data' => $duplicateErrors,
+            ], 422);
+        }
+
         $records = array_map(function ($part) use ($addedBy) {
             return array_merge($part, [
-                'added_by' => $addedBy,
+                'created_by' => $addedBy,
             ]);
         }, $records);
 
-        PartName::insert($records);
+        try {
+            PartName::insert($records);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // safety net in case of a race condition between check and insert
+            return response()->json([
+                'status' => 'error',
+                'message' => 'One or more devicenames already exist.',
+            ], 422);
+        }
 
         return response()->json([
             'message' => 'Part(s) added successfully',
@@ -81,12 +143,11 @@ class PartNameController extends Controller
         ]);
     }
 
-
     public function update(Request $request, $id)
     {
         $part = PartName::findOrFail($id);
 
-        $validated = $this->validateParts($request);
+        $validated = $this->validateParts($request, $id); // pass $id so unique rule ignores itself
         $part->update($validated);
 
         return response()->json([
@@ -111,14 +172,13 @@ class PartNameController extends Controller
 
         $parts = array_map(function ($p) {
             return [
-                'Partname' => $p['PARTNAME'] ?? '',
-                'Focus_grp' => $p['Focus_grp'] ?? '',
-                'Factory' => $p['Factory'] ?? '',
-                'PL' => $p['PL'] ?? 'PL1',
-                'Packagename' => $p['Packagename'] ?? '',
-                'Leadcount' => $p['Leadcount'] ?? '',
-                'Bodysize' => $p['Bodysize'] ?? '',
-                'Packagecategory' => $p['Packagecategory'] ?? '',
+                'devicename' => $p['devicename'] ?? '',
+                'focus_grp' => $p['focus_grp'] ?? '',
+                'areas' => $p['areas'] ?? '',
+                'productline' => $p['productline'] ?? 'PL1',
+                'package_type' => $p['package_type'] ?? '',
+                'lead_count' => $p['lead_count'] ?? '',
+                'dimensions' => $p['dimensions'] ?? '',
             ];
         }, $parts);
 
@@ -131,19 +191,27 @@ class PartNameController extends Controller
     {
         $rows = $request->all();
         $user = session('emp_data');
+        $model = new PartName();
+        $table = $model->getConnectionName() . '.' . $model->getTable();
+
         $columnRules = [
-            'Focus_grp' => 'nullable',
-            'Factory' => 'required|string',
-            'PL' => 'nullable',
-            'Partname' => 'required|string',
-            'Packagename' => 'nullable',
-            'Packagecategory' => 'nullable',
-            'Leadcount' => 'nullable',
-            'Bodysize' => 'nullable',
+            'focus_grp' => 'nullable',
+            'areas' => 'required|string',
+            'productline' => 'nullable',
+            'devicename' => function ($id, $fields) use ($table) {
+                return Rule::unique($table, 'devicename')->ignore($id);
+            },
+            'package_type' => 'nullable',
+            'lead_count' => 'nullable',
+            'dimensions' => 'nullable',
+            'allocation' => 'nullable',
+            'generic_name' => 'nullable',
+            'drypack' => 'nullable',
+            'recipe' => 'nullable|integer',
         ];
 
         $rows = array_map(function ($row) use ($user) {
-            $row['added_by'] = $user['emp_id'] ?? null;
+            $row['created_by'] = $user['emp_id'] ?? null;
             return $row;
         }, $rows);
 
@@ -191,7 +259,7 @@ class PartNameController extends Controller
                     }
                 });
             })
-            ->orderBy('Partname')
+            ->orderBy('devicename')
             ->paginate($perPage)
             ->withQueryString();
 

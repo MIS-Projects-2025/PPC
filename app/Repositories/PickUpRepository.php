@@ -31,7 +31,7 @@ class PickUpRepository
   }
 
   private const TABLE_NAME = 'ppc_pickupdb';
-  private const PART_NAME_TABLE = 'ppc_partnamedb';
+  private const PART_NAME_TABLE = 'qdn_db.package_list';
 
   public function getTotalQuantity($startDate, $endDate)
   {
@@ -39,9 +39,9 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '>=', $startDate)
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) {
-        $q->select('Partname')
+        $q->select('devicename')
           ->from(self::PART_NAME_TABLE)
-          ->whereIn('PL', ['PL1', 'PL6']);
+          ->whereIn('productline', ['PL1', 'PL6']);
       })
       ->sum('pickup.QTY');
   }
@@ -54,10 +54,10 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '>=', $startDate)
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) use ($factory) {
-        $q->select('Partname')
+        $q->select('devicename')
           ->from(self::PART_NAME_TABLE)
-          ->where('Factory', $factory)
-          ->whereIn('PL', ['PL1', 'PL6']);
+          ->where('areas', $factory)
+          ->whereIn('productline', ['PL1', 'PL6']);
       });
 
     return $query->sum('pickup.QTY');
@@ -71,9 +71,9 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '>=', $startDate)
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) use ($factory) {
-        $q->select('Partname')
+        $q->select('devicename')
           ->from(self::PART_NAME_TABLE)
-          ->where('Factory', $factory);
+          ->where('areas', $factory);
       })
       ->whereExists(function ($q) use ($pl) {
         $q->select(DB::raw(1))
@@ -119,17 +119,17 @@ class PickUpRepository
 
     if (in_array($chartStatus, ['F1', 'F2'])) {
       $query->whereIn('pickup.PARTNAME', function ($q) use ($chartStatus) {
-        $q->select('Partname')
+        $q->select('devicename')
           ->from(self::PART_NAME_TABLE)
-          ->where('Factory', $chartStatus);
+          ->where('areas', $chartStatus);
       });
     } elseif ($chartStatus === 'F3') {
       $query->join('f3_pickup', 'f3_pickup.ppc_pickup_id', '=', 'pickup.id_pickup');
     } elseif (in_array($chartStatus, ['PL1', 'PL6'])) {
       $query->whereIn('pickup.PARTNAME', function ($q) use ($chartStatus) {
-        $q->select('Partname')
+        $q->select('devicename')
           ->from(self::PART_NAME_TABLE)
-          ->where('PL', $chartStatus);
+          ->where('productline', $chartStatus);
       });
     }
 
@@ -147,11 +147,11 @@ class PickUpRepository
     $factory = strtoupper($factory);
 
     $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
-      $q->select('Partname')
+      $q->select('devicename')
         ->from(self::PART_NAME_TABLE)
-        ->where('Factory', $factory);
+        ->where('areas', $factory);
       if ($pl) {
-        $q->where('PL', strtoupper($pl));
+        $q->where('productline', strtoupper($pl));
       }
     });
 
@@ -195,9 +195,6 @@ class PickUpRepository
       'f3_trend' => 'f3_pl6',
       'overall_trend' => 'overall_pl6',
     ];
-
-    // $startDate = Carbon::parse($startDate)->setTime(6, 0, 0);
-    // $endDate   = Carbon::parse($endDate)->addDay()->setTime(6, 0, 0);
 
     foreach (WipConstants::FACTORIES as $factory) {
       $key = strtolower($factory) . '_trend';
