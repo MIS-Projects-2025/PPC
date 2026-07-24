@@ -42,9 +42,11 @@ export function applyTimeStartEdit(
     const gapDuration = newStartMinutes - referenceMinutes;
 
     if (isGapAbove) {
-        next = next.map((r) =>
-            r._dndId === rowAbove._dndId ? { ...r, accuTime: gapDuration } : r,
-        );
+        next = next.map((r) => {
+            return r._dndId === rowAbove._dndId
+                ? { ...r, accuTime: r.accuTime + gapDuration }
+                : r;
+        });
     } else {
         const newBlock = {
             _dndId: `entry-${crypto.randomUUID()}`, // TODO:
@@ -95,10 +97,6 @@ export function recomputeMachine(rows, machine, baseTimes) {
 
         const start = formatTime(prevEnd);
         const end = formatTime(prevEnd + dur);
-        console.log("🚀 ~ recomputeMachine ~ prevEnd:", prevEnd);
-        console.log("🚀 ~ recomputeMachine ~ row:", row);
-        console.log("🚀 ~ recomputeMachine ~ start:", start);
-        console.log("🚀 ~ recomputeMachine ~ end:", end);
 
         row.timeStart = start.time;
         row.timeStartDayOffset = start.dayOffset;

@@ -18,6 +18,8 @@ class PpcPackageMaster extends Model
     ];
 
     protected $casts = [
+        'updated_at' => 'datetime',
+        'created_at' => 'datetime',
         'is_telford' => 'boolean',
         'is_active'  => 'boolean',
         'valid_from' => 'date',

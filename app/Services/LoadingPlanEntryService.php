@@ -222,24 +222,33 @@ class LoadingPlanEntryService
                 $this->lockMachineRows($machines, $date);
             }
 
-            $unassigned = [];
-            $deleted = [];
-
             foreach ($entries as $entry) {
                 $this->assertNotFinalized($entry);
-
-                if ($entry->entry_type === 'block') {
-                    $deleted[] = $entry->id;
-                    $entry->delete();
-                } else {
-                    $entry->update([
-                        'machine_id'     => null,
-                        'sequence_order' => null,
-                        'lock_version'   => DB::raw('lock_version + 1'),
-                    ]);
-                    $unassigned[] = $entry->fresh();
-                }
             }
+
+            [$blocks, $others] = $entries->partition(fn($entry) => $entry->entry_type === 'block');
+
+            $deleted = $blocks->pluck('id')->all();
+            if (!empty($deleted)) {
+                LoadingPlanEntry::whereIn('id', $deleted)->delete();
+            }
+
+            $unassignedIds = $others->pluck('id')->all();
+            if (!empty($unassignedIds)) {
+                LoadingPlanEntry::whereIn('id', $unassignedIds)->update([
+                    'machine_id'     => null,
+                    'sequence_order' => null,
+                    'lock_version'   => DB::raw('lock_version + 1'),
+                ]);
+            }
+
+            // avoid a fresh() query per row — we already know the new values
+            $unassigned = $others->map(function ($entry) {
+                $entry->machine_id = null;
+                $entry->sequence_order = null;
+                $entry->lock_version += 1;
+                return $entry;
+            })->values()->all();
 
             return ['deleted' => $deleted, 'unassigned' => $unassigned];
         });
@@ -531,11 +540,126 @@ class LoadingPlanEntryService
             ->lockForUpdate()
             ->get();
 
-        foreach ($rows as $i => $row) {
-            $row->update(['sequence_order' => ($i + 1) * self::GAP_SEED]);
+        if ($rows->isEmpty()) {
+            return $rows;
         }
 
-        return $rows->fresh();
+        // Single UPDATE with CASE avoids any intermediate per-row collision
+        // window entirely — the whole set changes atomically in one statement.
+        $cases = [];
+        $bindings = [];
+        $ids = [];
+
+        foreach ($rows as $i => $row) {
+            $cases[] = "WHEN id = ? THEN ?";
+            $bindings[] = $row->id;
+            $bindings[] = ($i + 1) * self::GAP_SEED;
+            $ids[] = $row->id;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        DB::statement(
+            "UPDATE loading_plan_entries
+         SET sequence_order = CASE " . implode(' ', $cases) . " END
+         WHERE id IN ($placeholders)",
+            [...$bindings, ...$ids]
+        );
+
+        return LoadingPlanEntry::whereIn('id', $ids)->get();
+    }
+
+    private function applyBulkReorder(array $op, string $date)
+    {
+        $machine = $op['machine'];
+        $machineId = $this->resolveMachineId($machine);
+        $placements = $op['placements'];
+
+        $rows = $this->rebalance($machineId, $date);
+
+        // $rows already contains every lot/block entry on this machine for this
+        // date (rebalance() pulled the full locked set) — match against it
+        // directly instead of firing another query.
+        $resolvedPlacements = collect($placements)->map(function ($p) use ($rows) {
+            $entry = $p['entry_type'] === 'block'
+                ? $rows->firstWhere('id', $p['entry_id'])
+                : $rows->firstWhere('lot_id', $p['lot_id']);
+
+            if (!$entry) {
+                throw new \RuntimeException("Bulk reorder: could not resolve entry for placement: " . json_encode($p));
+            }
+
+            $this->assertNotFinalized($entry);
+
+            return [
+                'id'              => $entry->id,
+                'before_entry_id' => $p['before_entry_id'] ?? null,
+                'after_entry_id'  => $p['after_entry_id'] ?? null,
+            ];
+        })->all();
+
+        $positions = $this->computeBulkPositions($rows, $resolvedPlacements, $machine, $date);
+
+        $this->applyPositionsInBulk($positions, $machineId, $date);
+
+        return LoadingPlanEntry::whereIn('id', array_column($positions, 'id'))
+            ->where('scheduled_date', $date)
+            ->get();
+    }
+
+    private function computeBulkPositions(Collection $rows, array $placements, string $machine, string $date): array
+    {
+        $positions = [];
+
+        foreach ($placements as $p) {
+            $before = $p['before_entry_id'] ? $rows->firstWhere('id', $p['before_entry_id'])?->sequence_order : null;
+            $after  = $p['after_entry_id'] ? $rows->firstWhere('id', $p['after_entry_id'])?->sequence_order : null;
+
+            if ($before === null && $after === null) {
+                $currentMax = $rows->max('sequence_order');
+                if ($currentMax !== null) {
+                    $before = $currentMax;
+                }
+            }
+
+            if ($before !== null && $after !== null && $before > $after) {
+                [$before, $after] = [$after, $before];
+            }
+
+            $order = match (true) {
+                $before === null && $after === null => self::GAP_SEED,
+                $before === null => $after - self::GAP_SEED,
+                $after === null => $before + self::GAP_SEED,
+                default => ($before + $after) / 2,
+            };
+
+            $positions[] = ['id' => $p['id'], 'sequence_order' => $order];
+        }
+
+        return $positions;
+    }
+
+    private function applyPositionsInBulk(array $positions, int $machineId, string $date): void
+    {
+        $cases = [];
+        $bindings = [];
+
+        foreach ($positions as $pos) {
+            $cases[] = "WHEN id = ? THEN ?";
+            $bindings[] = $pos['id'];
+            $bindings[] = $pos['sequence_order'];
+        }
+
+        $ids = array_column($positions, 'id');
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        $sql = "UPDATE loading_plan_entries
+            SET sequence_order = CASE " . implode(' ', $cases) . " END,
+                machine_id = ?,
+                lock_version = lock_version + 1
+            WHERE scheduled_date = ? AND id IN ($placeholders)";
+
+        DB::statement($sql, [...$bindings, $machineId, $date, ...$ids]);
     }
 
     public function batchApply(array $operations, string $date): array
@@ -554,9 +678,74 @@ class LoadingPlanEntryService
                 $this->lockMachineRows($machineIds, $date);
             }
 
+            // Group 'move' ops by target machine to detect which machines
+            // qualify for bulk treatment (more than one move batched together).
+            $moveOpsByMachine = collect($operations)
+                ->filter(fn($op) => $op['type'] === 'move')
+                ->groupBy('machine');
+
+            $bulkMachines = $moveOpsByMachine
+                ->filter(fn($ops) => $ops->count() > 1)
+                ->keys()
+                ->all();
+
+            // Track which operation indexes get resolved via the bulk path,
+            // so the main loop below can skip re-processing them individually.
+            $bulkHandledIndexes = [];
+            $bulkResultsByIndex = [];
+
+            foreach ($bulkMachines as $machine) {
+                // Any create_block ops targeting this machine must run first —
+                // moves in this batch may reference the new block's id as an
+                // anchor, so it needs to exist before rebalance() snapshots
+                // the machine for bulk reorder.
+                foreach ($operations as $idx => $op) {
+                    if ($op['type'] === 'create_block' && $op['machine'] === $machine) {
+                        $bulkResultsByIndex[$idx] = $this->addBlock(
+                            $op['machine'],
+                            $date,
+                            $op['label'],
+                            $op['duration'],
+                            $op['before_entry_id'] ?? null,
+                            $op['after_entry_id'] ?? null,
+                        );
+                        $bulkHandledIndexes[] = $idx;
+                    }
+                }
+
+                $placements = $moveOpsByMachine[$machine]->map(fn($op) => [
+                    'entry_type'      => $op['entry_type'],
+                    'lot_id'          => $op['lot_id'] ?? null,
+                    'entry_id'        => $op['entry_id'] ?? null,
+                    'before_entry_id' => $op['before_entry_id'] ?? null,
+                    'after_entry_id'  => $op['after_entry_id'] ?? null,
+                ])->values()->all();
+
+                $entries = $this->applyBulkReorder(['machine' => $machine, 'placements' => $placements], $date);
+                $entriesById = $entries->keyBy('id');
+
+                foreach ($operations as $idx => $op) {
+                    if ($op['type'] !== 'move' || $op['machine'] !== $machine) {
+                        continue;
+                    }
+
+                    $entryId = $op['entry_type'] === 'block'
+                        ? $op['entry_id']
+                        : LoadingPlanEntry::where('lot_id', $op['lot_id'])->where('scheduled_date', $date)->value('id');
+
+                    $bulkResultsByIndex[$idx] = $entriesById[$entryId] ?? null;
+                    $bulkHandledIndexes[] = $idx;
+                }
+            }
+
             $results = [];
 
-            foreach ($operations as $op) {
+            foreach ($operations as $idx => $op) {
+                if (in_array($idx, $bulkHandledIndexes, true)) {
+                    $results[] = $bulkResultsByIndex[$idx];
+                    continue;
+                }
+
                 $results[] = match ($op['type']) {
                     'move' => $this->applyMove($op, $date),
                     'transfer' => $this->applyTransfer($op, $date),

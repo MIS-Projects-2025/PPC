@@ -68,11 +68,11 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                 ref={floating.refs.setReference}
                 {...getReferenceProps()}
                 className={`border-b h-8 border-base-300 last:border-0 border-l-2 border-l-transparent cursor-default transition-colors ${
-                    open ? "bg-base-200" : "bg-base-300/50"
+                    open ? "bg-base-300" : "bg-base-200"
                 }`}
             >
                 {/* sticky checkbox/grip column, matches block/lot rows */}
-                <td className="bg-base-100 sticky px-2 -left-4" />
+                <td className="sticky px-2 -left-4" />
 
                 <td
                     style={{

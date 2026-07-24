@@ -107,23 +107,11 @@
  *   Lots can be dragged/transferred freely between any of the three at any
  *   time, in any direction — nothing here is one-way.
  */
-import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
-import { useMutation } from "@/Hooks/useMutation";
-import { useToast } from "@/Hooks/useToast";
-import { createUndoStore } from "@/Store/undoStore";
-import toSnakeCase from "@/Utils/toSnakeCase";
-import {
-    closestCenter,
-    DndContext,
-    DragOverlay,
-    PointerSensor,
-    pointerWithin,
-    useSensor,
-    useSensors,
-} from "@dnd-kit/core";
-
 import DateNav from "@/Components/DateNav";
 import { TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
+import DataIntegrityModal, {
+    TabBadge,
+} from "@/Components/LoadingPlan/DataIntegrityModal";
 import GlobalTableHeader from "@/Components/LoadingPlan/GlobalTableHeader";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
 import MachineChip from "@/Components/LoadingPlan/MachineChip";
@@ -143,9 +131,11 @@ import {
 } from "@/Components/LoadingPlan/RowContent";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import {
     groupOf,
     packagesInGroup,
+    toReverseMap,
 } from "@/Constants/loadingPlanPackageGroups.js";
 import {
     applyTimeStartEdit,
@@ -154,10 +144,24 @@ import {
 } from "@/Constants/loadingPlanSchedule.js";
 import { hasTimeline, MACHINE_MANUAL } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
+import { useMutation } from "@/Hooks/useMutation";
+import { useToast } from "@/Hooks/useToast";
 import { droppableTokenToMachine } from "@/Lib/dnd.js";
+import { createUndoStore } from "@/Store/undoStore";
+import toSnakeCase from "@/Utils/toSnakeCase";
+import {
+    closestCenter,
+    DndContext,
+    DragOverlay,
+    PointerSensor,
+    pointerWithin,
+    useSensor,
+    useSensors,
+} from "@dnd-kit/core";
 import { router } from "@inertiajs/react";
 import clsx from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GoAlert } from "react-icons/go";
 import { CellEditor } from "../Components/LoadingPlan/CellEditor";
 import { DragGhostRow } from "../Components/LoadingPlan/DragGhostRow";
 
@@ -217,7 +221,9 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
     };
 
     const prevPositions = buildPositions(prevRows);
+    console.log("🚀 ~ syncUndoRedoToServer ~ prevPositions:", prevPositions);
     const nextPositions = buildPositions(nextRows);
+    console.log("🚀 ~ syncUndoRedoToServer ~ nextPositions:", nextPositions);
 
     const changed = nextRows.filter((r) => {
         const p = prevById.get(r._dndId);
@@ -234,6 +240,8 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
             positionChanged
         );
     });
+
+    console.log("🚀 ~ syncUndoRedoToServer ~ changed:", changed);
 
     // console.log("🚀 ~ syncUndoRedoToServer ~ changed:", changed);
     // console.log("🚀 ~ syncUndoRedoToServer ~ added:", added);
@@ -344,7 +352,7 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
         }
     });
 
-    if (operations.length === 0) return;
+    if (operations.length === 0) return Promise.resolve();
 
     return mutate(route("loading-plan.batch-apply"), {
         body: { operations, scheduled_date: date },
@@ -352,22 +360,24 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
         .then(({ results }) => {
             // Sync every returned entry back into local state, matched by
             // position in the array (same order operations were sent).
-            update((prev) =>
-                prev.map((row) => {
-                    const ownerIdx = opOwners.findIndex(
-                        (o) => o.dndId === row._dndId,
-                    );
-                    if (ownerIdx === -1) return row;
-                    const result = results[ownerIdx];
-                    if (!result || result.deleted) return row;
-                    return {
-                        ...row,
-                        entryId: result.id,
-                        lockVersion: result.lock_version,
-                        sequenceOrder:
-                            result.sequence_order ?? row.sequenceOrder,
-                    };
-                }),
+            update(
+                (prev) =>
+                    prev.map((row) => {
+                        const ownerIdx = opOwners.findIndex(
+                            (o) => o.dndId === row._dndId,
+                        );
+                        if (ownerIdx === -1) return row;
+                        const result = results[ownerIdx];
+                        if (!result || result.deleted) return row;
+                        return {
+                            ...row,
+                            entryId: result.id,
+                            lockVersion: result.lock_version,
+                            sequenceOrder:
+                                result.sequence_order ?? row.sequenceOrder,
+                        };
+                    }),
+                true,
             );
         })
         .catch((err) => {
@@ -390,13 +400,17 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
+    partnameMismatches,
+    unknownPackages,
     selectedLocation,
-    packages,
+    packageGroupNames,
+    packageGroups,
     status,
     baseTimes = {},
     onLotTransfer,
     onReorder,
 }) {
+    console.log("🚀 ~ LoadingPlanTable ~ packages:", packageGroupNames);
     const {
         present: data,
         update,
@@ -409,6 +423,11 @@ export default function LoadingPlanTable({
     const toast = useToast();
     const { mutate } = useMutation();
 
+    const packageGroupReverseMap = useMemo(
+        () => toReverseMap(packageGroups),
+        [packageGroups],
+    );
+
     const resolvedData = initialData ?? _initialData;
     const [selectedDate, setSelectedDate] = useState(new Date(date));
     const [isDirty, setIsDirty] = useState(false);
@@ -416,7 +435,8 @@ export default function LoadingPlanTable({
 
     const isUpdating = inFlightCount > 0;
 
-    const withUpdating = useCallback((promise) => {
+    const withUpdating = useCallback((maybePromise) => {
+        const promise = Promise.resolve(maybePromise);
         setInFlightCount((c) => c + 1);
         return promise.finally(() => setInFlightCount((c) => c - 1));
     }, []);
@@ -1046,7 +1066,8 @@ export default function LoadingPlanTable({
             if (
                 r.machine !== null &&
                 !isBlockRow(r) &&
-                groupOf(r.Package_Name) !== activePackage
+                groupOf(r.Package_Name, packageGroupReverseMap) !==
+                    activePackage
             )
                 return;
             const key = r.machine ?? "unassigned";
@@ -1086,7 +1107,7 @@ export default function LoadingPlanTable({
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
                 if (isBlockRow(row)) continue; // anchor only on real lots
-                const group = groupOf(row.Package_Name);
+                const group = groupOf(row.Package_Name, packageGroupReverseMap);
 
                 const startIdx = (lastIndexOfGroup[group] ?? -1) + 1;
 
@@ -1099,7 +1120,10 @@ export default function LoadingPlanTable({
                     if (isBlockRow(r)) {
                         // (blocks intentionally excluded, matching existing behavior)
                     } else {
-                        const otherGroup = groupOf(r.Package_Name);
+                        const otherGroup = groupOf(
+                            r.Package_Name,
+                            packageGroupReverseMap,
+                        );
                         const lotDetail = {
                             Lot_Id: r.Lot_Id,
                             timeStart: r.timeStart,
@@ -1159,85 +1183,15 @@ export default function LoadingPlanTable({
         return result;
     }, [data]);
 
-    // machine -> _dndId -> [{ kind: 'block'|'package', minutes, label }, ...]
-    // Describes, for each visible lot, what (if anything) sits between it
-    // and its next same-GROUP successor in the true machine timeline — so
-    // a filtered tab can show "this isn't really idle, X is hidden here"
-    // instead of a misleading gap. Only meaningful for buckets that HAVE a
-    // timeline (real machines + MANUAL) — Unassigned has no schedule, so
-    // it's excluded entirely (no gap-hints there, ever).
-    // const gapInfo = useMemo(() => {
-    //     const result = {};
-    //     const byMachine = {};
-    //     data.forEach((r) => {
-    //         if (!hasTimeline(r.machine)) return; // skip Unassigned
-    //         if (!byMachine[r.machine]) byMachine[r.machine] = [];
-    //         byMachine[r.machine].push(r);
-    //     });
-
-    //     Object.entries(byMachine).forEach(([machine, rows]) => {
-    //         result[machine] = {};
-
-    //         for (let i = 0; i < rows.length; i++) {
-    //             const row = rows[i];
-    //             if (isBlockRow(row)) continue; // anchor only on real lots
-    //             const group = groupOf(row.Package_Name);
-
-    //             const segments = [];
-    //             let j = i + 1;
-
-    //             while (j < rows.length) {
-    //                 const r = rows[j];
-    //                 if (!isBlockRow(r) && groupOf(r.Package_Name) === group)
-    //                     break; // reached next same-group lot
-
-    //                 const minutes = Number(r.accuTime) || 0;
-    //                 const last = segments[segments.length - 1];
-
-    //                 if (isBlockRow(r)) {
-    //                     // if (last && last.kind === "block") {
-    //                     //     last.minutes += minutes; // merge consecutive blocks
-    //                     // } else {
-    //                     //     segments.push({
-    //                     //         kind: "block",
-    //                     //         minutes,
-    //                     //         label: r.blockLabel || "Time block",
-    //                     //     });
-    //                     // }
-    //                 } else {
-    //                     const otherGroup = groupOf(r.Package_Name);
-    //                     if (
-    //                         last &&
-    //                         last.kind === "package" &&
-    //                         last.label === otherGroup
-    //                     ) {
-    //                         last.minutes += minutes; // merge consecutive same-other-group lots
-    //                     } else {
-    //                         segments.push({
-    //                             kind: "package",
-    //                             minutes,
-    //                             label: otherGroup,
-    //                         });
-    //                     }
-    //                 }
-    //                 j++;
-    //             }
-
-    //             if (segments.length > 0) {
-    //                 result[machine][row._dndId] = segments;
-    //             }
-    //         }
-    //     });
-
-    //     return result;
-    // }, [data]);
-    console.log("🚀 ~ LoadingPlanTable ~ gapInfo:", gapInfo);
-
     const otherPackageCounts = useMemo(() => {
         const map = {};
         data.forEach((r) => {
             if (r.machine === null) return; // Unassigned ignores the package filter
-            if (groupOf(r.Package_Name) === activePackage) return;
+            if (
+                groupOf(r.Package_Name, packageGroupReverseMap) ===
+                activePackage
+            )
+                return;
             map[r.machine] = (map[r.machine] ?? 0) + 1;
         });
         return map;
@@ -1518,7 +1472,6 @@ export default function LoadingPlanTable({
                     value,
                     baseTimes,
                 );
-                console.log("🚀 ~ LoadingPlanTable ~ withGap:", withGap);
 
                 if (error) {
                     toast?.error?.(error);
@@ -1532,6 +1485,9 @@ export default function LoadingPlanTable({
                 update(() => withGap);
                 setIsDirty(true);
                 setEditCell(null);
+
+                console.log("🚀 ~ LoadingPlanTable ~ data:", data);
+                console.log("🚀 ~ LoadingPlanTable ~ withGap:", withGap);
 
                 withUpdating(
                     syncUndoRedoToServer(
@@ -1898,6 +1854,16 @@ export default function LoadingPlanTable({
     // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="relative h-full">
+            <DataIntegrityModal
+                partnameMismatches={partnameMismatches}
+                unknownPackages={unknownPackages}
+            />
+            {/* <Deferred
+                data="partnameMismatches"
+                fallback={<p>Loading mismatches…</p>}
+            >
+                <pre>{JSON.stringify(partnameMismatches, null, 2)}</pre>
+            </Deferred> */}
             {/* <div
                         onPaste={(e) => {
                             console.log(
@@ -1928,37 +1894,37 @@ export default function LoadingPlanTable({
                     )}
 
                     <div className="flex-none px-4 pt-4">
-                        <div className="flex flex-wrap items-end justify-between">
-                            {/* Left column: identity/context — date, status, packages */}
-                            <div className="flex flex-col gap-2 min-w-0">
-                                <div>
+                        <div className="flex flex-col">
+                            {/* Row 1: date/status (left) — selection info, undo/redo, integrity (right) */}
+                            <div className="flex flex-wrap items-end justify-between gap-2">
+                                <div className="flex gap-2 items-center">
                                     <DateNav
                                         selected={selectedDate}
                                         onChange={handleDateChange}
                                         isNoFuture
                                     />
-                                    <div className="h-6 mt-1">
-                                        {status && status !== "ok" && (
-                                            <div className="text-sm text-muted-foreground leading-5">
+                                    {status && status !== "ok" && (
+                                        <div className="flex text-sm py-0 px-2 alert alert-error alert-soft">
+                                            <GoAlert size={16} />
+                                            <div role="alert" className="">
                                                 {getStatusMessage(date, status)}
                                             </div>
-                                        )}
-                                    </div>
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    router.get(
+                                                        route("import.index"),
+                                                    )
+                                                }
+                                                className="btn p-0 btn-link"
+                                            >
+                                                Go to Import
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
-                                <PackageTabs
-                                    packages={packages}
-                                    active={activePackage}
-                                    onChange={(pkg) => {
-                                        setActivePackage(pkg);
-                                        clearSelection();
-                                    }}
-                                />
-                            </div>
-
-                            {/* Right column: all controls — undo/redo, line/idle toggles */}
-                            <div className="flex flex-col items-end gap-2 shrink-0 pb-2">
-                                <div className="flex items-center gap-2 h-7">
+                                <div className="flex items-center">
                                     {isUpdating ? (
                                         <span className="flex items-center gap-1.5 text-xs text-info">
                                             <span className="loading loading-spinner loading-xs" />
@@ -1986,7 +1952,7 @@ export default function LoadingPlanTable({
                                         onClick={() => handleUndo()}
                                         disabled={!canUndo() || isUpdating}
                                         className={clsx(
-                                            "px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
+                                            "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
                                             interactiveCursorClasses(
                                                 isUpdating,
                                             ),
@@ -1999,7 +1965,7 @@ export default function LoadingPlanTable({
                                         onClick={() => handleRedo()}
                                         disabled={!canRedo() || isUpdating}
                                         className={clsx(
-                                            "px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
+                                            "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
                                             interactiveCursorClasses(
                                                 isUpdating,
                                             ),
@@ -2008,14 +1974,52 @@ export default function LoadingPlanTable({
                                     >
                                         ↪ Redo
                                     </button>
-                                </div>
 
-                                <div className="flex items-center gap-3">
-                                    <fieldset className="fieldset rounded-box py-1 px-2">
+                                    <div className="w-px h-4 bg-base-300 mx-1" />
+
+                                    <button
+                                        className="btn btn-sm rounded-box btn-secondary"
+                                        onClick={() =>
+                                            document
+                                                .getElementById(
+                                                    "data_integrity_modal",
+                                                )
+                                                .showModal()
+                                        }
+                                    >
+                                        Data Integrity
+                                        <TabBadge
+                                            count={
+                                                partnameMismatches !==
+                                                    undefined &&
+                                                unknownPackages !== undefined
+                                                    ? partnameMismatches.length +
+                                                      unknownPackages.length
+                                                    : undefined
+                                            }
+                                            tone="warning"
+                                        />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Row 2: package tabs (left) — production line / idle machines (right) */}
+                            <div className="flex flex-wrap items-end justify-between gap-2">
+                                <PackageTabs
+                                    packages={packageGroupNames}
+                                    active={activePackage}
+                                    onChange={(pkg) => {
+                                        setActivePackage(pkg);
+                                        clearSelection();
+                                    }}
+                                />
+
+                                <div className="flex items-center gap-3 mb-1">
+                                    <fieldset className="fieldset rounded-box pb-3 px-2">
                                         <legend className="fieldset-legend text-[11px] px-1">
                                             Production Line
                                         </legend>
-                                        <div className="join h-5 items-center">
+                                        <div className="join h-2 items-center">
                                             {["PL1", "PL6"].map((line) => (
                                                 <button
                                                     key={line}
@@ -2025,7 +2029,7 @@ export default function LoadingPlanTable({
                                                         setLocation(line)
                                                     }
                                                     className={clsx(
-                                                        "btn btn-sm join-item",
+                                                        "btn btn-xs join-item",
                                                         selectedLocation ===
                                                             line
                                                             ? "btn-primary"
@@ -2046,7 +2050,7 @@ export default function LoadingPlanTable({
                                             <legend className="fieldset-legend text-[11px] px-1">
                                                 Idle machines
                                             </legend>
-                                            <label className="h-5 label gap-2 text-[11px] text-base-content/60 cursor-pointer">
+                                            <label className="h-2 label gap-2 text-[11px] text-base-content/60 cursor-pointer">
                                                 <input
                                                     type="checkbox"
                                                     className="toggle toggle-xs"
@@ -2274,7 +2278,10 @@ export default function LoadingPlanTable({
                             }}
                         >
                             {packagesInGroup(
-                                groupOf(packageMenu.currentPackage),
+                                groupOf(
+                                    packageMenu.currentPackage,
+                                    packageGroupReverseMap,
+                                ),
                             ).map((pkg) => (
                                 <button
                                     key={pkg}

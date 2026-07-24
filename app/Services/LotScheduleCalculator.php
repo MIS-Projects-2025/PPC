@@ -57,7 +57,7 @@ class LotScheduleCalculator
                 $recipeSource = [
                     'id' => $packageListRow->id,
                     'devicename' => $packageListRow->devicename,
-                    'recipe' => $packageListRow->recipe,
+                    'recipe' => $commit->recipe_used,
                     'packageType' => $packageListRow->package_type,
                 ];
             }

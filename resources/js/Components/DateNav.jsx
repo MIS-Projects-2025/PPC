@@ -73,7 +73,7 @@ export default function DateNav({ selected, onChange, isNoFuture = false }) {
                     className="btn btn-sm btn-outline ml-1"
                     onClick={() => onChange(today)}
                 >
-                    Today
+                    Get Today
                 </button>
             )}
         </div>

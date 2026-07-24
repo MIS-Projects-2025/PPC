@@ -9,6 +9,8 @@ use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
 use App\Models\PpcPackageMaster; // maps to ppc_package_master
 use App\Services\LotScheduleCalculator;
+use App\Services\LoadingPlanPackageCoverage;
+use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
@@ -48,36 +50,35 @@ class LoadingPlanController extends Controller
             ->values();
         Log::info('index: activeMachines', ['activeMachines' => $activeMachines->toArray()]);
 
-        [$result, $wipRows] = $this->buildPlanRows($date, $selectedLocation, $packageLineMap);
-        Log::info('index: result', ['result' => $result->toArray()]);
-        Log::info('index: wipRows', ['wipRows' => $wipRows->toArray()]);
+        $wipRows = $this->getWipRows($date, $selectedLocation);
+        $result  = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows);
 
         $packages = $result
             ->filter(fn($row) => !$row['isBlock'])
             ->pluck('Package_Name')
-            ->filter()
-            ->unique()
+            ->filter()->unique()
             ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
             ->map(fn($pkg) => PackageGroups::groupOf($pkg))
-            ->unique()
-            ->sort()
-            ->values();
-        Log::info('index: packages', ['packages' => $packages->toArray()]);
+            ->unique()->sort()->values();
 
         $status = $wipRows->isEmpty() ? 'not_imported' : 'ok';
-        Log::info('index: status', ['status' => $status]);
 
-        return Inertia::render(
-            'LoadingPlanTable',
-            [
-                'data'              => $result,
-                'date'              => $date,
-                'machines'          => $activeMachines,
-                'packages'          => $packages,
-                'selectedLocation'  => $selectedLocation,
-                'status'            => $status,
-            ]
-        );
+        return Inertia::render('LoadingPlanTable', [
+            'data'             => $result,
+            'date'             => $date,
+            'machines'         => $activeMachines,
+            'packageGroupNames' => $packages,
+            'packageGroups'    => PackageGroups::GROUPS,
+            'selectedLocation' => $selectedLocation,
+            'status'           => $status,
+
+            'unknownPackages' => Inertia::defer(function () use ($date) {
+                return (new LoadingPlanPackageCoverage())->findUnknownPackages($date);
+            }),
+            'partnameMismatches' => Inertia::defer(function () use ($wipRows) {
+                return (new LoadingPlanPartnameIntegrity())->findMismatches($wipRows);
+            }),
+        ]);
     }
 
     public function byMachine(Request $request)
@@ -93,39 +94,54 @@ class LoadingPlanController extends Controller
         $selectedLocation = $request->get('location', 'PL1');
 
         $packageLineMap = PpcPackageMaster::query()
-            ->where('is_telford', 1)
-            ->where('is_active', 1)
+            ->where('is_telford', 1)->where('is_active', 1)
             ->pluck('default_pl', 'package');
 
-        [$result, $wipRows] = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap);
-        Log::info("resultresultresult", array($result));
+        $wipRows = $this->getWipRows($data['date'], $selectedLocation);
+        $result  = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap, $wipRows);
 
-        $filtered = $result
-            ->whereIn('machine', $data['machines'])
-            ->values();
-
-        Log::info("filtered", array($filtered));
+        $filtered = $result->whereIn('machine', $data['machines'])->values();
 
         $status = match (true) {
-            $wipRows->isEmpty()  => 'not_imported', // no WIP data for this date at all
-            $filtered->isEmpty() => 'no_match',      // WIP exists, but not for these machines
+            $wipRows->isEmpty()  => 'not_imported',
+            $filtered->isEmpty() => 'no_match',
             default              => 'ok',
         };
 
-        return Inertia::render(
-            'LoadingPlanTableByMachine',
-            [
-                'data'              => $filtered,
-                'date'              => $data['date'],
-                'status'            => $status,
-                'machines'          => $data['machines'],
-                'selectedLocation' => $selectedLocation,
-            ]
-        );
+        return Inertia::render('LoadingPlanTableByMachine', [
+            'data'             => $filtered,
+            'date'             => $data['date'],
+            'status'           => $status,
+            'machines'         => $data['machines'],
+            'selectedLocation' => $selectedLocation,
+        ]);
+    }
+
+    private function getWipRows(string $date, string $selectedLocation)
+    {
+        $packages = PpcPackageMaster::query()
+            ->where('is_telford', 1)
+            ->where('is_active', 1)
+            ->where('default_pl', $selectedLocation)
+            ->pluck('package')
+            ->map(fn($p) => trim($p));
+
+        Log::info('package compare', [
+            'ref_packages' => $packages->map(fn($p) => "[$p]")->toArray(),
+            'wip_packages' => CustomerDataWip::forDate($date)->tapeReelStations()->excludingPostTnr()
+                ->pluck('Package_Name')->unique()->map(fn($p) => "[$p]")->toArray(),
+        ]);
+
+        return CustomerDataWip::query()
+            ->forDate($date)
+            ->tapeReelStations()
+            ->excludingPostTnr()
+            ->whereIn('Package_Name', $packages)
+            ->get();
     }
 
     /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
-    private function buildPlanRows(string $date, string $selectedLocation, $packageLineMap): array
+    private function buildPlanRows(string $date, string $selectedLocation, $packageLineMap, $wipRows): \Illuminate\Support\Collection
     {
         Log::info('buildPlanRows: input', [
             'date' => $date,
@@ -147,28 +163,6 @@ class LoadingPlanController extends Controller
             return $location === null || $location === $selectedLocation;
         });
         Log::info('buildPlanRows: blockEntries (after location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
-
-        $packages = PpcPackageMaster::query()
-            ->where('is_telford', 1)
-            ->where('is_active', 1)
-            ->where('default_pl', $selectedLocation)
-            ->pluck('package')
-            ->map(fn($p) => trim($p));
-
-        Log::info('package compare', [
-            'ref_packages' => $packages->map(fn($p) => "[$p]")->toArray(),
-            'wip_packages' => CustomerDataWip::forDate($date)->tapeReelStations()->excludingPostTnr()
-                ->pluck('Package_Name')->unique()->map(fn($p) => "[$p]")->toArray(),
-        ]);
-
-        $wipRows = CustomerDataWip::query()
-            ->forDate($date)
-            ->tapeReelStations()
-            ->excludingPostTnr()
-            ->whereIn('Package_Name', $packages)
-            ->get();
-
-        Log::info('buildPlanRows: wipRows', ['count' => $wipRows->count(), 'wipRows' => $wipRows->toArray()]);
 
         $calc = new LotScheduleCalculator();
 
@@ -404,6 +398,6 @@ class LoadingPlanController extends Controller
 
         Log::info('buildPlanRows: final result', ['count' => $result->count(), 'result' => $result->toArray()]);
 
-        return [$result, $wipRows];
+        return $result;
     }
 }
