@@ -402,6 +402,7 @@ export default function LoadingPlanTable({
     machines: serverMachines,
     partnameMismatches,
     unknownPackages,
+    recipeMismatches,
     selectedLocation,
     packageGroupNames,
     packageGroups,
@@ -1857,6 +1858,7 @@ export default function LoadingPlanTable({
             <DataIntegrityModal
                 partnameMismatches={partnameMismatches}
                 unknownPackages={unknownPackages}
+                recipeMismatches={recipeMismatches}
             />
             {/* <Deferred
                 data="partnameMismatches"
@@ -1992,9 +1994,11 @@ export default function LoadingPlanTable({
                                             count={
                                                 partnameMismatches !==
                                                     undefined &&
-                                                unknownPackages !== undefined
+                                                unknownPackages !== undefined &&
+                                                recipeMismatches !== undefined
                                                     ? partnameMismatches.length +
-                                                      unknownPackages.length
+                                                      unknownPackages.length +
+                                                      recipeMismatches.length
                                                     : undefined
                                             }
                                             tone="warning"

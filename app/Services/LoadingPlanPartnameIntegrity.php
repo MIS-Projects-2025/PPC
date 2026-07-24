@@ -4,22 +4,32 @@ namespace App\Services;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use App\Services\LotScheduleCalculator;
 
 class LoadingPlanPartnameIntegrity
 {
-    public function findMismatches(Collection $wipRows): array
+    /**
+     * Fetch package_list rows for the given WIP rows' part names, keyed by
+     * devicename. Call this once per request and pass the result into
+     * findMismatches()/findRecipeIssues() so both checks share a single query
+     * instead of each hitting package_list independently.
+     */
+    public function lookupPackageList(Collection $wipRows): Collection
     {
         $partNames = $wipRows->pluck('Part_Name')->filter()->unique()->values();
 
         if ($partNames->isEmpty()) {
-            return [];
+            return collect();
         }
 
-        $packageList = DB::table('qdn_db.package_list')
+        return DB::table('qdn_db.package_list')
             ->whereIn('devicename', $partNames)
             ->get()
             ->keyBy('devicename');
+    }
 
+    public function findMismatches(Collection $wipRows, Collection $packageList): array
+    {
         $mismatches = [];
 
         foreach ($wipRows as $wip) {
@@ -65,17 +75,71 @@ class LoadingPlanPartnameIntegrity
         return $mismatches;
     }
 
+    public function findRecipeIssues(
+        Collection $wipRows,
+        Collection $packageList,
+        LotScheduleCalculator $calc,
+        Collection $commitsByCustomerDataId,
+        Collection $packageListById,
+    ): array {
+        $issues = [];
+
+        foreach ($wipRows as $wip) {
+            $ref = $packageList->get($wip->Part_Name);
+
+            if (!$ref) {
+                $issues[] = [
+                    'customer_data_id' => $wip->customer_data_id,
+                    'Part_Name'        => $wip->Part_Name,
+                    'Lot_Id'           => $wip->Lot_Id,
+                    'reason'           => 'no_package_list_entry',
+                ];
+                continue;
+            }
+
+            $doableResult = $calc->doable($wip->customer_data_id, $commitsByCustomerDataId, $packageListById);
+            $doableStatus = $doableResult['status'];
+
+            if ($doableStatus === 'unknown') {
+                $issues[] = [
+                    'customer_data_id' => $wip->customer_data_id,
+                    'Part_Name'        => $wip->Part_Name,
+                    'Lot_Id'           => $wip->Lot_Id,
+                    'reason'           => 'no_commit',
+                ];
+                continue;
+            }
+
+            if ($doableStatus === 'no_recipe') {
+                $issues[] = [
+                    'customer_data_id' => $wip->customer_data_id,
+                    'Part_Name'        => $wip->Part_Name,
+                    'Lot_Id'           => $wip->Lot_Id,
+                    'reason'           => 'no_recipe',
+                ];
+                continue;
+            }
+
+            if ($doableStatus === 'qty_below_recipe') {
+                $issues[] = [
+                    'customer_data_id' => $wip->customer_data_id,
+                    'Part_Name'        => $wip->Part_Name,
+                    'Lot_Id'           => $wip->Lot_Id,
+                    'reason'           => 'qty_below_recipe',
+                    'Qty'              => $wip->Qty,
+                    'recipeSource'     => $doableResult['recipeSource'],
+                ];
+            }
+        }
+
+        return $issues;
+    }
+
     private function normalize($value): string
     {
         return trim((string) $value);
     }
 
-    /**
-     * Lead_Count is int on the WIP side but varchar(45) on package_list — compare
-     * numerically when both sides parse as numbers (handles "08" vs 8, "8 " vs 8,
-     * "8.0" vs 8), and fall back to a normalized string compare otherwise (in case
-     * package_list ever holds something non-numeric, e.g. a range or blank).
-     */
     private function numbersMatch($a, $b): bool
     {
         $aTrim = trim((string) $a);

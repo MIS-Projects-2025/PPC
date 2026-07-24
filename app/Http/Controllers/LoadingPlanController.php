@@ -16,6 +16,7 @@ use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 
 class LoadingPlanController extends Controller
 {
@@ -51,7 +52,19 @@ class LoadingPlanController extends Controller
         Log::info('index: activeMachines', ['activeMachines' => $activeMachines->toArray()]);
 
         $wipRows = $this->getWipRows($date, $selectedLocation);
-        $result  = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows);
+        $calc = new LotScheduleCalculator();
+
+        $commitsByCustomerDataId = DB::table('ppc.lot_commits')
+            ->whereIn('customer_data_id', $wipRows->pluck('customer_data_id'))
+            ->get()
+            ->keyBy('customer_data_id');
+
+        $packageListById = DB::table('qdn_db.package_list')
+            ->whereIn('id', $commitsByCustomerDataId->pluck('recipe_source_id')->filter()->unique())
+            ->get()
+            ->keyBy('id');
+
+        $result  = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows, $calc, $commitsByCustomerDataId, $packageListById);
 
         $packages = $result
             ->filter(fn($row) => !$row['isBlock'])
@@ -63,6 +76,12 @@ class LoadingPlanController extends Controller
 
         $status = $wipRows->isEmpty() ? 'not_imported' : 'ok';
 
+        $partnameIntegrity = new LoadingPlanPartnameIntegrity();
+        $packageListPromise = null;
+        $getPackageList = function () use ($partnameIntegrity, $wipRows, &$packageListPromise) {
+            return $packageListPromise ??= $partnameIntegrity->lookupPackageList($wipRows);
+        };
+
         return Inertia::render('LoadingPlanTable', [
             'data'             => $result,
             'date'             => $date,
@@ -72,11 +91,14 @@ class LoadingPlanController extends Controller
             'selectedLocation' => $selectedLocation,
             'status'           => $status,
 
+            'partnameMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList) {
+                return $partnameIntegrity->findMismatches($wipRows, $getPackageList());
+            }),
             'unknownPackages' => Inertia::defer(function () use ($date) {
                 return (new LoadingPlanPackageCoverage())->findUnknownPackages($date);
             }),
-            'partnameMismatches' => Inertia::defer(function () use ($wipRows) {
-                return (new LoadingPlanPartnameIntegrity())->findMismatches($wipRows);
+            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $calc, $commitsByCustomerDataId, $packageListById) {
+                return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $calc, $commitsByCustomerDataId, $packageListById);
             }),
         ]);
     }
@@ -98,7 +120,20 @@ class LoadingPlanController extends Controller
             ->pluck('default_pl', 'package');
 
         $wipRows = $this->getWipRows($data['date'], $selectedLocation);
-        $result  = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap, $wipRows);
+
+        $calc = new LotScheduleCalculator();
+
+        $commitsByCustomerDataId = DB::table('ppc.lot_commits')
+            ->whereIn('customer_data_id', $wipRows->pluck('customer_data_id'))
+            ->get()
+            ->keyBy('customer_data_id');
+
+        $packageListById = DB::table('qdn_db.package_list')
+            ->whereIn('id', $commitsByCustomerDataId->pluck('recipe_source_id')->filter()->unique())
+            ->get()
+            ->keyBy('id');
+
+        $result  = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc, $commitsByCustomerDataId, $packageListById);
 
         $filtered = $result->whereIn('machine', $data['machines'])->values();
 
@@ -141,8 +176,15 @@ class LoadingPlanController extends Controller
     }
 
     /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
-    private function buildPlanRows(string $date, string $selectedLocation, $packageLineMap, $wipRows): \Illuminate\Support\Collection
-    {
+    private function buildPlanRows(
+        string $date,
+        string $selectedLocation,
+        $packageLineMap,
+        $wipRows,
+        LotScheduleCalculator $calc,
+        Collection $commitsByCustomerDataId,
+        Collection $packageListById,
+    ): \Illuminate\Support\Collection {
         Log::info('buildPlanRows: input', [
             'date' => $date,
             'selectedLocation' => $selectedLocation,
@@ -164,19 +206,7 @@ class LoadingPlanController extends Controller
         });
         Log::info('buildPlanRows: blockEntries (after location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
 
-        $calc = new LotScheduleCalculator();
-
         $capacityUpdates = [];
-
-        $commitsByCustomerDataId = DB::table('ppc.lot_commits')
-            ->whereIn('customer_data_id', $wipRows->pluck('customer_data_id'))
-            ->get()
-            ->keyBy('customer_data_id');
-
-        $packageListById = DB::table('qdn_db.package_list')
-            ->whereIn('id', $commitsByCustomerDataId->pluck('recipe_source_id')->filter()->unique())
-            ->get()
-            ->keyBy('id');
 
         $lotResults = $wipRows->map(function ($wip) use ($commitsByCustomerDataId, $packageListById, $lotEntries, $calc) {
             $entry = $lotEntries->get($wip->Lot_Id);
