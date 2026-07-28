@@ -13,6 +13,7 @@ class LotScheduleCalculator
 {
     private Collection $machinePlatforms; // machine_num => machine_platform
     private Collection $capacityBands;    // platform => [ {qty_min, qty_max, capacity_uph}, ... ]
+    private Collection $packageListByDeviceName;
 
     public function __construct()
     {
@@ -21,6 +22,11 @@ class LotScheduleCalculator
         $this->capacityBands = MachinePlatformCapacityBand::orderByDesc('qty_min')
             ->get()
             ->groupBy('platform');
+
+        $this->packageListByDeviceName = DB::connection('qdn_db')
+            ->table('package_list')
+            ->get()
+            ->keyBy('devicename');
     }
 
     /**
@@ -70,6 +76,35 @@ class LotScheduleCalculator
         ];
     }
 
+    /** Manual lots / split children: no customer_data_id, no trigger, no
+     *  lot_commits row — replicate the trigger's own logic here instead,
+     *  keyed by part_name (devicename) since that's all these lots have. */
+    public function doableForManualLot(?string $partName, int $qty): array
+    {
+        if (!$partName) {
+            return ['value' => null, 'status' => 'unknown', 'recipeSource' => null];
+        }
+
+        $packageListRow = $this->packageListByDeviceName->get($partName);
+
+        if (!$packageListRow || !$packageListRow->recipe || $packageListRow->recipe <= 0) {
+            return ['value' => null, 'status' => 'no_recipe', 'recipeSource' => null];
+        }
+
+        $commit = (int) floor($qty / $packageListRow->recipe) * $packageListRow->recipe;
+
+        return [
+            'value' => $commit,
+            'status' => $commit === 0 ? 'qty_below_recipe' : 'ok',
+            'recipeSource' => [
+                'id' => $packageListRow->id,
+                'devicename' => $packageListRow->devicename,
+                'recipe' => $packageListRow->recipe,
+                'packageType' => $packageListRow->package_type,
+            ],
+        ];
+    }
+
     public function capacityUph(?string $machine, int $qty): ?int
     {
         if (!$machine) return null;
@@ -95,19 +130,48 @@ class LotScheduleCalculator
         return ($doable && $capacityUph) ? ceil(($doable / $capacityUph) * 60) : null;
     }
 
-    public function bulkRefreshCapacitySnapshots(array $updates): void
+    public function bulkRefreshSnapshots(array $updates): void
     {
+        // $updates: [entryId => ['capacity_uph_snapshot' => ?, 'accu_time' => ?]]
         if (empty($updates)) return;
 
+        $columns = ['capacity_uph_snapshot', 'accu_time'];
         $ids = array_keys($updates);
-        $cases = collect($updates)
-            ->map(fn($value, $id) => "WHEN {$id} THEN " . (is_null($value) ? 'NULL' : $value))
-            ->implode(' ');
 
-        LoadingPlanEntry::whereIn('id', $ids)
-            ->whereNull('finalized_at')
-            ->update([
-                'capacity_uph_snapshot' => DB::raw("CASE id {$cases} END"),
+        $sets = [];
+        $bindings = [];
+
+        foreach ($columns as $column) {
+            $cases = [];
+            foreach ($updates as $id => $values) {
+                if (!array_key_exists($column, $values)) continue;
+                $cases[] = "WHEN ? THEN ?";
+                $bindings[] = $id;
+                $bindings[] = $values[$column];
+            }
+            if (empty($cases)) continue;
+
+            $casesSql = implode(' ', $cases);
+            $sets[] = "{$column} = CASE id {$casesSql} ELSE {$column} END";
+        }
+
+        if (empty($sets)) return;
+
+        $idsPlaceholder = implode(',', array_fill(0, count($ids), '?'));
+        $bindings = array_merge($bindings, $ids);
+
+        $sql = "UPDATE loading_plan_entries
+            SET " . implode(', ', $sets) . "
+            WHERE id IN ({$idsPlaceholder}) AND finalized_at IS NULL";
+
+        $affected = DB::update($sql, $bindings);
+
+        if ($affected < count($ids)) {
+            Log::info('bulkRefreshSnapshots: some rows skipped (likely finalized mid-flight)', [
+                'expected' => count($ids),
+                'affected' => $affected,
+                'ids'      => $ids,
             ]);
+        }
     }
 }

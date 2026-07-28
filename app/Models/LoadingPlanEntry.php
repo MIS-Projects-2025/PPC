@@ -15,6 +15,8 @@ class LoadingPlanEntry extends Model
         'part_name',
         'package_name',
         'qty',
+        'qty_base',
+        'qty_override',
         'scheduled_date',
         'machine_id',
         'sequence_order',
@@ -26,6 +28,7 @@ class LoadingPlanEntry extends Model
         'lock_version',
         'machine_snapshot',
         'capacity_uph_snapshot',
+        'doable_snapshot',
         'finalized_at',
     ];
 

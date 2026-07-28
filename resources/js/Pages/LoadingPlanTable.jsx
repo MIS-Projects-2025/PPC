@@ -130,6 +130,7 @@ import {
     TableActionsContext,
 } from "@/Components/LoadingPlan/RowContent";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
+import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import {
@@ -433,6 +434,10 @@ export default function LoadingPlanTable({
     const [selectedDate, setSelectedDate] = useState(new Date(date));
     const [isDirty, setIsDirty] = useState(false);
     const [inFlightCount, setInFlightCount] = useState(0);
+
+    const [historyData, setHistoryData] = useState(null);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const splitHistoryModalRef = useRef(null);
 
     const isUpdating = inFlightCount > 0;
 
@@ -1453,6 +1458,26 @@ export default function LoadingPlanTable({
         [data, isUpdating],
     );
 
+    const handleShowHistory = useCallback(async (rootLotId) => {
+        splitHistoryModalRef.current?.showModal();
+        setHistoryLoading(true);
+        setHistoryData(null);
+
+        try {
+            const res = await fetch(
+                route("loading-plan.splits.history", rootLotId),
+            );
+            const data = await res.json();
+            setHistoryData(data);
+        } catch (err) {
+            console.error("Failed to load split history:", err);
+            toast?.error?.("Couldn't load split history — please try again.");
+            splitHistoryModalRef.current?.close();
+        } finally {
+            setHistoryLoading(false);
+        }
+    }, []);
+
     const handleCellCommit = useCallback(
         (rawValue) => {
             if (!editCell) return;
@@ -1598,6 +1623,110 @@ export default function LoadingPlanTable({
 
     // ── Add row / block ──────────────────────────────────────────────────────
     const [justAddedMachine, setJustAddedMachine] = useState(null);
+
+    const handleSplitRow = useCallback(
+        ({
+            parentLotId,
+            childLotId,
+            childQty,
+            parentQty,
+            targetMachine,
+            beforeEntryId,
+            afterEntryId,
+        }) => {
+            const parentRow = data.find((r) => r.Lot_Id === parentLotId);
+            if (!parentRow) {
+                toast?.error?.(
+                    "Couldn't find the lot to split — please refresh.",
+                );
+                return;
+            }
+
+            const parentMachine = parentRow.machine;
+
+            withUpdating(
+                mutate(route("loading-plan.splits.store"), {
+                    body: {
+                        parent_lot_id: parentLotId,
+                        scheduled_date: date,
+                        child_qty: childQty,
+                        target_machine: targetMachine,
+                        before_entry_id: beforeEntryId ?? null,
+                        after_entry_id: afterEntryId ?? null,
+                        child_lot_id: childLotId,
+                    },
+                }),
+            )
+                .then((result) => {
+                    const { parent, child } = result;
+
+                    update((prev) => {
+                        const next = prev.map((row) =>
+                            row.Lot_Id === parentLotId
+                                ? {
+                                      ...row,
+                                      Qty: parentQty,
+                                      lockVersion: parent.lock_version,
+                                  }
+                                : row,
+                        );
+
+                        next.push({
+                            machine: targetMachine,
+                            item: 0,
+                            Part_Name: parentRow.Part_Name,
+                            Lead_Count: null,
+                            Package_Name: parentRow.Package_Name,
+                            Lot_Id: child.lot_id,
+                            status: child.status ?? parentRow.status ?? "NONE",
+                            Station: "",
+                            Qty: childQty,
+                            Doable: 0,
+                            accuTime: 0,
+                            Lot_Type: "",
+                            Lot_Status: "",
+                            Focus_Group: "",
+                            Stage: "",
+                            Lot_Entry_Time_Days: null,
+                            CR3: null,
+                            BE_OSL_Days: null,
+                            Body_Size: "",
+                            Ramp_Time: null,
+                            Remarks: "",
+                            Date_Loaded: null,
+                            BE_Starttime: null,
+                            Backend_Leadtime: null,
+                            tag: null,
+                            entryId: child.id,
+                            sequenceOrder: child.sequence_order,
+                            lockVersion: child.lock_version,
+                            _dndId: `entry-${child.id}`,
+                        });
+
+                        if (parentMachine) {
+                            recomputeMachine(next, parentMachine, baseTimes);
+                        }
+                        if (targetMachine !== parentMachine) {
+                            recomputeMachine(next, targetMachine, baseTimes);
+                        }
+
+                        return next;
+                    });
+
+                    setIsDirty(true);
+                    addSeenPair(targetMachine, parentRow.Package_Name);
+                    setJustAddedMachine(targetMachine);
+                })
+                .catch((err) => {
+                    console.error("Failed to split lot:", err);
+                    toast?.error?.(
+                        err?.message ??
+                            "Couldn't split the lot — please try again.",
+                    );
+                });
+        },
+        [data, baseTimes, update, addSeenPair, date],
+    );
 
     const handleAddRow = useCallback(
         (machine) => {
@@ -1786,6 +1915,7 @@ export default function LoadingPlanTable({
     const tableActionsValue = useMemo(
         () => ({
             handleStatusClick,
+            handleShowHistory,
             handleCellClick,
             selectedIds,
             handleRowSelect,
@@ -1794,6 +1924,7 @@ export default function LoadingPlanTable({
         }),
         [
             handleStatusClick,
+            handleShowHistory,
             handleCellClick,
             selectedIds,
             handleRowSelect,
@@ -1859,6 +1990,13 @@ export default function LoadingPlanTable({
                 partnameMismatches={partnameMismatches}
                 unknownPackages={unknownPackages}
                 recipeMismatches={recipeMismatches}
+            />
+
+            <SplitHistoryModal
+                ref={splitHistoryModalRef}
+                loading={historyLoading}
+                history={historyData}
+                onClose={() => splitHistoryModalRef.current?.close()}
             />
             {/* <Deferred
                 data="partnameMismatches"
@@ -1979,31 +2117,35 @@ export default function LoadingPlanTable({
 
                                     <div className="w-px h-4 bg-base-300 mx-1" />
 
-                                    <button
-                                        className="btn btn-sm rounded-box btn-secondary"
-                                        onClick={() =>
-                                            document
-                                                .getElementById(
-                                                    "data_integrity_modal",
-                                                )
-                                                .showModal()
-                                        }
-                                    >
-                                        Data Integrity
-                                        <TabBadge
-                                            count={
-                                                partnameMismatches !==
-                                                    undefined &&
-                                                unknownPackages !== undefined &&
-                                                recipeMismatches !== undefined
-                                                    ? partnameMismatches.length +
-                                                      unknownPackages.length +
-                                                      recipeMismatches.length
-                                                    : undefined
+                                    {status && status !== "not_imported" && (
+                                        <button
+                                            className="btn btn-sm rounded-box btn-secondary"
+                                            onClick={() =>
+                                                document
+                                                    .getElementById(
+                                                        "data_integrity_modal",
+                                                    )
+                                                    .showModal()
                                             }
-                                            tone="warning"
-                                        />
-                                    </button>
+                                        >
+                                            Data Integrity
+                                            <TabBadge
+                                                count={
+                                                    partnameMismatches !==
+                                                        undefined &&
+                                                    unknownPackages !==
+                                                        undefined &&
+                                                    recipeMismatches !==
+                                                        undefined
+                                                        ? partnameMismatches.length +
+                                                          unknownPackages.length +
+                                                          recipeMismatches.length
+                                                        : undefined
+                                                }
+                                                tone="warning"
+                                            />
+                                        </button>
+                                    )}
                                 </div>
                             </div>
 
@@ -2220,6 +2362,7 @@ export default function LoadingPlanTable({
                         onClearTag={handleBulkClearTag}
                         onStatusChange={handleBulkStatus}
                         onTransfer={handleBulkTransfer}
+                        onSplitRow={handleSplitRow}
                         onDelete={handleBulkDelete}
                         onClearSelection={clearSelection}
                     />

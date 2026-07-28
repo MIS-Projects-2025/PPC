@@ -23,6 +23,7 @@ use App\Http\Controllers\{
     PartNameController,
     PickupController,
     PlPackageMasterController,
+    LoadingPlanSplitController,
     PlRuleController,
     WipController,
     LotController,
@@ -50,6 +51,12 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
     Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine');
+
+    Route::prefix('splits')->name('splits.')->group(function () {
+        Route::post('/', [LoadingPlanSplitController::class, 'store'])->name('store');
+        Route::delete('{splitId}', [LoadingPlanSplitController::class, 'destroy'])->name('destroy');
+        Route::get('{rootLotId}/history', [LoadingPlanSplitController::class, 'history'])->name('history');
+    });
 });
 
 

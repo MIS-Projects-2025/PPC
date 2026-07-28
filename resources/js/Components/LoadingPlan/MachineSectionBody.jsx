@@ -73,6 +73,7 @@ const MachineSectionBody = memo(function MachineSectionBody({
         getRowId: (row) => row._dndId,
         defaultColumn: { minSize: 40 },
     });
+
     const allGapInfo = useContext(GapInfoContext);
     const machineGapInfo = allGapInfo[machine] ?? {};
 

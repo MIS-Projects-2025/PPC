@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\StaleWriteException;
 use App\Exceptions\BulkStaleWriteException;
+use App\Exceptions\LoadingPlanDateFinalizedException;
 use App\Services\LoadingPlanEntryService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -239,7 +240,7 @@ class LoadingPlanEntryController extends Controller
         $data = $request->validate([
             'operations'                   => 'required|array|min:1',
             'operations.*.fields'          => 'nullable|array',
-            'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field',
+            'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field,split,revert_split',
             'operations.*.entry_type'      => 'nullable|string',
             'operations.*.before_entry_id' => 'nullable|integer',
             'operations.*.after_entry_id'  => 'nullable|integer',
@@ -250,12 +251,27 @@ class LoadingPlanEntryController extends Controller
             'operations.*.lot_id'          => 'nullable|string',
             'operations.*.entry_id'        => 'nullable|integer',
             'operations.*.lock_version'    => 'nullable|integer',
-            'scheduled_date'               => 'nullable|date',
+            'operations.*.parent_lot_id'   => 'nullable|string',
+            'operations.*.child_qty'       => 'nullable|integer|min:1',
+            'operations.*.child_lot_id'    => 'nullable|string',
+            'operations.*.split_id'        => 'nullable|integer',
+            'scheduled_date'                => 'nullable|date',
         ]);
 
         try {
             $results = $this->service->batchApply($data['operations'], $data['scheduled_date']);
             return response()->json(['results' => $results]);
+        } catch (\App\Exceptions\InvalidSplitException $e) {
+            return response()->json([
+                'error'   => 'invalid_split',
+                'message' => $e->getMessage(),
+            ], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json([
+                'error'          => 'finalized',
+                'message'        => $e->getMessage(),
+                'scheduled_date' => $e->scheduledDate,
+            ], 422);
         } catch (\Throwable $e) {
             Log::error('batchApply failed', ['message' => $e->getMessage()]);
             return response()->json([

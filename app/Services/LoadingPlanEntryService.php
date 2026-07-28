@@ -760,12 +760,43 @@ class LoadingPlanEntryService
                     ),
                     'delete' => $this->applyDelete($op, $date),
                     'update_field' => $this->applyUpdateField($op, $date),
+                    'split' => $this->applySplit($op, $date),
+                    'revert_split' => $this->applyRevertSplit($op),
                     default => throw new \InvalidArgumentException("Unknown batch operation type: {$op['type']}"),
                 };
             }
 
             return $results;
         });
+    }
+
+    private function applySplit(array $op, string $date)
+    {
+        $splitService = app(\App\Services\LotSplitService::class);
+
+        $result = $splitService->split(
+            $op['parent_lot_id'],
+            $date,
+            $op['child_qty'],
+            $op['target_machine'],
+            $op['before_entry_id'] ?? null,
+            $op['after_entry_id'] ?? null,
+            $op['child_lot_id'] ?? null,
+            $op['created_by'] ?? null,
+        );
+
+        return [
+            'split_id' => $result['split']->id,
+            'parent'   => $result['parent'],
+            'child'    => $result['child'],
+        ];
+    }
+
+    private function applyRevertSplit(array $op)
+    {
+        $splitService = app(\App\Services\LotSplitService::class);
+        $splitService->revert($op['split_id'], $op['reverted_by'] ?? null);
+        return ['reverted_split_id' => $op['split_id']];
     }
 
     private function applyMove(array $op, string $date)

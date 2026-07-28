@@ -15,8 +15,10 @@ use App\Services\PackageGroups;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
+use App\Services\LotSplitService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\App;
 
 class LoadingPlanController extends Controller
 {
@@ -185,6 +187,13 @@ class LoadingPlanController extends Controller
         Collection $commitsByCustomerDataId,
         Collection $packageListById,
     ): \Illuminate\Support\Collection {
+        $activeSplits = \App\Models\LotSplit::active()
+            ->where('scheduled_date', $date)
+            ->get();
+
+        $splitsByParent = $activeSplits->groupBy('parent_lot_id');
+        $splitsByChild = $activeSplits->keyBy('child_lot_id');
+
         Log::info('buildPlanRows: input', [
             'date' => $date,
             'selectedLocation' => $selectedLocation,
@@ -192,9 +201,14 @@ class LoadingPlanController extends Controller
         ]);
 
         $allEntries = LoadingPlanEntry::with('machineModel')->where('scheduled_date', $date)->get();
+
         Log::info('buildPlanRows: allEntries count', ['count' => $allEntries->count()]);
 
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
+        Log::info('lotEntries keys vs wip lot ids', [
+            'entryLotIds' => $lotEntries->keys()->map(fn($k) => "[$k]")->all(),
+            'wipLotIds'   => $wipRows->pluck('Lot_Id')->map(fn($v) => "[$v]")->all(),
+        ]);
         Log::info('buildPlanRows: lotEntries', ['lotEntries' => $lotEntries->toArray()]);
 
         $blockEntries = $allEntries->where('entry_type', 'block');
@@ -206,29 +220,41 @@ class LoadingPlanController extends Controller
         });
         Log::info('buildPlanRows: blockEntries (after location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
 
-        $capacityUpdates = [];
+        $snapshotUpdates = [];
 
-        $lotResults = $wipRows->map(function ($wip) use ($commitsByCustomerDataId, $packageListById, $lotEntries, $calc) {
+        $lotResults = $wipRows->map(function ($wip) use ($commitsByCustomerDataId, $packageListById, $lotEntries, $calc, &$snapshotUpdates, $splitsByParent, $splitsByChild) {
             $entry = $lotEntries->get($wip->Lot_Id);
 
             $machine = $entry?->finalized_at
                 ? $entry->machine_snapshot
                 : $entry?->getMachineName();
 
+            $effectiveQty = $entry?->qty_override ?? $wip->Qty;
+
             $doableResult = $calc->doable($wip->customer_data_id, $commitsByCustomerDataId, $packageListById);
-            $doable = $doableResult['value'];
+            $doableValue = $doableResult['value'];
             $doableStatus = $doableResult['status'];
             $doableRecipeSource = $doableResult['recipeSource'];
 
+            $doable = $doableValue;
+
             $capacityUph = $entry?->finalized_at
                 ? $entry->capacity_uph_snapshot
-                : $calc->capacityUph($machine, $wip->Qty);
+                : $calc->capacityUph($machine, $effectiveQty);
 
-            if ($entry && !$entry->finalized_at && $capacityUph !== $entry->capacity_uph_snapshot) {
-                $capacityUpdates[$entry->id] = $capacityUph;
+            $accuTime = $entry?->finalized_at
+                ? $entry->accu_time
+                : $calc->accuTime($doable, $capacityUph);
+
+            if ($entry && !$entry->finalized_at) {
+                $diff = [];
+                if ($capacityUph !== $entry->capacity_uph_snapshot) $diff['capacity_uph_snapshot'] = $capacityUph;
+                if ($accuTime !== $entry->accu_time)                 $diff['accu_time']             = $accuTime;
+
+                if (!empty($diff)) {
+                    $snapshotUpdates[$entry->id] = $diff;
+                }
             }
-
-            $accuTime = $entry->accu_time ?? $calc->accuTime($doable, $capacityUph);
 
             $ct = LoadingPlanFormulas::computeCT($wip->Date_Loaded, $wip->BE_Starttime);
             $osl = LoadingPlanFormulas::computeOSL($ct, $wip->Backend_Leadtime);
@@ -241,19 +267,6 @@ class LoadingPlanController extends Controller
             $isBakeHighlight = ($wip->Bake == "For Bake")
                 && in_array($wip->Station, $stationList)
                 && $wip->Bake_Count == 0;
-
-            Log::info('buildPlanRows: lot row calc', [
-                'Lot_Id' => $wip->Lot_Id,
-                'machine' => $machine,
-                'doable' => $doable,
-                'capacityUph' => $capacityUph,
-                'accuTime' => $accuTime,
-                'ct' => $ct,
-                'osl' => $osl,
-                'cycleTimeExceedResidual' => $cycleTimeExceedResidual,
-                'cycleTimeExceed' => $cycleTimeExceed,
-                'isBakeHighlight' => $isBakeHighlight,
-            ]);
 
             return [
                 'id'                  => $wip->customer_data_id,
@@ -268,7 +281,7 @@ class LoadingPlanController extends Controller
                 'Lot_Id'              => $wip->Lot_Id,
                 'status'              => $entry->status ?? null,
                 'Station'             => $wip->Station,
-                'Qty'                 => $wip->Qty,
+                'Qty'                 => $effectiveQty,
                 'Lot_Type'            => $wip->Lot_Type,
                 'Prod_Area'           => $wip->Prod_Area,
                 'Lot_Status'          => $wip->Lot_Status,
@@ -295,16 +308,16 @@ class LoadingPlanController extends Controller
                 'isBlock'             => false,
                 'cycleTimeExceedResidual' => $cycleTimeExceedResidual,
                 'cycleTimeExceed'     => $cycleTimeExceed,
-                'isBakeHighlight'     => $isBakeHighlight
+                'isBakeHighlight'     => $isBakeHighlight,
+                'splitInfo'           => LotSplitService::buildSplitMeta($wip->Lot_Id, $splitsByParent, $splitsByChild),
             ];
         });
 
-        if (!empty($capacityUpdates)) {
-            try {
-                $calc->bulkRefreshCapacitySnapshots($capacityUpdates);
-            } catch (\Throwable $e) {
-                Log::error('bulkRefreshCapacitySnapshots failed', ['error' => $e->getMessage(), 'ids' => array_keys($capacityUpdates)]);
-            }
+        Log::info('snapshotUpdates', ['snapshotUpdates' => $snapshotUpdates]);
+        if (!empty($snapshotUpdates)) {
+            app()->terminating(function () use ($snapshotUpdates) {
+                (new \App\Jobs\RefreshLoadingPlanSnapshots($snapshotUpdates))->handle();
+            });
         }
 
         Log::info('buildPlanRows: lotResults count', ['count' => $lotResults->count()]);
@@ -318,8 +331,17 @@ class LoadingPlanController extends Controller
         });
         Log::info('buildPlanRows: manualLotEntries', ['manualLotEntries' => $manualLotEntries->values()->toArray()]);
 
-        $manualLotResults = $manualLotEntries->map(function ($entry) {
+        $manualLotResults = $manualLotEntries->map(function ($entry) use ($calc, $splitsByParent, $splitsByChild, $lotEntries) {
             $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
+            $effectiveQty = $entry?->qty_override ?? ($entry->qty ?? 0);
+
+            $capacityUph = $entry?->finalized_at
+                ? $entry->capacity_uph_snapshot
+                : $calc->capacityUph($machine, $effectiveQty);
+
+            $doable = $entry->finalized_at
+                ? $entry->doable_snapshot
+                : $calc->doableForManualLot($entry->part_name, $effectiveQty)['value'];
 
             return [
                 'id'                  => null,
@@ -334,7 +356,7 @@ class LoadingPlanController extends Controller
                 'Lot_Id'              => $entry->lot_id,
                 'status'              => $entry->status ?? null,
                 'Station'             => null,
-                'Qty'                 => $entry->qty ?? 0,
+                'Qty'                 => $effectiveQty,
                 'Lot_Type'            => null,
                 'Prod_Area'           => null,
                 'Lot_Status'          => null,
@@ -348,16 +370,17 @@ class LoadingPlanController extends Controller
                 'Date_Loaded'         => null,
                 'BE_Starttime'        => null,
                 'Backend_Leadtime'    => null,
-                'Doable'              => null,
+                'Doable'              => $doable,
                 'doableStatus'        => null,
                 'doableRecipeSource'  => null,
-                'Capacity_UPH'        => $entry->finalized_at ? $entry->capacity_uph_snapshot : null,
+                'Capacity_UPH'        => $capacityUph,
                 'accuTime'            => $entry->accu_time,
                 'Remarks'             => $entry->remarks ?? null,
                 'tag'                 => $entry->tag ?? null,
                 'lockVersion'         => $entry->lock_version,
                 'isBlock'             => false,
                 'isManual'            => true,
+                'splitInfo'           => LotSplitService::buildSplitMeta($wip->Lot_Id, $splitsByParent, $splitsByChild),
             ];
         })->values();
         Log::info('buildPlanRows: manualLotResults count', ['count' => $manualLotResults->count()]);

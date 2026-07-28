@@ -2,6 +2,7 @@ import { fmt2dp } from "@/Lib/format.js";
 import { formatExpectedPT } from "@/Lib/time.js";
 import { createColumnHelper } from "@tanstack/react-table";
 import { DoableCell } from "./DoableCell";
+import { LotIdCell } from "./LotIdCell";
 import RemarksCell from "./RemarksCell";
 import { StatusBadge } from "./StatusBadge";
 
@@ -52,6 +53,12 @@ export const COLUMNS = [
     columnHelper.accessor("Lot_Id", {
         header: "Lot ID",
         size: 120,
+        cell: (info) => (
+            <LotIdCell
+                lotId={info.getValue()}
+                splitInfo={info.row.original.splitInfo}
+            />
+        ),
     }),
 
     columnHelper.accessor("status", {

@@ -2,6 +2,9 @@ import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { TAGS } from "@/Components/LoadingPlan/Tag";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FaTrash } from "react-icons/fa";
+import { GoRepoForked } from "react-icons/go";
+import SplitModal from "./SplitModal";
 import TransferModal from "./TransferModal";
 
 /** Display label for a machine bucket — Unassigned/Manual get real words
@@ -22,15 +25,21 @@ export default function SelectionToolbar({
     onClearTag,
     onStatusChange,
     onTransfer,
+    onSplitRow,
     onDelete,
     onClearSelection,
 }) {
+    console.log("🚀 ~ SelectionToolbar ~ allData:", allData);
+    console.log("🚀 ~ SelectionToolbar ~ selectedIds:", selectedIds);
+    console.log(
+        "🚀 ~ SelectionToolbar ~ selectedIds:",
+        allData.filter((r) => selectedIds.has(r._dndId)),
+    );
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
-    console.log("🚀 ~ SelectionToolbar ~ transferOpen:", transferOpen);
-    console.log("🚀 ~ SelectionToolbar ~ statusOpen:", statusOpen);
     const transferModalRef = useRef(null);
+    const splitModalRef = useRef(null);
     const selectedMachines = useMemo(() => {
         const s = new Set();
         allData.forEach((r) => {
@@ -46,6 +55,11 @@ export default function SelectionToolbar({
         }
     }, [count]);
 
+    const selectedRow = useMemo(
+        () => allData.find((r) => selectedIds.has(r._dndId)),
+        [allData, selectedIds],
+    );
+
     if (count === 0) {
         return null;
     }
@@ -60,14 +74,14 @@ export default function SelectionToolbar({
             )}
 
             <div className="flex-none flex items-center justify-center px-4 py-2 border-t border-base-300 bg-base-200">
-                <div className="relative flex items-center gap-2 px-4 py-2 bg-neutral text-neutral-content rounded-2xl shadow-lg border border-base-content/10 select-none">
+                <div className="relative flex items-center gap-2 px-4 py-2 bg-base-100 text-base-content rounded-2xl shadow-lg border border-base-content/10 select-none">
                     <span className="text-xs font-semibold bg-info text-info-content px-2 py-0.5 rounded-full mr-1">
                         {count} selected
                     </span>
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    <span className="text-[11px] text-neutral-content/50 ml-1">
+                    <span className="text-[11px] text-base-content/50 ml-1">
                         Mark:
                     </span>
                     {Object.entries(TAGS).map(([key, cfg]) => (
@@ -86,13 +100,36 @@ export default function SelectionToolbar({
                     ))}
                     <button
                         onClick={onClearTag}
-                        className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/60 hover:bg-base-content/20"
+                        className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/60 hover:bg-base-content/20"
                         disabled={disabled}
                     >
                         Clear tag
                     </button>
 
                     <div className="w-px h-5 bg-base-content/20" />
+
+                    <div
+                        className="tooltip"
+                        data-tip={
+                            count > 1
+                                ? "This action is for one selection only"
+                                : count === 0
+                                  ? "Select a lot to split"
+                                  : "Split lot"
+                        }
+                    >
+                        <button
+                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
+                                count > 1 ? "cursor-not-allowed opacity-50" : ""
+                            }`}
+                            disabled={count !== 1}
+                            onClick={() => {
+                                splitModalRef.current?.showModal();
+                            }}
+                        >
+                            <GoRepoForked size={16} /> split
+                        </button>
+                    </div>
 
                     {/* Bulk status */}
                     <div className="relative">
@@ -102,7 +139,7 @@ export default function SelectionToolbar({
                                 setStatusOpen((v) => !v);
                                 setTransferOpen(false);
                             }}
-                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1"
                             disabled={disabled}
                         >
                             Set status
@@ -155,7 +192,7 @@ export default function SelectionToolbar({
                                 setStatusOpen(false);
                             }}
                             disabled={disabled}
-                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-neutral-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1"
                         >
                             Transfer to…
                             <svg
@@ -173,13 +210,15 @@ export default function SelectionToolbar({
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    <button
-                        onClick={onDelete}
-                        className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
-                        disabled={disabled}
-                    >
-                        Delete
-                    </button>
+                    <div className="tooltip" data-tip="delete selected">
+                        <button
+                            onClick={onDelete}
+                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
+                            disabled={disabled}
+                        >
+                            <FaTrash />
+                        </button>
+                    </div>
 
                     <button
                         onClick={onClearSelection}
@@ -210,6 +249,32 @@ export default function SelectionToolbar({
                 selectedMachines={selectedMachines}
                 onClose={() => setTransferOpen(false)}
                 onSelect={onTransfer}
+            />
+
+            <SplitModal
+                ref={splitModalRef}
+                machines={machines}
+                machinePlatform={machinePlatform}
+                selectedMachines={selectedMachines}
+                parentLotId={selectedRow?.Lot_Id}
+                totalQty={selectedRow?.Qty}
+                onConfirm={({
+                    childLotId,
+                    childQty,
+                    parentQty,
+                    targetMachine,
+                }) =>
+                    onSplitRow({
+                        parentLotId: selectedRow?.Lot_Id,
+                        childLotId,
+                        childQty,
+                        parentQty,
+                        targetMachine,
+                        beforeEntryId: null,
+                        afterEntryId: null, // appends to end of target machine, matches handleAddRow's convention
+                    })
+                }
+                onClose={() => splitModalRef.current?.close()}
             />
         </div>
     );
