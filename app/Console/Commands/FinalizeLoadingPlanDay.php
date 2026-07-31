@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Log;
 
 class FinalizeLoadingPlanDay extends Command
 {
+    // TODO: VERY STALE
+
     protected $signature = 'loading-plan:finalize {date? : Y-m-d, defaults to the shift day that just closed}';
     protected $description = 'Freeze machine + capacity_uph + doable snapshots for a closed loading plan day';
 

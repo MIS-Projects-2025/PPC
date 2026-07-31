@@ -8,6 +8,8 @@ use App\Exceptions\StaleWriteException;
 use App\Exceptions\LoadingPlanDateFinalizedException;
 use App\Models\LoadingPlanEntry;
 use App\Models\QdnMachine;
+use App\Models\LotQuantity;
+use App\Models\CustomerDataWip;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
@@ -43,6 +45,10 @@ class LoadingPlanEntryService
 
             $entry->update(['sequence_order' => $newOrder, 'lock_version' => DB::raw('lock_version + 1')]);
 
+            if ($entryType === 'lot') {
+                app(LotScheduleCalculator::class)->recalculate($lotId, $date, machineOverride: $machineId);
+            }
+
             return $entry->fresh('machineModel');
         });
     }
@@ -77,6 +83,10 @@ class LoadingPlanEntryService
                 'sequence_order' => $newOrder,
                 'lock_version'   => DB::raw('lock_version + 1'),
             ]);
+
+            if ($entryType === 'lot') {
+                app(LotScheduleCalculator::class)->recalculate($lotId, $date, machineOverride: $targetMachine);
+            }
 
             return $entry->fresh('machineModel');
         });
@@ -189,16 +199,26 @@ class LoadingPlanEntryService
                     'sequence_order' => $nextSeq,
                     'lock_version'   => DB::raw('lock_version + 1'),
                 ]);
+
+                if ($entry->entry_type === 'lot') {
+                    app(LotScheduleCalculator::class)->recalculate($entry->lot_id, $date, machineOverride: $targetMachine);
+                }
+
                 $updated->push($entry->fresh('machineModel'));
                 $nextSeq += self::GAP_SEED;
             }
 
+            $wip = CustomerDataWip::query()->forDate($date)->whereIn('Lot_Id', $unplannedLotIds)->get()->keyBy('Lot_Id');
+
             foreach ($unplannedLotIds as $lotId) {
+                $wipItem = $wip->get($lotId);
+
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
                     'lot_id'         => $lotId,
                     'scheduled_date' => $date,
                     'machine_id'     => $targetMachineId,
+                    'package_name'   => $wipItem?->Package_Name ?? null,
                     'sequence_order' => $nextSeq,
                     'lock_version'   => 1,
                 ]);
@@ -265,18 +285,27 @@ class LoadingPlanEntryService
             $rows = $this->lockMachineRows([$machineId], $date);
             $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
 
-            return LoadingPlanEntry::create([
+            $entry = LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
                 'lot_id'         => $lotId,
-                'part_name'      => $fields['Part_Name'] ?? '',
                 'package_name'   => $fields['Package_Name'] ?? null,
-                'qty'            => $fields['Qty'] ?? 0,
                 'scheduled_date' => $date,
                 'machine_id'     => $machineId,
                 'sequence_order' => $newOrder,
                 'status'         => 'NONE',
                 'lock_version'   => 1,
             ]);
+
+            LotQuantity::create([
+                'lot_id'         => $lotId,
+                'scheduled_date' => $date,
+                'part_name'      => $fields['Part_Name'] ?? '',
+                'qty_base'       => $fields['Qty'] ?? 0,
+            ]);
+
+            app(LotScheduleCalculator::class)->recalculate($lotId, $date, machineOverride: $machine);
+
+            return $entry;
         });
     }
 
@@ -304,6 +333,8 @@ class LoadingPlanEntryService
 
     public function editLotField(string $lotId, string $date, array $fields, ?int $expectedLockVersion): LoadingPlanEntry
     {
+        $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
+
         $existing = LoadingPlanEntry::where('lot_id', $lotId)
             ->where('scheduled_date', $date)
             ->first();
@@ -318,7 +349,7 @@ class LoadingPlanEntryService
                 'machine_id'     => null,
                 'sequence_order' => null,
                 'lock_version'   => 1,
-                ...$fields,
+                ...$entryFields,
             ]);
         }
 
@@ -327,10 +358,22 @@ class LoadingPlanEntryService
         $affected = LoadingPlanEntry::where('id', $existing->id)
             ->where('lock_version', $expectedLockVersion)
             ->whereNull('finalized_at')
-            ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
+            ->update([...$entryFields, 'lock_version' => DB::raw('lock_version + 1')]);
 
         if ($affected === 0) {
             throw new StaleWriteException(LoadingPlanEntry::find($existing->id));
+        }
+
+        if (array_key_exists('qty', $fields) || array_key_exists('part_name', $fields)) {
+            $row = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date]);
+
+            if (array_key_exists('qty', $fields)) {
+                $row->qty_base = $fields['qty'];
+            }
+
+            $row->save();
+
+            app(LotScheduleCalculator::class)->recalculate($lotId, $date, $fields['part_name'] ?? null);
         }
 
         return LoadingPlanEntry::findOrFail($existing->id);
@@ -345,6 +388,9 @@ class LoadingPlanEntryService
             foreach ($updates as $u) {
                 $id = $u['id'] ?? null;
                 $fields = $u['fields'];
+                $lotId = $u['lot_id'];
+                $scheduledDate = $u['scheduled_date'];
+                $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
 
                 if ($id) {
                     $existing = LoadingPlanEntry::find($id);
@@ -353,19 +399,28 @@ class LoadingPlanEntryService
                     $affected = LoadingPlanEntry::where('id', $id)
                         ->where('lock_version', $u['lock_version'] ?? null)
                         ->whereNull('finalized_at')
-                        ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
+                        ->update([...$entryFields, 'lock_version' => DB::raw('lock_version + 1')]);
 
                     if ($affected === 0) {
                         $conflicts[] = LoadingPlanEntry::find($id);
                         continue;
                     }
 
+                    if (array_key_exists('qty', $fields) || array_key_exists('part_name', $fields)) {
+                        $row = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $scheduledDate]);
+
+                        if (array_key_exists('qty', $fields)) {
+                            $row->qty_base = $fields['qty'];
+                        }
+
+                        $row->save();
+
+                        app(LotScheduleCalculator::class)->recalculate($lotId, $scheduledDate, $fields['part_name'] ?? null);
+                    }
+
                     $entries[] = LoadingPlanEntry::find($id);
                     continue;
                 }
-
-                $lotId = $u['lot_id'];
-                $scheduledDate = $u['scheduled_date'];
 
                 $existing = LoadingPlanEntry::where('lot_id', $lotId)
                     ->where('scheduled_date', $scheduledDate)
@@ -385,8 +440,21 @@ class LoadingPlanEntryService
                         'machine_id'     => null,
                         'sequence_order' => null,
                         'lock_version'   => 1,
-                        ...$fields,
+                        ...$entryFields,
                     ]);
+
+                    if (array_key_exists('qty', $fields) || array_key_exists('part_name', $fields)) {
+                        $row = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $scheduledDate]);
+
+                        if (array_key_exists('qty', $fields)) {
+                            // brand-new row here — this is an origin value, not a correction
+                            $row->qty_base = $fields['qty'];
+                        }
+
+                        $row->save();
+
+                        app(LotScheduleCalculator::class)->recalculate($lotId, $scheduledDate, $fields['part_name'] ?? null);
+                    }
                 } catch (\Illuminate\Database\QueryException $e) {
                     $existing = LoadingPlanEntry::where('lot_id', $lotId)
                         ->where('scheduled_date', $scheduledDate)
@@ -398,7 +466,22 @@ class LoadingPlanEntryService
 
                     $this->assertNotFinalized($existing);
 
-                    $existing->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
+                    $existing->update([...$entryFields, 'lock_version' => DB::raw('lock_version + 1')]);
+
+                    if (array_key_exists('qty', $fields) || array_key_exists('part_name', $fields)) {
+                        $row = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $scheduledDate]);
+
+                        // this landed in the catch because a row already existed (race)
+                        // so this is a correction, not an origin — same rule as editLotField
+                        if (array_key_exists('qty', $fields)) {
+                            $row->qty_base = $fields['qty'];
+                        }
+
+                        $row->save();
+
+                        app(LotScheduleCalculator::class)->recalculate($lotId, $scheduledDate, $fields['part_name'] ?? null);
+                    }
+
                     $entries[] = $existing->fresh();
                 }
             }
@@ -455,6 +538,33 @@ class LoadingPlanEntryService
         }
 
         return QdnMachine::whereIn('machine_num', $machineNames)->pluck('id')->all();
+    }
+
+    /** Given a target sequence_order that may no longer be free, find the
+     *  real before/after entry ids on this machine that currently straddle
+     *  it — so a caller can re-insert as close as possible to where
+     *  something used to sit, landing exactly on it if it's still free. */
+    public function findNeighborsForTargetPosition(string $machine, string $date, float $targetOrder): array
+    {
+        $machineId = $this->resolveMachineId($machine);
+
+        $rows = LoadingPlanEntry::where('machine_id', $machineId)
+            ->where('scheduled_date', $date)
+            ->orderBy('sequence_order')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return [null, null];
+        }
+
+        // Exact spot still free — no neighbors needed, resolveSequenceOrder's
+        // before/after=null,null + a max() check would push to the end instead,
+        // so instead we bracket it directly: find the row immediately before
+        // and after the target value.
+        $before = $rows->filter(fn($r) => $r->sequence_order <= $targetOrder)->last();
+        $after = $rows->filter(fn($r) => $r->sequence_order > $targetOrder)->first();
+
+        return [$before?->id, $after?->id];
     }
 
     /** Lock and return every row across the given machine_ids for this date. */
@@ -602,6 +712,14 @@ class LoadingPlanEntryService
 
         $this->applyPositionsInBulk($positions, $machineId, $date);
 
+        // bulk SQL update above doesn't touch lot_quantities — refresh capacity
+        // for every lot entry that just changed machine.
+        foreach ($resolvedPlacements as $p) {
+            if ($p['entry_type'] === 'lot') {
+                app(LotScheduleCalculator::class)->recalculate($p['lot_id'], $date, machineOverride: $machine);
+            }
+        }
+
         return LoadingPlanEntry::whereIn('id', array_column($positions, 'id'))
             ->where('scheduled_date', $date)
             ->get();
@@ -658,6 +776,9 @@ class LoadingPlanEntryService
                 machine_id = ?,
                 lock_version = lock_version + 1
             WHERE scheduled_date = ? AND id IN ($placeholders)";
+
+        // get all ids of positions (loading plan entries)
+        // SET 
 
         DB::statement($sql, [...$bindings, $machineId, $date, ...$ids]);
     }
@@ -750,6 +871,7 @@ class LoadingPlanEntryService
                     'move' => $this->applyMove($op, $date),
                     'transfer' => $this->applyTransfer($op, $date),
                     'create_lot' => $this->applyCreateLot($op, $date),
+                    'unrevert_split' => $this->applyUnrevertSplit($op),
                     'create_block' => $this->addBlock(
                         $op['machine'],
                         $date,
@@ -762,12 +884,45 @@ class LoadingPlanEntryService
                     'update_field' => $this->applyUpdateField($op, $date),
                     'split' => $this->applySplit($op, $date),
                     'revert_split' => $this->applyRevertSplit($op),
+                    'merge' => $this->applyMerge($op, $date),
+                    'revert_merge' => $this->applyRevertMerge($op),
                     default => throw new \InvalidArgumentException("Unknown batch operation type: {$op['type']}"),
                 };
             }
 
             return $results;
         });
+    }
+
+    private function applyMerge(array $op, string $date)
+    {
+        $mergeService = app(\App\Services\LotMergeService::class);
+
+        $result = $mergeService->merge(
+            $op['lot_id_a'],
+            $op['lot_id_b'],
+            $date,
+            $op['created_by'] ?? null,
+        );
+
+        return [
+            'merge_id'      => $result['merge']->id,
+            'target'        => $result['target'],
+            'source'        => $result['source'],
+        ];
+    }
+
+    private function applyRevertMerge(array $op)
+    {
+        $mergeService = app(\App\Services\LotMergeService::class);
+
+        $result = $mergeService->revert($op['merge_id'], $op['reverted_by'] ?? null);
+
+        return [
+            'merge_id' => $op['merge_id'],
+            'target'   => $result['target'],
+            'source'   => $result['source'],
+        ];
     }
 
     private function applySplit(array $op, string $date)
@@ -795,8 +950,43 @@ class LoadingPlanEntryService
     private function applyRevertSplit(array $op)
     {
         $splitService = app(\App\Services\LotSplitService::class);
-        $splitService->revert($op['split_id'], $op['reverted_by'] ?? null);
-        return ['reverted_split_id' => $op['split_id']];
+        $result = $splitService->revert($op['split_id'], $op['reverted_by'] ?? null);
+
+        return [
+            'deleted'            => $result['deleted'],
+            'parent'             => $result['parent'],
+            'parentQty'          => $result['parentQty'],
+            'parentDoable'       => $result['parentDoable'],
+            'parentDoableStatus' => $result['parentDoableStatus'],
+            'parentCapacityUph'  => $result['parentCapacityUph'],
+            'parentSplitInfo'    => $result['parentSplitInfo'],
+        ];
+    }
+
+    private function applyUnrevertSplit(array $op)
+    {
+        $splitService = app(\App\Services\LotSplitService::class);
+        $result = $splitService->unrevert($op['split_id'], $op['unreverted_by'] ?? null);
+
+        return [
+            // primary "entry for this row" — matches the flat id/lock_version/
+            // sequence_order contract every other operation follows
+            'id'                 => $result['child']->id,
+            'lock_version'       => $result['child']->lock_version,
+            'sequence_order'     => $result['child']->sequence_order,
+            'splitInfo'          => $result['childSplitInfo'],
+            'doable'             => $result['childDoable'],
+            'doableStatus'       => $result['childDoableStatus'],
+            'capacityUph'        => $result['childCapacityUph'],
+
+            // parent side effect, carried alongside
+            'parent'             => $result['parent'],
+            'parentQty'          => $result['parentQty'],
+            'parentDoable'       => $result['parentDoable'],
+            'parentDoableStatus' => $result['parentDoableStatus'],
+            'parentCapacityUph'  => $result['parentCapacityUph'],
+            'parentSplitInfo'    => $result['parentSplitInfo'],
+        ];
     }
 
     private function applyMove(array $op, string $date)
@@ -856,5 +1046,53 @@ class LoadingPlanEntryService
         return $op['entry_type'] === 'block'
             ? $this->editField($op['entry_id'], $op['fields'], $op['lock_version'] ?? null)
             : $this->editLotField($op['lot_id'], $date, $op['fields'], $op['lock_version'] ?? null);
+    }
+
+    /**
+     * Attaches qty/doable/capacity + inherited WIP display fields (Lead_Count,
+     * Body_Size, CR3, etc.) onto a lot entry for API response purposes.
+     * Split children have no WIP row of their own, so these are pulled from
+     * the root lot's CustomerDataWip row rather than stored/duplicated.
+     *
+     * Mutates $entry in place and returns the LotQuantity row it looked up,
+     * so callers can reuse it if they need anything else off it.
+     */
+    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId, string $date): ?LotQuantity
+    {
+        $quantity = LotQuantity::where('lot_id', $entry->lot_id)
+            ->where('scheduled_date', $date)
+            ->first();
+
+        $entry->setAttribute('qty', $quantity?->effectiveQty());
+        $entry->setAttribute('doable', $quantity?->commit);
+        $entry->setAttribute('doableStatus', $quantity?->recipe_status);
+        $entry->setAttribute('doableRecipeSource', ($quantity && $quantity->recipe_source_id) ? [
+            'devicename'  => $quantity->part_name,
+            'recipe'      => $quantity->recipe_used,
+            'packageType' => DB::table('qdn_db.package_list')
+                ->where('id', $quantity->recipe_source_id)
+                ->value('package_type'),
+        ] : null);
+        $entry->setAttribute('capacityUph', $quantity?->capacity_uph_snapshot);
+
+        $rootWip = CustomerDataWip::query()->forDate($date)->where('Lot_Id', $rootLotId)->first();
+
+        if ($rootWip) {
+            $entry->setAttribute('Lead_Count', $rootWip->Lead_Count);
+            $entry->setAttribute('Station', $rootWip->Station);
+            $entry->setAttribute('Lot_Type', $rootWip->Lot_Type);
+            $entry->setAttribute('Prod_Area', $rootWip->Prod_Area);
+            $entry->setAttribute('Lot_Status', $rootWip->Lot_Status);
+            $entry->setAttribute('Focus_Group', $rootWip->Focus_Group);
+            $entry->setAttribute('Stage', $rootWip->Stage);
+            $entry->setAttribute('Lot_Entry_Time_Days', $rootWip->Lot_Entry_Time_Days);
+            $entry->setAttribute('CR3', $rootWip->CR3);
+            $entry->setAttribute('BE_OSL_Days', $rootWip->BE_OSL_Days);
+            $entry->setAttribute('Body_Size', $rootWip->Body_Size);
+            $entry->setAttribute('Ramp_Time', $rootWip->Ramp_Time);
+            $entry->setAttribute('Backend_Leadtime', $rootWip->Backend_Leadtime);
+        }
+
+        return $quantity;
     }
 }

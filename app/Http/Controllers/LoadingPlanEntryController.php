@@ -240,7 +240,7 @@ class LoadingPlanEntryController extends Controller
         $data = $request->validate([
             'operations'                   => 'required|array|min:1',
             'operations.*.fields'          => 'nullable|array',
-            'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field,split,revert_split',
+            'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field,split,revert_split,unrevert_split',
             'operations.*.entry_type'      => 'nullable|string',
             'operations.*.before_entry_id' => 'nullable|integer',
             'operations.*.after_entry_id'  => 'nullable|integer',

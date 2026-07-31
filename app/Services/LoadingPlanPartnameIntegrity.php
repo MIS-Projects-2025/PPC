@@ -4,7 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use App\Services\LotScheduleCalculator;
+use App\Models\LotQuantity;
 
 class LoadingPlanPartnameIntegrity
 {
@@ -75,12 +75,17 @@ class LoadingPlanPartnameIntegrity
         return $mismatches;
     }
 
+    /**
+     * $lotQuantities: keyed by lot_id (App\Models\LotQuantity rows) — same
+     * collection buildPlanRows() builds, scoped to the lots in play.
+     * $packageListById kept for signature symmetry with call sites that
+     * already pass it, though it's unused here now that recipeSource is
+     * read straight off LotQuantity.
+     */
     public function findRecipeIssues(
         Collection $wipRows,
         Collection $packageList,
-        LotScheduleCalculator $calc,
-        Collection $commitsByCustomerDataId,
-        Collection $packageListById,
+        Collection $lotQuantities,
     ): array {
         $issues = [];
 
@@ -97,10 +102,9 @@ class LoadingPlanPartnameIntegrity
                 continue;
             }
 
-            $doableResult = $calc->doable($wip->customer_data_id, $commitsByCustomerDataId, $packageListById);
-            $doableStatus = $doableResult['status'];
+            $quantity = $lotQuantities->get($wip->Lot_Id);
 
-            if ($doableStatus === 'unknown') {
+            if (!$quantity) {
                 $issues[] = [
                     'customer_data_id' => $wip->customer_data_id,
                     'Part_Name'        => $wip->Part_Name,
@@ -110,7 +114,7 @@ class LoadingPlanPartnameIntegrity
                 continue;
             }
 
-            if ($doableStatus === 'no_recipe') {
+            if ($quantity->recipe_status === 'no_recipe') {
                 $issues[] = [
                     'customer_data_id' => $wip->customer_data_id,
                     'Part_Name'        => $wip->Part_Name,
@@ -120,14 +124,18 @@ class LoadingPlanPartnameIntegrity
                 continue;
             }
 
-            if ($doableStatus === 'qty_below_recipe') {
+            if ($quantity->recipe_status === 'qty_below_recipe') {
                 $issues[] = [
                     'customer_data_id' => $wip->customer_data_id,
                     'Part_Name'        => $wip->Part_Name,
                     'Lot_Id'           => $wip->Lot_Id,
                     'reason'           => 'qty_below_recipe',
                     'Qty'              => $wip->Qty,
-                    'recipeSource'     => $doableResult['recipeSource'],
+                    'recipeSource'     => [
+                        'id'          => $quantity->recipe_source_id,
+                        'devicename'  => $quantity->part_name,
+                        'recipe'      => $quantity->recipe_used,
+                    ],
                 ];
             }
         }

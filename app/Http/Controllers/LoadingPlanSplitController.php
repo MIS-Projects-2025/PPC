@@ -55,14 +55,19 @@ class LoadingPlanSplitController extends Controller
     public function destroy(Request $request, int $splitId): JsonResponse
     {
         try {
-            $this->service->revert($splitId, $request->user()?->name);
+            $result = $this->service->revert($splitId, $request->user()?->name);
 
-            return response()->json(['id' => $splitId]);
+            return response()->json($result);
         } catch (LoadingPlanDateFinalizedException $e) {
             return response()->json([
                 'error'          => 'finalized',
                 'message'        => $e->getMessage(),
                 'scheduled_date' => $e->scheduledDate,
+            ], 422);
+        } catch (InvalidSplitException $e) {
+            return response()->json([
+                'error'   => 'invalid_split',
+                'message' => $e->getMessage(),
             ], 422);
         } catch (\Throwable $e) {
             Log::error('lot split revert failed', ['split_id' => $splitId, 'message' => $e->getMessage()]);

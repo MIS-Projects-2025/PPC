@@ -1,36 +1,87 @@
 import React, { useContext } from "react";
-import { GoRepoForked } from "react-icons/go";
+import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import { TableActionsContext } from "./RowContent";
 
-export function LotIdCell({ lotId, splitInfo }) {
-    const { handleShowHistory = noop } = useContext(TableActionsContext);
+export function LotIdCell({ lotId, splitInfo, mergeInfo }) {
+    const { handleShowHistory = noop, handleShowMergeHistory = noop } =
+        useContext(TableActionsContext);
 
-    if (!splitInfo) {
-        return <span>{lotId}</span>;
+    if (!splitInfo && !mergeInfo) {
+        return <span className="font-mono">{lotId}</span>;
     }
 
+    return (
+        <span className="flex items-center justify-between gap-1.5">
+            <div className="font-mono">{lotId}</div>
+
+            <div>
+                {splitInfo && (
+                    <SplitBadge
+                        lotId={lotId}
+                        splitInfo={splitInfo}
+                        handleShowHistory={handleShowHistory}
+                    />
+                )}
+                {mergeInfo && (
+                    <MergeBadge
+                        lotId={lotId}
+                        mergeInfo={mergeInfo}
+                        handleShowMergeHistory={handleShowMergeHistory}
+                    />
+                )}
+            </div>
+        </span>
+    );
+}
+
+function SplitBadge({ splitInfo, handleShowHistory }) {
     const { isParent, isChild, rootLotId } = splitInfo;
 
     return (
-        <span className="flex items-center gap-1.5">
-            <span>{lotId}</span>
-            <button
-                type="button"
-                onClick={(e) => {
-                    e.stopPropagation();
-                    handleShowHistory(rootLotId);
-                }}
-                title={
-                    isParent
-                        ? "This lot was split"
-                        : "This lot came from a split"
-                }
-                className={`inline-flex items-center justify-center shrink-0 rounded p-0.5 text-base-content/40 hover:text-primary hover:bg-base-content/10 transition-colors ${
-                    isChild ? "rotate-180" : ""
-                }`}
-            >
-                <GoRepoForked size={16} />
-            </button>
-        </span>
+        <button
+            type="button"
+            onClick={(e) => {
+                e.stopPropagation();
+                handleShowHistory(rootLotId, isParent, isChild);
+            }}
+            title={
+                isParent ? "This lot was split" : "This lot came from a split"
+            }
+            className="inline-flex items-center gap-0.5 shrink-0 rounded px-0.5 py-0.5 text-base-content/40 hover:text-primary hover:bg-base-content/10 transition-colors"
+        >
+            <GoRepoForked size={16} className={isChild ? "rotate-180" : ""} />
+            <span className="text-[10px] font-semibold leading-none">
+                {isParent ? "P" : "C"}
+            </span>
+        </button>
+    );
+}
+
+function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
+    const { isTarget, isSource, mergeId, mergedInto, mergedFrom } = mergeInfo;
+
+    return (
+        <button
+            type="button"
+            onClick={(e) => {
+                e.stopPropagation();
+                handleShowMergeHistory(
+                    mergedInto ?? mergedFrom,
+                    isTarget,
+                    isSource,
+                );
+            }}
+            title={
+                isTarget
+                    ? "This lot absorbed another lot's quantity"
+                    : `This lot was merged into ${mergedInto ?? "another lot"}`
+            }
+            className="inline-flex items-center gap-0.5 shrink-0 rounded px-0.5 py-0.5 text-base-content/40 hover:text-secondary hover:bg-base-content/10 transition-colors"
+        >
+            <GoGitMerge size={16} className={isSource ? "rotate-180" : ""} />
+            <span className="text-[10px] font-semibold leading-none">
+                {isTarget ? "T" : "S"}
+            </span>
+        </button>
     );
 }

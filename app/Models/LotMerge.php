@@ -4,17 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class LotSplit extends Model
+class LotMerge extends Model
 {
     protected $fillable = [
-        'parent_lot_id',
-        'child_lot_id',
-        'root_lot_id',
+        'target_lot_id',
+        'source_lot_id',
         'scheduled_date',
-        'child_qty',
-        'split_percentage',
-        'target_machine',
-        'sequence_order_at_split',
+        'transferred_qty',
         'created_by',
         'reverted_at',
         'reverted_by',

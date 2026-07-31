@@ -1,6 +1,5 @@
-import { forwardRef, useContext } from "react";
-import { GoRepoForked } from "react-icons/go";
-import { TableActionsContext } from "./RowContent";
+import { forwardRef } from "react";
+import { GoGitMerge } from "react-icons/go";
 
 function formatDate(dateStr) {
     if (!dateStr) return "—";
@@ -21,22 +20,19 @@ function formatDateTime(dateStr) {
     });
 }
 
-const SplitHistoryModal = forwardRef(function SplitHistoryModal(
-    { loading, history, onClose, onRevert, currentLotId, isParent, isChild },
+const MergeHistoryModal = forwardRef(function MergeHistoryModal(
+    { loading, history, onClose, onRevert, currentLotId, isTarget, isSource },
     ref,
 ) {
-    const { isUpdating = null } = useContext(TableActionsContext);
-
-    console.log("🚀 ~ SplitHistoryModal ~ history:", history);
     return (
-        <dialog ref={ref} id="split_history_modal" className="modal">
+        <dialog ref={ref} id="merge_history_modal" className="modal">
             <div className="modal-box bg-base-300 w-11/12 max-w-2xl max-h-[80vh] flex flex-col">
                 <h3 className="font-bold text-lg mb-1 flex items-center gap-2">
-                    <GoRepoForked size={16} className="text-base-content/50" />
-                    Split History
+                    <GoGitMerge size={16} className="text-base-content/50" />
+                    Merge History
                 </h3>
                 <p className="text-xs text-base-content/50 mb-4">
-                    Every split event for this lot's family, across all dates.
+                    Every merge event for this lot, across all dates.
                 </p>
 
                 <div className="overflow-y-auto flex-1">
@@ -48,88 +44,84 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
 
                     {!loading && (!history || history.length === 0) && (
                         <div className="text-center text-xs text-base-content/40 py-10">
-                            No split history found.
+                            No merge history found.
                         </div>
                     )}
 
                     {!loading && history && history.length > 0 && (
                         <div className="space-y-3">
-                            {history.map((split) => {
-                                const isCurrentParent =
+                            {history.map((merge) => {
+                                const isCurrentTarget =
                                     currentLotId &&
-                                    split.parentLotId === currentLotId;
-                                const isCurrentChild =
+                                    merge.targetLotId === currentLotId;
+                                const isCurrentSource =
                                     currentLotId &&
-                                    split.childLotId === currentLotId;
+                                    merge.sourceLotId === currentLotId;
 
                                 return (
                                     <div
-                                        key={split.splitId}
+                                        key={merge.mergeId}
                                         className={`rounded-xl border p-3 ${
-                                            split.revertedAt
+                                            merge.revertedAt
                                                 ? "border-base-content/10 bg-base-100/50 opacity-60"
                                                 : "border-base-content/10 bg-base-100"
                                         }`}
                                     >
                                         <div className="flex items-center justify-between mb-2">
                                             <div className="flex items-center gap-2 text-sm">
-                                                <span className="font-mono">
-                                                    {split.parentLotId}
+                                                <span className="font-mono text-secondary">
+                                                    {merge.sourceLotId}
                                                 </span>
-                                                <GoRepoForked
+                                                <GoGitMerge
                                                     size={12}
                                                     className="text-base-content/30"
                                                 />
-                                                <span className="font-mono text-primary">
-                                                    {split.childLotId}
+                                                <span className="font-mono">
+                                                    {merge.targetLotId}
                                                 </span>
                                             </div>
 
-                                            {split.revertedAt && (
+                                            {merge.revertedAt && (
                                                 <span className="badge badge-ghost badge-sm">
                                                     Reverted
                                                 </span>
                                             )}
 
-                                            {!split.revertedAt && (
+                                            {!merge.revertedAt && (
                                                 <button
                                                     type="button"
                                                     onClick={() => {
                                                         onRevert({
-                                                            splitId:
-                                                                split.splitId,
-                                                            revertedBy: null, //TODO: TODO: TODO:  // whoever is logged in / performing this action
-                                                            childLotId:
-                                                                split.childLotId,
+                                                            mergeId:
+                                                                merge.mergeId,
+                                                            revertedBy: null, //TODO: whoever is logged in / performing this action
+                                                            targetLotId:
+                                                                merge.targetLotId,
+                                                            sourceLotId:
+                                                                merge.sourceLotId,
                                                         });
                                                     }}
                                                     className="btn btn-xs btn-error btn-outline mt-2"
-                                                    disabled={isUpdating}
                                                 >
-                                                    {isUpdating ? (
-                                                        <>
-                                                            <span className="loading loading-spinner loading-xs"></span>
-                                                            Reverting...
-                                                        </>
-                                                    ) : (
-                                                        "Revert this split"
-                                                    )}
+                                                    Revert this merge
                                                 </button>
                                             )}
                                         </div>
 
-                                        {(isParent || isChild) && (
+                                        {(isTarget || isSource) && (
                                             <div className="mb-2">
-                                                {isParent && (
+                                                {isCurrentTarget && (
                                                     <span className="badge badge-sm badge-primary badge-outline font-mono">
-                                                        This lot is PARENT of{" "}
-                                                        {split.childLotId}
+                                                        This lot is TARGET,
+                                                        absorbed{" "}
+                                                        {merge.sourceLotId}
                                                     </span>
                                                 )}
-                                                {isChild && (
+                                                {isCurrentSource && (
                                                     <span className="badge badge-sm badge-secondary badge-outline font-mono">
-                                                        This lot is CHILD of{" "}
-                                                        {split.parentLotId}
+                                                        This lot is SOURCE,
+                                                        merged into{" "}
+                                                        {merge.targetLotId}
                                                     </span>
                                                 )}
                                             </div>
@@ -138,70 +130,43 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
                                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-base-content/60">
                                             <div>
                                                 <span className="text-base-content/40">
-                                                    Split on
+                                                    Merged on
                                                 </span>{" "}
                                                 {formatDate(
-                                                    split.scheduledDate,
+                                                    merge.scheduledDate,
                                                 )}
                                             </div>
                                             <div>
                                                 <span className="text-base-content/40">
-                                                    Ratio
+                                                    Qty transferred
                                                 </span>{" "}
-                                                {split.percent}% (
-                                                {split.childQty.toLocaleString()}{" "}
-                                                units)
+                                                {merge.transferredQty.toLocaleString()}{" "}
+                                                units
                                             </div>
                                             <div>
                                                 <span className="text-base-content/40">
                                                     By
                                                 </span>{" "}
-                                                {split.createdBy ?? "—"}
+                                                {merge.createdBy ?? "—"}
                                             </div>
                                             <div>
                                                 <span className="text-base-content/40">
                                                     At
                                                 </span>{" "}
                                                 {formatDateTime(
-                                                    split.createdAt,
+                                                    merge.createdAt,
                                                 )}
                                             </div>
                                         </div>
 
-                                        {split.childAppearances?.length > 0 && (
-                                            <div className="mt-2 pt-2 border-t border-base-content/10">
-                                                <div className="text-[10px] font-semibold text-base-content/40 uppercase tracking-wide mb-1">
-                                                    {split.childLotId} appeared
-                                                    on
-                                                </div>
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    {split.childAppearances.map(
-                                                        (a, i) => (
-                                                            <span
-                                                                key={i}
-                                                                className="badge badge-sm badge-ghost font-mono"
-                                                            >
-                                                                {formatDate(
-                                                                    a.date,
-                                                                )}{" "}
-                                                                ·{" "}
-                                                                {a.machine ??
-                                                                    "Unassigned"}
-                                                            </span>
-                                                        ),
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {split.revertedAt && (
+                                        {merge.revertedAt && (
                                             <div className="mt-2 pt-2 border-t border-base-content/10 text-xs text-base-content/40">
                                                 Reverted{" "}
                                                 {formatDateTime(
-                                                    split.revertedAt,
+                                                    merge.revertedAt,
                                                 )}
-                                                {split.revertedBy
-                                                    ? ` by ${split.revertedBy}`
+                                                {merge.revertedBy
+                                                    ? ` by ${merge.revertedBy}`
                                                     : ""}
                                             </div>
                                         )}
@@ -228,4 +193,4 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
     );
 });
 
-export default SplitHistoryModal;
+export default MergeHistoryModal;

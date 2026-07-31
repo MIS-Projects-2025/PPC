@@ -124,6 +124,7 @@ import {
     ScrollParentContext,
     TableInteractionContext,
 } from "@/Components/LoadingPlan/MachineSectionBody";
+import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import PackageTabs from "@/Components/LoadingPlan/PackageTabs";
 import {
     EDITABLE_COLUMNS,
@@ -237,7 +238,6 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
             p.Remarks !== r.Remarks ||
             p.tag !== r.tag ||
             p.accuTime !== r.accuTime ||
-            p.Doable !== r.Doable ||
             positionChanged
         );
     });
@@ -256,6 +256,19 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 
     // --- Undo of an add → delete it again ---
     removed.forEach((r) => {
+        if (r.splitInfo?.isChild && r.splitInfo?.splitId) {
+            operations.push({
+                type: "revert_split",
+                split_id: r.splitInfo.splitId,
+            });
+            opOwners.push({
+                dndId: r._dndId,
+                kind: "revert_split",
+                snapshot: r,
+            });
+            return;
+        }
+
         if (!r.entryId) return;
         operations.push({
             type: "delete",
@@ -267,6 +280,15 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 
     // --- Undo of a delete → recreate it ---
     added.forEach((r) => {
+        if (r.splitInfo?.isChild && r.splitInfo?.splitId) {
+            operations.push({
+                type: "unrevert_split",
+                split_id: r.splitInfo.splitId,
+            });
+            opOwners.push({ dndId: r._dndId, kind: "unrevert_split" });
+            return;
+        }
+
         const isBlock = isBlockRow(r);
         const { beforeEntryId, afterEntryId } = findMachineNeighbors(
             nextRows,
@@ -335,7 +357,6 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
         if (p.Remarks !== r.Remarks) fields.remarks = r.Remarks;
         if (p.tag !== r.tag) fields.tag = r.tag;
         if (p.accuTime !== r.accuTime) fields.accu_time = r.accuTime;
-        if (p.Doable !== r.Doable) fields.doable = r.Doable;
 
         if (Object.keys(fields).length > 0) {
             operations.push({
@@ -359,27 +380,68 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
         body: { operations, scheduled_date: date },
     })
         .then(({ results }) => {
-            // Sync every returned entry back into local state, matched by
-            // position in the array (same order operations were sent).
-            update(
-                (prev) =>
-                    prev.map((row) => {
+            update((prev) => {
+                let next = prev
+                    .map((row) => {
                         const ownerIdx = opOwners.findIndex(
                             (o) => o.dndId === row._dndId,
                         );
                         if (ownerIdx === -1) return row;
                         const result = results[ownerIdx];
-                        if (!result || result.deleted) return row;
+                        if (!result) return row;
+                        if (result.deleted) return null; // filtered below
+
                         return {
                             ...row,
-                            entryId: result.id,
-                            lockVersion: result.lock_version,
+                            entryId: result.id ?? row.entryId,
+                            lockVersion: result.lock_version ?? row.lockVersion,
                             sequenceOrder:
                                 result.sequence_order ?? row.sequenceOrder,
+                            splitInfo: result.splitInfo ?? row.splitInfo,
+                            Doable: result.doable ?? row.Doable,
+                            doableStatus:
+                                result.doableStatus ?? row.doableStatus,
+                            doableRecipeSource:
+                                result.doableRecipeSource ??
+                                row.doableRecipeSource,
+                            Capacity_UPH:
+                                result.capacityUph ?? row.Capacity_UPH,
                         };
-                    }),
-                true,
-            );
+                    })
+                    .filter(Boolean);
+
+                // revert_split ops also carry a parent update alongside the
+                // child's deletion — apply it in the same pass.
+                results.forEach((result) => {
+                    if (result?.parent) {
+                        next = next.map((r) =>
+                            r.Lot_Id === result.parent.lot_id
+                                ? {
+                                      ...r,
+                                      Qty: result.parentQty ?? r.Qty,
+                                      Doable: result.parentDoable ?? r.Doable,
+                                      doableStatus:
+                                          result.parentDoableStatus ??
+                                          r.doableStatus,
+                                      doableRecipeSource:
+                                          result.doableRecipeSource ??
+                                          r.doableStatus,
+                                      Capacity_UPH:
+                                          result.parentCapacityUph ??
+                                          r.Capacity_UPH,
+                                      lockVersion:
+                                          result.parent.lock_version ??
+                                          r.lockVersion,
+                                      splitInfo:
+                                          result.parentSplitInfo ?? r.splitInfo,
+                                  }
+                                : r,
+                        );
+                    }
+                });
+
+                return next;
+            }, true);
         })
         .catch((err) => {
             console.error("Undo/redo batch failed to persist:", err);
@@ -435,9 +497,16 @@ export default function LoadingPlanTable({
     const [isDirty, setIsDirty] = useState(false);
     const [inFlightCount, setInFlightCount] = useState(0);
 
-    const [historyData, setHistoryData] = useState(null);
+    const [splitHistoryData, setSplitHistoryData] = useState(null);
+    const [mergeHistoryData, setMergeHistoryData] = useState(null);
+    const [currentLotRole, setCurrentLotRole] = useState({
+        isParent: false,
+        isChild: false,
+    });
+
     const [historyLoading, setHistoryLoading] = useState(false);
     const splitHistoryModalRef = useRef(null);
+    const mergeHistoryModalRef = useRef(null);
 
     const isUpdating = inFlightCount > 0;
 
@@ -802,6 +871,7 @@ export default function LoadingPlanTable({
             );
             return next;
         });
+
         setIsDirty(true);
         clearSelection();
 
@@ -1458,25 +1528,60 @@ export default function LoadingPlanTable({
         [data, isUpdating],
     );
 
-    const handleShowHistory = useCallback(async (rootLotId) => {
-        splitHistoryModalRef.current?.showModal();
-        setHistoryLoading(true);
-        setHistoryData(null);
+    const handleShowSplitHistory = useCallback(
+        async (rootLotId, isParent, isChild) => {
+            splitHistoryModalRef.current?.showModal();
+            setHistoryLoading(true);
+            setSplitHistoryData(null);
+            setCurrentLotRole({ isParent, isChild });
 
-        try {
-            const res = await fetch(
-                route("loading-plan.splits.history", rootLotId),
+            try {
+                const res = await fetch(
+                    route("loading-plan.splits.history", rootLotId),
+                );
+                const data = await res.json();
+                setSplitHistoryData(data);
+            } catch (err) {
+                console.error("Failed to load split history:", err);
+                toast?.error?.(
+                    "Couldn't load split history — please try again.",
+                );
+                splitHistoryModalRef.current?.close();
+            } finally {
+                setHistoryLoading(false);
+            }
+        },
+        [],
+    );
+
+    const handleShowMergeHistory = useCallback(
+        async (targetLotId, isParent, isChild) => {
+            console.log(
+                "fjalksdjfklsajflk;djlfksjk;ldsjlkdjf;lsdjflsdjfljfdsj",
             );
-            const data = await res.json();
-            setHistoryData(data);
-        } catch (err) {
-            console.error("Failed to load split history:", err);
-            toast?.error?.("Couldn't load split history — please try again.");
-            splitHistoryModalRef.current?.close();
-        } finally {
-            setHistoryLoading(false);
-        }
-    }, []);
+            mergeHistoryModalRef.current?.showModal();
+            setHistoryLoading(true);
+            setMergeHistoryData(null);
+            setCurrentLotRole({ isParent, isChild });
+
+            try {
+                const res = await fetch(
+                    route("loading-plan.merges.history", { targetLotId }),
+                );
+                const data = await res.json();
+                setMergeHistoryData(data);
+            } catch (err) {
+                console.error("Failed to load merge history:", err);
+                toast?.error?.(
+                    "Couldn't load merge history — please try again.",
+                );
+                mergeHistoryModalRef.current?.close();
+            } finally {
+                setHistoryLoading(false);
+            }
+        },
+        [],
+    );
 
     const handleCellCommit = useCallback(
         (rawValue) => {
@@ -1624,6 +1729,274 @@ export default function LoadingPlanTable({
     // ── Add row / block ──────────────────────────────────────────────────────
     const [justAddedMachine, setJustAddedMachine] = useState(null);
 
+    const handleMergeRevert = useCallback(
+        ({ targetLotId, sourceLotId }) => {
+            const targetRow = data.find((r) => r.Lot_Id === targetLotId);
+
+            if (!targetRow) {
+                toast?.error?.(
+                    `Couldn't find target lot ${targetLotId} to revert — please refresh.`,
+                );
+                return;
+            }
+
+            const sourceRow = data.find((r) => r.Lot_Id === sourceLotId);
+
+            if (!sourceRow) {
+                toast?.error?.(
+                    `Couldn't find source lot ${sourceLotId} to revert — please refresh.`,
+                );
+                return;
+            }
+
+            const mergeId = targetRow.mergeInfo?.mergeId;
+
+            if (!mergeId) {
+                toast?.error?.(
+                    `Couldn't find merge record for lot ${targetLotId} — please refresh.`,
+                );
+                return;
+            }
+
+            const affectedMachineOfTargetRow = targetRow.machine;
+            const affectedMachineOfSourceRow = sourceRow.machine;
+
+            withUpdating(
+                mutate(route("loading-plan.merges.destroy", mergeId), {
+                    method: "delete",
+                    body: { reverted_by: null }, // TODO: revert by emp id
+                }),
+            )
+                .then((result) => {
+                    const { target, source } = result;
+
+                    update((prev) => {
+                        const next = prev.map((row) => {
+                            if (row.Lot_Id === target.lot_id) {
+                                return {
+                                    ...row,
+                                    Qty: target.qty,
+                                    lockVersion: target.lock_version,
+                                    mergeInfo: null,
+                                    Doable: target.doable,
+                                    doableStatus: target.doableStatus,
+                                    doableRecipeSource:
+                                        target.doableRecipeSource,
+                                    Capacity_UPH: target.capacityUph,
+                                };
+                            }
+                            if (row.Lot_Id === source.lot_id) {
+                                return {
+                                    ...row,
+                                    Qty: source.qty,
+                                    lockVersion: source.lock_version,
+                                    mergeInfo: null,
+                                    Doable: source.doable,
+                                    doableStatus: source.doableStatus,
+                                    doableRecipeSource:
+                                        source.doableRecipeSource,
+                                    Capacity_UPH: source.capacityUph,
+                                };
+                            }
+                            return row;
+                        });
+
+                        if (affectedMachineOfTargetRow) {
+                            recomputeMachine(
+                                next,
+                                affectedMachineOfTargetRow,
+                                baseTimes,
+                            );
+                        }
+                        if (affectedMachineOfSourceRow) {
+                            recomputeMachine(
+                                next,
+                                affectedMachineOfSourceRow,
+                                baseTimes,
+                            );
+                        }
+
+                        return next;
+                    });
+
+                    setIsDirty(true);
+                })
+                .catch((err) => {
+                    console.error("Failed to revert merge:", err);
+                    toast?.error?.(
+                        err?.message ??
+                            "Couldn't revert the merge — please try again.",
+                    );
+                })
+                .finally(() => {
+                    mergeHistoryModalRef.current?.close();
+                });
+        },
+        [data, baseTimes, update, date, recomputeMachine],
+    );
+
+    const handleSplitRevert = useCallback(
+        ({ splitId, revertedBy, childLotId }) => {
+            const childRow = data.find((r) => r.Lot_Id === childLotId);
+            console.log("🚀 ~ LoadingPlanTable ~ childLotId:", childLotId);
+            console.log("🚀 ~ LoadingPlanTable ~ data:", data);
+            if (!childRow) {
+                toast?.error?.("Couldn't find the split lot — please refresh.");
+                return;
+            }
+
+            const affectedMachine = childRow.machine;
+
+            withUpdating(
+                mutate(route("loading-plan.splits.destroy", splitId), {
+                    method: "delete",
+                    body: { reverted_by: revertedBy },
+                }),
+            )
+                .then((result) => {
+                    update((prev) => {
+                        const next = prev
+                            .filter((r) => r.Lot_Id !== result.deleted)
+                            .map((r) =>
+                                result.parent &&
+                                r.Lot_Id === result.parent.lot_id
+                                    ? {
+                                          ...r,
+                                          Qty: result.parentQty ?? r.Qty,
+                                          Doable:
+                                              result.parentDoable ?? r.Doable,
+                                          doableStatus:
+                                              result.parentDoableStatus ??
+                                              r.doableStatus,
+                                          Capacity_UPH:
+                                              result.parentCapacityUph ??
+                                              r.Capacity_UPH,
+                                          lockVersion:
+                                              result.parent.lock_version,
+                                          splitInfo: result.parentSplitInfo,
+                                      }
+                                    : r,
+                            );
+
+                        if (affectedMachine) {
+                            recomputeMachine(next, affectedMachine, baseTimes);
+                        }
+
+                        return next;
+                    });
+
+                    setIsDirty(true);
+                })
+                .catch((err) => {
+                    console.error("Failed to revert split:", err);
+                    toast?.error?.(
+                        "Couldn't revert the split — please try again.",
+                    );
+                })
+                .finally(() => {
+                    splitHistoryModalRef.current?.close();
+                });
+        },
+        [data, baseTimes, update, date],
+    );
+
+    const handleMergeRows = useCallback(
+        ({ targetLotId, sourceLotId }) => {
+            const targetRow = data.find((r) => r.Lot_Id === targetLotId);
+
+            if (!targetRow) {
+                toast?.error?.(
+                    `Couldn't find target lot ${targetLotId} to merge — please refresh.`,
+                );
+                return;
+            }
+
+            const sourceRow = data.find((r) => r.Lot_Id === sourceLotId);
+
+            if (!sourceRow) {
+                toast?.error?.(
+                    `Couldn't find source lot ${sourceLotId} to merge — please refresh.`,
+                );
+                return;
+            }
+
+            const affectedMachineOfTargetRow = targetRow.machine;
+            const affectedMachineOfSourceRow = sourceRow.machine;
+
+            withUpdating(
+                mutate(route("loading-plan.merges.store"), {
+                    body: {
+                        lot_id_a: targetRow.Lot_Id,
+                        lot_id_b: sourceRow.Lot_Id,
+                        scheduled_date: date,
+                    },
+                }),
+            )
+                .then((result) => {
+                    const { target, source } = result;
+
+                    update((prev) => {
+                        const next = prev.map((row) => {
+                            if (row.Lot_Id === target.lot_id) {
+                                return {
+                                    ...row,
+                                    Qty: target.qty,
+                                    lockVersion: target.lock_version,
+                                    mergeInfo: target.mergeInfo,
+                                    Doable: target.doable,
+                                    doableStatus: target.doableStatus,
+                                    doableRecipeSource:
+                                        target.doableRecipeSource,
+                                    Capacity_UPH: target.capacityUph,
+                                };
+                            }
+                            if (row.Lot_Id === source.lot_id) {
+                                return {
+                                    ...row,
+                                    Qty: source.qty,
+                                    lockVersion: source.lock_version,
+                                    mergeInfo: source.mergeInfo,
+                                    Doable: source.doable,
+                                    doableStatus: source.doableStatus,
+                                    doableRecipeSource:
+                                        source.doableRecipeSource,
+                                    Capacity_UPH: source.capacityUph,
+                                };
+                            }
+                            return row;
+                        });
+
+                        if (affectedMachineOfTargetRow) {
+                            recomputeMachine(
+                                next,
+                                affectedMachineOfTargetRow,
+                                baseTimes,
+                            );
+                        }
+                        if (affectedMachineOfSourceRow) {
+                            recomputeMachine(
+                                next,
+                                affectedMachineOfSourceRow,
+                                baseTimes,
+                            );
+                        }
+
+                        return next;
+                    });
+
+                    setIsDirty(true);
+                })
+                .catch((err) => {
+                    console.error("Failed to merge lots:", err);
+                    toast?.error?.(
+                        err?.message ??
+                            "Couldn't merge the lots — please try again.",
+                    );
+                });
+        },
+        [data, baseTimes, update, date, recomputeMachine],
+    );
+
     const handleSplitRow = useCallback(
         ({
             parentLotId,
@@ -1667,6 +2040,12 @@ export default function LoadingPlanTable({
                                       ...row,
                                       Qty: parentQty,
                                       lockVersion: parent.lock_version,
+                                      splitInfo: parent.splitInfo,
+                                      Doable: parent.doable,
+                                      doableStatus: parent.doableStatus,
+                                      doableRecipeSource:
+                                          parent.doableRecipeSource,
+                                      Capacity_UPH: parent.capacityUph,
                                   }
                                 : row,
                         );
@@ -1675,28 +2054,32 @@ export default function LoadingPlanTable({
                             machine: targetMachine,
                             item: 0,
                             Part_Name: parentRow.Part_Name,
-                            Lead_Count: null,
+                            Lead_Count: child.Lead_Count,
                             Package_Name: parentRow.Package_Name,
                             Lot_Id: child.lot_id,
                             status: child.status ?? parentRow.status ?? "NONE",
-                            Station: "",
+                            Station: child.Station,
                             Qty: childQty,
-                            Doable: 0,
-                            accuTime: 0,
-                            Lot_Type: "",
-                            Lot_Status: "",
-                            Focus_Group: "",
-                            Stage: "",
-                            Lot_Entry_Time_Days: null,
-                            CR3: null,
-                            BE_OSL_Days: null,
-                            Body_Size: "",
-                            Ramp_Time: null,
+                            Doable: child.doable,
+                            doableStatus: child.doableStatus,
+                            doableRecipeSource: child.doableRecipeSource,
+                            Capacity_UPH: child.capacityUph,
+                            accuTime: child.accu_time,
+                            Lot_Type: child.Lot_Type,
+                            Lot_Status: child.Lot_Status,
+                            Focus_Group: child.Focus_Group,
+                            Stage: child.Stage,
+                            Lot_Entry_Time_Days: child.Lot_Entry_Time_Days,
+                            CR3: child.CR3,
+                            BE_OSL_Days: child.BE_OSL_Days,
+                            Body_Size: child.Body_Size,
+                            Ramp_Time: child.Ramp_Time,
                             Remarks: "",
                             Date_Loaded: null,
                             BE_Starttime: null,
                             Backend_Leadtime: null,
                             tag: null,
+                            splitInfo: child.splitInfo,
                             entryId: child.id,
                             sequenceOrder: child.sequence_order,
                             lockVersion: child.lock_version,
@@ -1725,7 +2108,7 @@ export default function LoadingPlanTable({
                     );
                 });
         },
-        [data, baseTimes, update, addSeenPair, date],
+        [data, baseTimes, update, addSeenPair, date, recomputeMachine],
     );
 
     const handleAddRow = useCallback(
@@ -1806,7 +2189,7 @@ export default function LoadingPlanTable({
                     );
                 });
         },
-        [activePackage, baseTimes, update, addSeenPair, date],
+        [activePackage, baseTimes, update, addSeenPair, date, recomputeMachine],
     );
 
     const [blockModalMachine, setBlockModalMachine] = useState(null);
@@ -1879,7 +2262,7 @@ export default function LoadingPlanTable({
                     );
                 });
         },
-        [baseTimes, update, date],
+        [baseTimes, update, date, recomputeMachine],
     );
 
     const handleConfirmBlock = useCallback(() => {
@@ -1915,7 +2298,8 @@ export default function LoadingPlanTable({
     const tableActionsValue = useMemo(
         () => ({
             handleStatusClick,
-            handleShowHistory,
+            handleShowHistory: handleShowSplitHistory,
+            handleShowMergeHistory,
             handleCellClick,
             selectedIds,
             handleRowSelect,
@@ -1924,7 +2308,8 @@ export default function LoadingPlanTable({
         }),
         [
             handleStatusClick,
-            handleShowHistory,
+            handleShowSplitHistory,
+            handleShowMergeHistory,
             handleCellClick,
             selectedIds,
             handleRowSelect,
@@ -1992,12 +2377,6 @@ export default function LoadingPlanTable({
                 recipeMismatches={recipeMismatches}
             />
 
-            <SplitHistoryModal
-                ref={splitHistoryModalRef}
-                loading={historyLoading}
-                history={historyData}
-                onClose={() => splitHistoryModalRef.current?.close()}
-            />
             {/* <Deferred
                 data="partnameMismatches"
                 fallback={<p>Loading mismatches…</p>}
@@ -2019,6 +2398,26 @@ export default function LoadingPlanTable({
                         paste here
                     </div> */}
             <TableActionsContext.Provider value={tableActionsValue}>
+                <SplitHistoryModal
+                    ref={splitHistoryModalRef}
+                    loading={historyLoading}
+                    history={splitHistoryData}
+                    onRevert={handleSplitRevert}
+                    onClose={() => splitHistoryModalRef.current?.close()}
+                    isParent={currentLotRole.isParent}
+                    isChild={currentLotRole.isChild}
+                />
+
+                <MergeHistoryModal
+                    ref={mergeHistoryModalRef}
+                    loading={historyLoading}
+                    history={mergeHistoryData}
+                    onRevert={handleMergeRevert}
+                    onClose={() => mergeHistoryModalRef.current?.close()}
+                    isTarget={currentLotRole.isParent}
+                    isSource={currentLotRole.isChild}
+                />
+
                 <div className="absolute inset-0 overflow-hidden flex flex-col">
                     {sorting.length > 0 && (
                         <div className="text-xs text-warning px-4 pb-2">
@@ -2363,6 +2762,7 @@ export default function LoadingPlanTable({
                         onStatusChange={handleBulkStatus}
                         onTransfer={handleBulkTransfer}
                         onSplitRow={handleSplitRow}
+                        onMergeRows={handleMergeRows}
                         onDelete={handleBulkDelete}
                         onClearSelection={clearSelection}
                     />

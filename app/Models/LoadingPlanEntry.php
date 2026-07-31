@@ -12,11 +12,7 @@ class LoadingPlanEntry extends Model
     protected $fillable = [
         'entry_type',
         'lot_id',
-        'part_name',
         'package_name',
-        'qty',
-        'qty_base',
-        'qty_override',
         'scheduled_date',
         'machine_id',
         'sequence_order',
@@ -27,7 +23,6 @@ class LoadingPlanEntry extends Model
         'accu_time',
         'lock_version',
         'machine_snapshot',
-        'capacity_uph_snapshot',
         'doable_snapshot',
         'finalized_at',
     ];
@@ -44,6 +39,13 @@ class LoadingPlanEntry extends Model
     public function machineModel()
     {
         return $this->belongsTo(QdnMachine::class, 'machine_id');
+    }
+
+    public function getQuantityRow(): ?LotQuantity
+    {
+        return LotQuantity::where('lot_id', $this->lot_id)
+            ->where('scheduled_date', $this->scheduled_date)
+            ->first();
     }
 
     /**
@@ -64,6 +66,36 @@ class LoadingPlanEntry extends Model
                 );
             }
         });
+    }
+
+    /**
+     * Resolve the root WIP lot_id this entry ultimately traces back to.
+     * Plain WIP-backed lots are their own root. Split children/parents
+     * resolve via lot_splits.root_lot_id.
+     */
+    public function resolveRootLotId(): string
+    {
+        $asChild = LotSplit::active()->where('child_lot_id', $this->lot_id)->value('root_lot_id');
+
+        return $asChild ?? $this->lot_id;
+    }
+
+    /**
+     * Display-only fields that describe the physical lot itself (not the
+     * qty fragment) — Lead_Count, Body_Size, CR3, etc. Split children have
+     * no WIP row of their own, so these are inherited from the root lot's
+     * CustomerDataWip row rather than duplicated/stored anywhere.
+     * Returns null if there's no underlying WIP row at all (e.g. a fully
+     * manual lot with no WIP origin).
+     */
+    public function inheritedWipData(): ?CustomerDataWip
+    {
+        $rootLotId = $this->resolveRootLotId();
+
+        return CustomerDataWip::query()
+            ->forDate($this->scheduled_date->toDateString())
+            ->where('Lot_Id', $rootLotId)
+            ->first();
     }
 
     public function refreshCapacityUphSnapshot(int $qty): void

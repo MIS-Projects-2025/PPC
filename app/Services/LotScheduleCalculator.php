@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\MachinePlatformCapacityBand;
 use App\Models\QdnMachine;
+use App\Models\LotQuantity;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use App\Models\LoadingPlanEntry;
@@ -17,6 +18,8 @@ class LotScheduleCalculator
 
     public function __construct()
     {
+        \Log::info('LotScheduleCalculator constructed');
+
         $this->machinePlatforms = QdnMachine::pluck('machine_platform', 'machine_num');
 
         $this->capacityBands = MachinePlatformCapacityBand::orderByDesc('qty_min')
@@ -29,80 +32,47 @@ class LotScheduleCalculator
             ->keyBy('devicename');
     }
 
-    /**
-     * @param  int  $customerDataId
-     * @param  Collection  $commitsByCustomerDataId  keyed by customer_data_id (ppc.lot_commits rows)
-     * @param  Collection  $packageListById          keyed by id (qdn_db.package_list rows)
-     */
-    public function doable(
-        int $customerDataId,
-        Collection $commitsByCustomerDataId,
-        Collection $packageListById
-    ): array {
-        $commit = $commitsByCustomerDataId->get($customerDataId);
+    public function recalculate(string $lotId, string $scheduledDate, ?string $newPartName = null, ?string $machineOverride = null): void
+    {
+        $row = LotQuantity::where('lot_id', $lotId)
+            ->where('scheduled_date', $scheduledDate)
+            ->first();
 
-        if (!$commit) {
-            return [
-                'value' => null,
-                'status' => 'unknown',
-                'recipeSource' => null,
-            ];
+        if (!$row) return;
+
+        if ($newPartName !== null) {
+            $row->part_name = $newPartName;
         }
 
-        $status = match (true) {
-            $commit->recipe_status === 'no_recipe' => 'no_recipe',
-            $commit->commit === 0 => 'qty_below_recipe',
-            default => 'ok',
+        $effectiveQty = $row->effectiveQty();
+        $packageListRow = $this->packageListByDeviceName->get($row->part_name);
+
+        $recipe = $packageListRow?->recipe;
+        $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
+
+        $row->recipe_used = $recipe;
+        $row->recipe_source_id = $packageListRow?->id;
+        $row->commit = $commit;
+        $row->recipe_status = match (true) {
+            $recipe && $recipe > 0 && $commit === 0 => 'qty_below_recipe',
+            $recipe && $recipe > 0                  => 'ok',
+            default                                  => 'no_recipe',
         };
 
-        $recipeSource = null;
-        if ($commit->recipe_source_id) {
-            $packageListRow = $packageListById->get($commit->recipe_source_id);
+        $machine = $machineOverride ?? LoadingPlanEntry::with('machineModel')
+            ->where('lot_id', $lotId)
+            ->where('scheduled_date', $scheduledDate)
+            ->first()?->getMachineName();
 
-            if ($packageListRow) {
-                $recipeSource = [
-                    'id' => $packageListRow->id,
-                    'devicename' => $packageListRow->devicename,
-                    'recipe' => $commit->recipe_used,
-                    'packageType' => $packageListRow->package_type,
-                ];
-            }
-        }
+        $capacityUph = $this->capacityUph($machine, $effectiveQty);
+        $row->capacity_uph_snapshot = $capacityUph;
 
-        return [
-            'value' => $commit->commit,
-            'status' => $status,
-            'recipeSource' => $recipeSource,
-        ];
-    }
+        $row->save();
 
-    /** Manual lots / split children: no customer_data_id, no trigger, no
-     *  lot_commits row — replicate the trigger's own logic here instead,
-     *  keyed by part_name (devicename) since that's all these lots have. */
-    public function doableForManualLot(?string $partName, int $qty): array
-    {
-        if (!$partName) {
-            return ['value' => null, 'status' => 'unknown', 'recipeSource' => null];
-        }
-
-        $packageListRow = $this->packageListByDeviceName->get($partName);
-
-        if (!$packageListRow || !$packageListRow->recipe || $packageListRow->recipe <= 0) {
-            return ['value' => null, 'status' => 'no_recipe', 'recipeSource' => null];
-        }
-
-        $commit = (int) floor($qty / $packageListRow->recipe) * $packageListRow->recipe;
-
-        return [
-            'value' => $commit,
-            'status' => $commit === 0 ? 'qty_below_recipe' : 'ok',
-            'recipeSource' => [
-                'id' => $packageListRow->id,
-                'devicename' => $packageListRow->devicename,
-                'recipe' => $packageListRow->recipe,
-                'packageType' => $packageListRow->package_type,
-            ],
-        ];
+        // accu_time stays on loading_plan_entries — lot rows only, blocks untouched
+        LoadingPlanEntry::where('lot_id', $lotId)
+            ->where('scheduled_date', $scheduledDate)
+            ->update(['accu_time' => $this->accuTime($commit, $capacityUph)]);
     }
 
     public function capacityUph(?string $machine, int $qty): ?int
@@ -125,9 +95,9 @@ class LotScheduleCalculator
         return $band?->capacity_uph;
     }
 
-    public function accuTime(?int $doable, ?int $capacityUph): ?int
+    public function accuTime(?int $commit, ?int $capacityUph): ?int
     {
-        return ($doable && $capacityUph) ? ceil(($doable / $capacityUph) * 60) : null;
+        return ($commit && $capacityUph) ? (int) ceil(($commit / $capacityUph) * 60) : null;
     }
 
     public function bulkRefreshSnapshots(array $updates): void

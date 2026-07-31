@@ -24,6 +24,7 @@ use App\Http\Controllers\{
     PickupController,
     PlPackageMasterController,
     LoadingPlanSplitController,
+    LoadingPlanMergeController,
     PlRuleController,
     WipController,
     LotController,
@@ -56,6 +57,12 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
         Route::post('/', [LoadingPlanSplitController::class, 'store'])->name('store');
         Route::delete('{splitId}', [LoadingPlanSplitController::class, 'destroy'])->name('destroy');
         Route::get('{rootLotId}/history', [LoadingPlanSplitController::class, 'history'])->name('history');
+    });
+
+    Route::prefix('merges')->name('merges.')->group(function () {
+        Route::post('/', [LoadingPlanMergeController::class, 'store'])->name('store');
+        Route::delete('{mergeId}', [LoadingPlanMergeController::class, 'destroy'])->name('destroy');
+        Route::get('{targetLotId}/history', [LoadingPlanMergeController::class, 'history'])->name('history');
     });
 });
 

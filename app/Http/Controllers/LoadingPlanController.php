@@ -7,11 +7,13 @@ use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
+use App\Models\LotQuantity;
 use App\Models\PpcPackageMaster; // maps to ppc_package_master
 use App\Services\LotScheduleCalculator;
 use App\Services\LoadingPlanPackageCoverage;
 use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
+use App\Services\LotMergeService;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
@@ -27,14 +29,11 @@ class LoadingPlanController extends Controller
         $date = $request->get('date', ShiftDay::current());
         $selectedLocation = $request->get('location', 'PL1');
 
-        Log::info('index: date', ['date' => $date]);
-        Log::info('index: selectedLocation', ['selectedLocation' => $selectedLocation]);
-
         $packageLineMap = PpcPackageMaster::query()
             ->where('is_telford', 1)
             ->where('is_active', 1)
-            ->pluck('default_pl', 'package');
-        Log::info('index: packageLineMap', ['packageLineMap' => $packageLineMap->toArray()]);
+            ->get()
+            ->mapWithKeys(fn($row) => [trim($row->package) => $row->default_pl]);
 
         $activeMachines = QdnMachine::active()
             ->where('location', $selectedLocation)
@@ -51,22 +50,11 @@ class LoadingPlanController extends Controller
                 'location' => $machine->location,
             ])
             ->values();
-        Log::info('index: activeMachines', ['activeMachines' => $activeMachines->toArray()]);
 
         $wipRows = $this->getWipRows($date, $selectedLocation);
         $calc = new LotScheduleCalculator();
 
-        $commitsByCustomerDataId = DB::table('ppc.lot_commits')
-            ->whereIn('customer_data_id', $wipRows->pluck('customer_data_id'))
-            ->get()
-            ->keyBy('customer_data_id');
-
-        $packageListById = DB::table('qdn_db.package_list')
-            ->whereIn('id', $commitsByCustomerDataId->pluck('recipe_source_id')->filter()->unique())
-            ->get()
-            ->keyBy('id');
-
-        $result  = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows, $calc, $commitsByCustomerDataId, $packageListById);
+        $result = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows, $calc);
 
         $packages = $result
             ->filter(fn($row) => !$row['isBlock'])
@@ -99,8 +87,13 @@ class LoadingPlanController extends Controller
             'unknownPackages' => Inertia::defer(function () use ($date) {
                 return (new LoadingPlanPackageCoverage())->findUnknownPackages($date);
             }),
-            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $calc, $commitsByCustomerDataId, $packageListById) {
-                return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $calc, $commitsByCustomerDataId, $packageListById);
+            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $calc, $date) {
+                // scoped the same way buildPlanRows() does, since this needs its own lookup independently
+                $entryLotIds = LoadingPlanEntry::where('scheduled_date', $date)->where('entry_type', 'lot')->pluck('lot_id');
+                $relevantLotIds = $wipRows->pluck('Lot_Id')->merge($entryLotIds)->filter()->unique();
+                $lotQuantities = LotQuantity::where('scheduled_date', $date)->whereIn('lot_id', $relevantLotIds)->get()->keyBy('lot_id');
+
+                return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $lotQuantities);
             }),
         ]);
     }
@@ -122,20 +115,9 @@ class LoadingPlanController extends Controller
             ->pluck('default_pl', 'package');
 
         $wipRows = $this->getWipRows($data['date'], $selectedLocation);
-
         $calc = new LotScheduleCalculator();
 
-        $commitsByCustomerDataId = DB::table('ppc.lot_commits')
-            ->whereIn('customer_data_id', $wipRows->pluck('customer_data_id'))
-            ->get()
-            ->keyBy('customer_data_id');
-
-        $packageListById = DB::table('qdn_db.package_list')
-            ->whereIn('id', $commitsByCustomerDataId->pluck('recipe_source_id')->filter()->unique())
-            ->get()
-            ->keyBy('id');
-
-        $result  = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc, $commitsByCustomerDataId, $packageListById);
+        $result = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc);
 
         $filtered = $result->whereIn('machine', $data['machines'])->values();
 
@@ -163,12 +145,6 @@ class LoadingPlanController extends Controller
             ->pluck('package')
             ->map(fn($p) => trim($p));
 
-        Log::info('package compare', [
-            'ref_packages' => $packages->map(fn($p) => "[$p]")->toArray(),
-            'wip_packages' => CustomerDataWip::forDate($date)->tapeReelStations()->excludingPostTnr()
-                ->pluck('Package_Name')->unique()->map(fn($p) => "[$p]")->toArray(),
-        ]);
-
         return CustomerDataWip::query()
             ->forDate($date)
             ->tapeReelStations()
@@ -177,15 +153,12 @@ class LoadingPlanController extends Controller
             ->get();
     }
 
-    /** Shared assembly: returns [Collection $result, Collection $wipRows]. */
     private function buildPlanRows(
         string $date,
         string $selectedLocation,
         $packageLineMap,
         $wipRows,
         LotScheduleCalculator $calc,
-        Collection $commitsByCustomerDataId,
-        Collection $packageListById,
     ): \Illuminate\Support\Collection {
         $activeSplits = \App\Models\LotSplit::active()
             ->where('scheduled_date', $date)
@@ -194,49 +167,60 @@ class LoadingPlanController extends Controller
         $splitsByParent = $activeSplits->groupBy('parent_lot_id');
         $splitsByChild = $activeSplits->keyBy('child_lot_id');
 
-        Log::info('buildPlanRows: input', [
-            'date' => $date,
-            'selectedLocation' => $selectedLocation,
-            'packageLineMap' => $packageLineMap->toArray(),
-        ]);
-
         $allEntries = LoadingPlanEntry::with('machineModel')->where('scheduled_date', $date)->get();
 
-        Log::info('buildPlanRows: allEntries count', ['count' => $allEntries->count()]);
-
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
-        Log::info('lotEntries keys vs wip lot ids', [
-            'entryLotIds' => $lotEntries->keys()->map(fn($k) => "[$k]")->all(),
-            'wipLotIds'   => $wipRows->pluck('Lot_Id')->map(fn($v) => "[$v]")->all(),
-        ]);
-        Log::info('buildPlanRows: lotEntries', ['lotEntries' => $lotEntries->toArray()]);
 
         $blockEntries = $allEntries->where('entry_type', 'block');
-        Log::info('buildPlanRows: blockEntries (before location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
-
         $blockEntries = $blockEntries->filter(function ($entry) use ($selectedLocation) {
             $location = $entry->machineModel?->location;
             return $location === null || $location === $selectedLocation;
         });
-        Log::info('buildPlanRows: blockEntries (after location filter)', ['blockEntries' => $blockEntries->values()->toArray()]);
+
+        $activeMerges = \App\Models\LotMerge::active()->where('scheduled_date', $date)->get();
+        $mergesByTarget = $activeMerges->groupBy('target_lot_id');
+        $mergesBySource = $activeMerges->keyBy('source_lot_id');
+
+        // Scope lot_quantities to only the lots actually in play for this page —
+        // WIP rows already filtered by package/location, plus any manual/split
+        // lots that exist as loading_plan_entries but aren't in wipRows. Fetching
+        // the whole day unscoped pulls every lot the trigger ever inserted
+        // (~33k rows), when only ~1.5k+ are ever displayed here.
+        $relevantLotIds = $wipRows->pluck('Lot_Id')
+            ->merge($lotEntries->keys())
+            ->filter()
+            ->unique();
+
+        $lotQuantities = LotQuantity::where('scheduled_date', $date)
+            ->whereIn('lot_id', $relevantLotIds)
+            ->get()
+            ->keyBy('lot_id');
+
+        $packageListById = DB::table('qdn_db.package_list')
+            ->whereIn('id', $lotQuantities->pluck('recipe_source_id')->filter()->unique())
+            ->get()
+            ->keyBy('id');
 
         $snapshotUpdates = [];
 
-        $lotResults = $wipRows->map(function ($wip) use ($commitsByCustomerDataId, $packageListById, $lotEntries, $calc, &$snapshotUpdates, $splitsByParent, $splitsByChild) {
+        $lotResults = $wipRows->map(function ($wip) use ($lotQuantities, $packageListById, $lotEntries, $calc, &$snapshotUpdates, $splitsByParent, $splitsByChild, $mergesByTarget, $mergesBySource) {
             $entry = $lotEntries->get($wip->Lot_Id);
+            $quantity = $lotQuantities->get($wip->Lot_Id);
 
             $machine = $entry?->finalized_at
                 ? $entry->machine_snapshot
                 : $entry?->getMachineName();
 
-            $effectiveQty = $entry?->qty_override ?? $wip->Qty;
-
-            $doableResult = $calc->doable($wip->customer_data_id, $commitsByCustomerDataId, $packageListById);
-            $doableValue = $doableResult['value'];
-            $doableStatus = $doableResult['status'];
-            $doableRecipeSource = $doableResult['recipeSource'];
-
-            $doable = $doableValue;
+            $effectiveQty = $quantity?->effectiveQty() ?? $wip->Qty;
+            $doable = $quantity?->commit;
+            $doableStatus = $quantity?->recipe_status ?? 'unknown';
+            $capacityUph = $quantity?->capacity_uph_snapshot;
+            $doableRecipeSource = ($quantity && $quantity->recipe_source_id) ? [
+                'id'          => $quantity->recipe_source_id,
+                'devicename'  => $quantity->part_name,
+                'recipe'      => $quantity->recipe_used,
+                'packageType' => $packageListById->get($quantity->recipe_source_id)?->package_type,
+            ] : null;
 
             $capacityUph = $entry?->finalized_at
                 ? $entry->capacity_uph_snapshot
@@ -310,38 +294,48 @@ class LoadingPlanController extends Controller
                 'cycleTimeExceed'     => $cycleTimeExceed,
                 'isBakeHighlight'     => $isBakeHighlight,
                 'splitInfo'           => LotSplitService::buildSplitMeta($wip->Lot_Id, $splitsByParent, $splitsByChild),
+                'mergeInfo'           => LotMergeService::buildMergeMeta($wip->Lot_Id, $mergesByTarget, $mergesBySource),
             ];
         });
 
-        Log::info('snapshotUpdates', ['snapshotUpdates' => $snapshotUpdates]);
         if (!empty($snapshotUpdates)) {
             app()->terminating(function () use ($snapshotUpdates) {
                 (new \App\Jobs\RefreshLoadingPlanSnapshots($snapshotUpdates))->handle();
             });
         }
 
-        Log::info('buildPlanRows: lotResults count', ['count' => $lotResults->count()]);
-
         $wipLotIds = $wipRows->pluck('Lot_Id')->all();
-        Log::info('buildPlanRows: wipLotIds', ['wipLotIds' => $wipLotIds]);
 
         $manualLotEntries = $lotEntries->reject(function ($entry, $lotId) use ($wipLotIds, $selectedLocation, $packageLineMap) {
             if (in_array($lotId, $wipLotIds)) return true;
             return $packageLineMap->get($entry->package_name) !== $selectedLocation;
         });
-        Log::info('buildPlanRows: manualLotEntries', ['manualLotEntries' => $manualLotEntries->values()->toArray()]);
 
-        $manualLotResults = $manualLotEntries->map(function ($entry) use ($calc, $splitsByParent, $splitsByChild, $lotEntries) {
+        $manualLotResults = $manualLotEntries->map(function ($entry) use ($packageListById, $lotQuantities, $calc, $splitsByParent, $splitsByChild, $wipRows, $mergesByTarget, $mergesBySource) {
             $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
-            $effectiveQty = $entry?->qty_override ?? ($entry->qty ?? 0);
 
-            $capacityUph = $entry?->finalized_at
-                ? $entry->capacity_uph_snapshot
-                : $calc->capacityUph($machine, $effectiveQty);
+            $quantity = $lotQuantities->get($entry->lot_id);
+            $effectiveQty = $quantity?->effectiveQty();
 
-            $doable = $entry->finalized_at
-                ? $entry->doable_snapshot
-                : $calc->doableForManualLot($entry->part_name, $effectiveQty)['value'];
+            $doable = $quantity?->commit;
+            $doableStatus = $quantity?->recipe_status ?? 'unknown';
+            $capacityUph = $quantity?->capacity_uph_snapshot;
+            $doableRecipeSource = ($quantity && $quantity->recipe_source_id) ? [
+                'id'          => $quantity->recipe_source_id,
+                'devicename'  => $quantity->part_name,
+                'recipe'      => $quantity->recipe_used,
+                'packageType' => $packageListById->get($quantity->recipe_source_id)?->package_type,
+            ] : null;
+
+            $splitInfo = LotSplitService::buildSplitMeta($entry->lot_id, $splitsByParent, $splitsByChild);
+
+            // Split children inherit display-only WIP fields from the root lot —
+            // these describe the physical lot, not the qty fragment, so no
+            // separate storage/sync needed, just a lookup at render time.
+            $rootWip = null;
+            if ($splitInfo && $splitInfo['rootLotId']) {
+                $rootWip = $wipRows->firstWhere('Lot_Id', $splitInfo['rootLotId']);
+            }
 
             return [
                 'id'                  => null,
@@ -350,29 +344,29 @@ class LoadingPlanController extends Controller
                 'machine'             => $machine,
                 'sequenceOrder'       => $entry->sequence_order,
                 'item'                => $entry->sequence_order,
-                'Part_Name'           => $entry->part_name ?? '',
-                'Lead_Count'          => null,
+                'Part_Name'           => $quantity?->part_name ?? '',
+                'Lead_Count'          => $rootWip->Lead_Count ?? null,
                 'Package_Name'        => $entry->package_name,
                 'Lot_Id'              => $entry->lot_id,
                 'status'              => $entry->status ?? null,
-                'Station'             => null,
+                'Station'             => $rootWip->Station ?? null,
                 'Qty'                 => $effectiveQty,
-                'Lot_Type'            => null,
-                'Prod_Area'           => null,
-                'Lot_Status'          => null,
-                'Focus_Group'         => null,
-                'Stage'               => null,
-                'Lot_Entry_Time_Days' => null,
-                'CR3'                 => null,
-                'BE_OSL_Days'         => null,
-                'Body_Size'           => null,
-                'Ramp_Time'           => null,
-                'Date_Loaded'         => null,
-                'BE_Starttime'        => null,
-                'Backend_Leadtime'    => null,
+                'Lot_Type'            => $rootWip->Lot_Type ?? null,
+                'Prod_Area'           => $rootWip->Prod_Area ?? null,
+                'Lot_Status'          => $rootWip->Lot_Status ?? null,
+                'Focus_Group'         => $rootWip->Focus_Group ?? null,
+                'Stage'               => $rootWip->Stage ?? null,
+                'Lot_Entry_Time_Days' => $rootWip->Lot_Entry_Time_Days ?? null,
+                'CR3'                 => $rootWip->CR3 ?? null,
+                'BE_OSL_Days'         => $rootWip->BE_OSL_Days ?? null,
+                'Body_Size'           => $rootWip->Body_Size ?? null,
+                'Ramp_Time'           => $rootWip->Ramp_Time ?? null,
+                'Date_Loaded'         => optional($rootWip->Date_Loaded ?? null)->format('n/j/Y g:i:s A'),
+                'BE_Starttime'        => optional($rootWip->BE_Starttime ?? null)->format('n/j/Y g:i:s A'),
+                'Backend_Leadtime'    => $rootWip->Backend_Leadtime ?? null,
                 'Doable'              => $doable,
-                'doableStatus'        => null,
-                'doableRecipeSource'  => null,
+                'doableStatus'        => $doableStatus,
+                'doableRecipeSource'  => $doableRecipeSource,
                 'Capacity_UPH'        => $capacityUph,
                 'accuTime'            => $entry->accu_time,
                 'Remarks'             => $entry->remarks ?? null,
@@ -380,10 +374,10 @@ class LoadingPlanController extends Controller
                 'lockVersion'         => $entry->lock_version,
                 'isBlock'             => false,
                 'isManual'            => true,
-                'splitInfo'           => LotSplitService::buildSplitMeta($wip->Lot_Id, $splitsByParent, $splitsByChild),
+                'splitInfo'           => LotSplitService::buildSplitMeta($entry->lot_id, $splitsByParent, $splitsByChild),
+                'mergeInfo'           => LotMergeService::buildMergeMeta($entry->lot_id, $mergesByTarget, $mergesBySource),
             ];
         })->values();
-        Log::info('buildPlanRows: manualLotResults count', ['count' => $manualLotResults->count()]);
 
         $blockResults = $blockEntries->map(function ($entry) {
             $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
@@ -427,7 +421,6 @@ class LoadingPlanController extends Controller
                 'blockLabel'          => $entry->block_label,
             ];
         });
-        Log::info('buildPlanRows: blockResults count', ['count' => $blockResults->count()]);
 
         $result = $lotResults->concat($manualLotResults)->concat($blockResults)
             ->sort(function ($a, $b) {
@@ -448,8 +441,6 @@ class LoadingPlanController extends Controller
                 return ($seqA < $seqB) ? -1 : 1;
             })
             ->values();
-
-        Log::info('buildPlanRows: final result', ['count' => $result->count(), 'result' => $result->toArray()]);
 
         return $result;
     }
