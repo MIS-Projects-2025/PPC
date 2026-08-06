@@ -246,10 +246,10 @@ class LoadingPlanController extends Controller
             $cycleTimeExceedResidual = ($wip->CR3 == "RES") && ($wip->Lot_Entry_Time_Days > 2);
             $cycleTimeExceed = $ct > 2;
 
-            $stationList = ["GTBKLDBE_T", "GTIQA_T", "GTLPI_T", "GTTRANS_T", "GTBRAND_T"];
+            $bakeStationList = ["GTBKLDBE_T", "GTIQA_T", "GTLPI_T", "GTTRANS_T", "GTBRAND_T"];
 
             $isBakeHighlight = ($wip->Bake == "For Bake")
-                && in_array($wip->Station, $stationList)
+                && in_array($wip->Station, $bakeStationList)
                 && $wip->Bake_Count == 0;
 
             return [

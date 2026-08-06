@@ -1077,6 +1077,9 @@ class LoadingPlanEntryService
 
         $rootWip = CustomerDataWip::query()->forDate($date)->where('Lot_Id', $rootLotId)->first();
 
+        $ct = LoadingPlanFormulas::computeCT($rootWip->Date_Loaded, $rootWip->BE_Starttime);
+        $osl = LoadingPlanFormulas::computeOSL($ct, $rootWip->Backend_Leadtime);
+
         if ($rootWip) {
             $entry->setAttribute('Lead_Count', $rootWip->Lead_Count);
             $entry->setAttribute('Station', $rootWip->Station);
@@ -1084,6 +1087,8 @@ class LoadingPlanEntryService
             $entry->setAttribute('Prod_Area', $rootWip->Prod_Area);
             $entry->setAttribute('Lot_Status', $rootWip->Lot_Status);
             $entry->setAttribute('Focus_Group', $rootWip->Focus_Group);
+            $entry->setAttribute('CT', $ct);
+            $entry->setAttribute('OSL', $osl);
             $entry->setAttribute('Stage', $rootWip->Stage);
             $entry->setAttribute('Lot_Entry_Time_Days', $rootWip->Lot_Entry_Time_Days);
             $entry->setAttribute('CR3', $rootWip->CR3);

@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class QdnMachine extends Model
 {
@@ -50,5 +52,22 @@ class QdnMachine extends Model
     public function scopeActive($query)
     {
         return $query->whereRaw('LOWER(status) = ?', ['active']);
+    }
+
+    /**
+     * Get all capacity history for this machine.
+     */
+    public function capacities(): HasMany
+    {
+        return $this->hasMany(MachineCapacity::class, 'machine_id', 'id');
+    }
+
+    /**
+     * Get the current active capacity record.
+     */
+    public function currentCapacity(): HasOne
+    {
+        return $this->hasOne(MachineCapacity::class, 'machine_id', 'id')
+            ->whereNull('effective_to');
     }
 }

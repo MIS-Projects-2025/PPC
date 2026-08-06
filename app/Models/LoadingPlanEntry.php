@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use App\Services\LotScheduleCalculator;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class LoadingPlanEntry extends Model
 {
@@ -41,11 +43,27 @@ class LoadingPlanEntry extends Model
         return $this->belongsTo(QdnMachine::class, 'machine_id');
     }
 
+    public function lotQuantity(): HasOne
+    {
+        return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id')
+            ->whereColumn('lot_quantities.scheduled_date', 'loading_plan_entries.scheduled_date');
+    }
+
     public function getQuantityRow(): ?LotQuantity
     {
         return LotQuantity::where('lot_id', $this->lot_id)
             ->where('scheduled_date', $this->scheduled_date)
             ->first();
+    }
+
+    public function scopeToday(Builder $query): Builder
+    {
+        return $query->whereDate('scheduled_date', now()->toDateString());
+    }
+
+    public function scopeEntryType(Builder $query, string $type): Builder
+    {
+        return $query->where('entry_type', $type);
     }
 
     /**
@@ -57,16 +75,17 @@ class LoadingPlanEntry extends Model
         return $this->machineModel?->machine_num;
     }
 
-    protected static function booted()
-    {
-        static::saving(function (LoadingPlanEntry $entry) {
-            if ($entry->getOriginal('finalized_at') !== null && $entry->isDirty('capacity_uph_snapshot')) {
-                throw new \RuntimeException(
-                    "Cannot modify capacity_uph_snapshot on entry {$entry->id}: already finalized at {$entry->getOriginal('finalized_at')}"
-                );
-            }
-        });
-    }
+    // capacity_uph_snapshot is now stored in lot_quantities, so this method is no longer used.
+    // protected static function booted()
+    // {
+    //     static::saving(function (LoadingPlanEntry $entry) {
+    //         if ($entry->getOriginal('finalized_at') !== null && $entry->isDirty('capacity_uph_snapshot')) {
+    //             throw new \RuntimeException(
+    //                 "Cannot modify capacity_uph_snapshot on entry {$entry->id}: already finalized at {$entry->getOriginal('finalized_at')}"
+    //             );
+    //         }
+    //     });
+    // }
 
     /**
      * Resolve the root WIP lot_id this entry ultimately traces back to.
