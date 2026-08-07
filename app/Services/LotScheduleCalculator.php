@@ -16,9 +16,9 @@ class LotScheduleCalculator
     private Collection $capacityBands;    // platform => [ {qty_min, qty_max, capacity_uph}, ... ]
     private Collection $packageListByDeviceName;
 
-    public function __construct()
+    public function __construct(string $date, array $lotIds = [])
     {
-        \Log::info('LotScheduleCalculator constructed');
+        \Log::info('LotScheduleCalculator constructed', ['mb_start' => memory_get_usage(true) / 1048576]);
 
         $this->machinePlatforms = QdnMachine::pluck('machine_platform', 'machine_num');
 
@@ -26,10 +26,24 @@ class LotScheduleCalculator
             ->get()
             ->groupBy('platform');
 
-        $this->packageListByDeviceName = DB::connection('qdn_db')
-            ->table('package_list')
-            ->get()
-            ->keyBy('devicename');
+        Log::info('After capacityBands', ['mb' => memory_get_usage(true) / 1048576]);
+
+        $partNames = LotQuantity::whereIn('lot_id', $lotIds)
+            ->where('scheduled_date', $date)
+            ->pluck('part_name')
+            ->filter()
+            ->unique()
+            ->all();
+
+        $query = DB::connection('qdn_db')->table('package_list')->select('id', 'devicename', 'recipe');
+
+        if (! empty($partNames)) {
+            $query->whereIn('devicename', $partNames);
+        }
+
+        $this->packageListByDeviceName = $query->get()->keyBy('devicename');
+
+        Log::info('After packageListByDeviceName', ['mb' => memory_get_usage(true) / 1048576]);
     }
 
     public function recalculate(string $lotId, string $scheduledDate, ?string $newPartName = null, ?string $machineOverride = null): void

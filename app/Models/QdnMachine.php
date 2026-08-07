@@ -70,4 +70,12 @@ class QdnMachine extends Model
         return $this->hasOne(MachineCapacity::class, 'machine_id', 'id')
             ->whereNull('effective_to');
     }
+
+    /**
+     * Get all dedicated parts for this machine.
+     */
+    public function dedicatedParts(): HasMany
+    {
+        return $this->hasMany(MachineDedicatedParts::class, 'machine_id', 'id');
+    }
 }

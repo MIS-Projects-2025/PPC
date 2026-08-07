@@ -63,6 +63,10 @@
     --color-base-content: #d6d6d6;
     --color-base-content-dim: #d6d6d630;
 
+    --color-opposite-100: var(--color-base-opposite-100);
+    --color-opposite-200: var(--color-base-opposite-200);
+    --color-opposite-300: var(--color-base-opposite-300);
+
     --color-f1color: #ff6a83;
     --color-f1color-15: #ff766a;
     --color-f1color-30: #ff9b6a;
@@ -106,6 +110,11 @@
     --color-base-100: #ffffff; /* pure white */
     --color-base-200: #f0f2f5; /* cool light gray */
     --color-base-300: #e4e7eb; /* medium-light gray */
+
+    --color-base-opposite-100: #050505;
+    --color-base-opposite-200: #141416;
+    --color-base-opposite-300: #232326;
+
     --color-base-content: #161616;
     --color-base-content-dim: #16161630;
     --color-primary: #ff6a83;
@@ -135,6 +144,11 @@
     --color-base-100: #050505;
     --color-base-200: #141416;
     --color-base-300: #232326;
+
+    --color-base-opposite-100: #ffffff; /* pure white */
+    --color-base-opposite-200: #f0f2f5; /* cool light gray */
+    --color-base-opposite-300: #e4e7eb; /* medium-light gray */
+
     --color-base-content: #d6d6d6;
     --color-base-content-dim: #d6d6d630;
     --color-primary: #ff6a83;

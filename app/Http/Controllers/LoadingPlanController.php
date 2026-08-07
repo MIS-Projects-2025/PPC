@@ -8,7 +8,8 @@ use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
-use App\Models\PpcPackageMaster; // maps to ppc_package_master
+use App\Models\PpcPackageMaster; // maps to ppc_package_master\
+use App\Models\MachineCapacity; // maps to ppc_package_master\
 use App\Services\LotScheduleCalculator;
 use App\Services\LoadingPlanPackageCoverage;
 use App\Services\LoadingPlanPartnameIntegrity;
@@ -17,6 +18,8 @@ use App\Services\LotMergeService;
 use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
+use App\Services\DisseminationService;
+use App\Services\LoadingPlanEntryService;
 use App\Services\LotSplitService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
@@ -51,10 +54,67 @@ class LoadingPlanController extends Controller
             ])
             ->values();
 
-        $wipRows = $this->getWipRows($date, $selectedLocation);
-        $calc = new LotScheduleCalculator();
+        Log::debug('Active machines resolved', [
+            'location' => $selectedLocation,
+            'count' => $activeMachines->count(),
+            'machines' => $activeMachines->toArray(),
+        ]);
 
-        $result = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows, $calc);
+        $wipRows = $this->getWipRows($date, $selectedLocation);
+
+        $allEntries = LoadingPlanEntry::with('machineModel')
+            ->where('scheduled_date', $date)
+            ->get();
+
+        $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
+
+        $relevantLotIds = $wipRows->pluck('Lot_Id')
+            ->merge($lotEntries->keys())
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $calc = new LotScheduleCalculator($date, $relevantLotIds);
+
+        $result = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows, $calc, $allEntries);
+
+        $unassignedRows = $result->filter(function ($row) {
+            if ($row['isBlock']) {
+                return false;
+            }
+
+            return $row['entryId'] === null || $row['machine'] === null;
+        })->values();
+
+        $disseminationService = App::make(\App\Services\DisseminationService::class, ['location' => $selectedLocation]);
+        $disseminationResult = $disseminationService->disseminate($unassignedRows);
+
+        $assignments = collect($disseminationResult['assignments'])
+            ->map(fn($a) => ['lot_id' => $a['lot_id'], 'machine' => $a['machine_code']])
+            ->all();
+
+        $saveFailed = false;
+        $saveError = null;
+
+        if (! empty($assignments)) {
+            try {
+                (new LoadingPlanEntryService)->bulkTransferMulti($assignments, blockEntryIds: [], date: $date);
+            } catch (\Throwable $e) {
+                report($e);
+                $saveFailed = true;
+                $saveError = 'Auto-dissemination could not be saved. You can still plan manually.';
+            }
+        }
+
+        $disseminationSummary = DisseminationService::buildFrontendPayload(
+            $disseminationResult,
+            $saveFailed,
+            $saveError,
+        );
+
+        Log::info('Dissemination result', $disseminationResult);
+        Log::info('Dissemination summary', $disseminationSummary);
 
         $packages = $result
             ->filter(fn($row) => !$row['isBlock'])
@@ -72,6 +132,7 @@ class LoadingPlanController extends Controller
             return $packageListPromise ??= $partnameIntegrity->lookupPackageList($wipRows);
         };
 
+        Log::info('Request memory peak', ['mb' => memory_get_peak_usage(true) / 1048576]);
         return Inertia::render('LoadingPlanTable', [
             'data'             => $result,
             'date'             => $date,
@@ -80,6 +141,8 @@ class LoadingPlanController extends Controller
             'packageGroups'    => PackageGroups::GROUPS,
             'selectedLocation' => $selectedLocation,
             'status'           => $status,
+
+            'disseminationSummary' => $disseminationSummary,
 
             'partnameMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList) {
                 return $partnameIntegrity->findMismatches($wipRows, $getPackageList());
@@ -95,6 +158,16 @@ class LoadingPlanController extends Controller
 
                 return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $lotQuantities);
             }),
+            'machineCapacity' => Inertia::defer(function () use ($date) {
+                return MachineCapacity::with('machine')
+                    ->asOf($date)
+                    ->get()
+                    ->keyBy(fn($item) => $item->machine?->machine_num)
+                    ->map(fn($item) => [
+                        'capacity' => $item->capacity,
+                        'effective_from' => $item->effective_from,
+                    ]);
+            })
         ]);
     }
 
@@ -159,6 +232,7 @@ class LoadingPlanController extends Controller
         $packageLineMap,
         $wipRows,
         LotScheduleCalculator $calc,
+        Collection $allEntries,
     ): \Illuminate\Support\Collection {
         $activeSplits = \App\Models\LotSplit::active()
             ->where('scheduled_date', $date)
@@ -166,8 +240,6 @@ class LoadingPlanController extends Controller
 
         $splitsByParent = $activeSplits->groupBy('parent_lot_id');
         $splitsByChild = $activeSplits->keyBy('child_lot_id');
-
-        $allEntries = LoadingPlanEntry::with('machineModel')->where('scheduled_date', $date)->get();
 
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
 

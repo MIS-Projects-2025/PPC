@@ -57,13 +57,18 @@ class LotMergeService
                 'created_by'       => $createdBy,
             ]);
 
+            $calc = app(LotScheduleCalculator::class, [
+                'date' => $date,
+                'lotIds' => [$targetLotId, $sourceLotId],
+            ]);
+
             $targetEntry = LoadingPlanEntry::where('lot_id', $targetLotId)->where('scheduled_date', $date)->first();
-            app(LotScheduleCalculator::class)->recalculate($targetLotId, $date);
+            $calc->recalculate($targetLotId, $date);
             $targetEntry = $targetEntry->fresh();
             $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $date);
 
             $sourceEntry = LoadingPlanEntry::where('lot_id', $sourceLotId)->where('scheduled_date', $date)->first();
-            app(LotScheduleCalculator::class)->recalculate($sourceLotId, $date);
+            $calc->recalculate($sourceLotId, $date);
             $sourceEntry = $sourceEntry->fresh();
             $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $date);
 
@@ -82,8 +87,9 @@ class LotMergeService
     {
         return DB::transaction(function () use ($mergeId, $revertedBy) {
             $merge = LotMerge::active()->lockForUpdate()->findOrFail($mergeId);
+            $date = $merge->scheduled_date->toDateString();
 
-            $this->assertDateNotFinalized($merge->scheduled_date->toDateString());
+            $this->assertDateNotFinalized($date);
 
             $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)
                 ->where('scheduled_date', $merge->scheduled_date)->first();
@@ -107,17 +113,22 @@ class LotMergeService
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
             $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
 
+            $calc = app(LotScheduleCalculator::class, [
+                'date' => $date,
+                'lotIds' => [$merge->target_lot_id, $merge->source_lot_id],
+            ]);
+
             if ($targetEntry) {
-                app(LotScheduleCalculator::class)->recalculate($merge->target_lot_id, $merge->scheduled_date->toDateString());
+                $calc->recalculate($merge->target_lot_id, $date);
                 $targetEntry = $targetEntry->fresh();
-                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $merge->scheduled_date->toDateString());
+                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $date);
                 $targetEntry->mergeInfo = null;
             }
 
             if ($sourceEntry) {
-                app(LotScheduleCalculator::class)->recalculate($merge->source_lot_id, $merge->scheduled_date->toDateString());
+                $calc->recalculate($merge->source_lot_id, $date);
                 $sourceEntry = $sourceEntry->fresh();
-                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $merge->scheduled_date->toDateString());
+                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $date);
                 $sourceEntry->mergeInfo = null;
             }
 
@@ -133,8 +144,9 @@ class LotMergeService
     {
         return DB::transaction(function () use ($mergeId, $unrevertedBy) {
             $merge = LotMerge::whereNotNull('reverted_at')->lockForUpdate()->findOrFail($mergeId);
+            $date = $merge->scheduled_date->toDateString();
 
-            $this->assertDateNotFinalized($merge->scheduled_date->toDateString());
+            $this->assertDateNotFinalized($date);
 
             // re-apply the same qty transfer revert() undid
             $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
@@ -143,9 +155,6 @@ class LotMergeService
             if (!$targetQuantity || !$sourceQuantity) {
                 throw new InvalidMergeException("Missing quantity record for one of these lots — can't restore merge.");
             }
-
-            $targetQty = $targetQuantity->effectiveQty();
-            $sourceQty = $sourceQuantity->effectiveQty();
 
             $targetQuantity->update([
                 'merge_adjustment' => $targetQuantity->merge_adjustment + $merge->transferred_qty,
@@ -159,25 +168,24 @@ class LotMergeService
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
             $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
 
-            app(LotScheduleCalculator::class)->recalculate($merge->target_lot_id, $merge->scheduled_date->toDateString());
-            app(LotScheduleCalculator::class)->recalculate($merge->source_lot_id, $merge->scheduled_date->toDateString());
+            $calc = app(LotScheduleCalculator::class, [
+                'date' => $date,
+                'lotIds' => [$merge->target_lot_id, $merge->source_lot_id],
+            ]);
 
             if ($targetEntry) {
-                app(LotScheduleCalculator::class)->recalculate($merge->target_lot_id, $merge->scheduled_date->toDateString());
+                $calc->recalculate($merge->target_lot_id, $date);
                 $targetEntry = $targetEntry->fresh();
-                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $merge->scheduled_date->toDateString());
-                $targetEntry->mergeInfo = null;
+                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $date);
+                $targetEntry->mergeInfo = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
             }
 
             if ($sourceEntry) {
-                app(LotScheduleCalculator::class)->recalculate($merge->source_lot_id, $merge->scheduled_date->toDateString());
+                $calc->recalculate($merge->source_lot_id, $date);
                 $sourceEntry = $sourceEntry->fresh();
-                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $merge->scheduled_date->toDateString());
-                $sourceEntry->mergeInfo = null;
+                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $date);
+                $sourceEntry->mergeInfo = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
             }
-
-            $targetEntry->mergeInfo = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
-            $sourceEntry->mergeInfo = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
 
             return ['merge' => $merge->fresh(), 'target' => $targetEntry, 'source' => $sourceEntry];
         });

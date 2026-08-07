@@ -1,7 +1,10 @@
 import { COLUMNS, TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
+import { Deferred } from "@inertiajs/react";
+import clsx from "clsx";
 import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import HoverCell from "./HoverCell";
 import { TableInteractionContext } from "./MachineSectionBody";
 import MachineSectionBody from "./MachineSectionBody.jsx";
 
@@ -21,8 +24,17 @@ const MachineSection = memo(
         isUpdating,
     }) {
         const outerRef = useRef(null);
-        const { disableAddRowLot, disableAddRowBlock, scrollParentRef } =
-            useContext(TableInteractionContext);
+        const {
+            disableAddRowLot,
+            disableAddRowBlock,
+            scrollParentRef,
+            machineCapacity,
+            machineTotalDoable,
+        } = useContext(TableInteractionContext);
+        // console.log(
+        //     "🚀 ~ MachineSection ~ machineTotalDoable:",
+        //     machineTotalDoable,
+        // );
         const [collapsed, setCollapsed] = useState(true);
         const sentinelRef = useRef(null);
         const [isStuck, setIsStuck] = useState(false);
@@ -74,6 +86,21 @@ const MachineSection = memo(
         const isManual = machine === MACHINE_MANUAL;
         const isPseudo = isUnassigned || isManual;
 
+        const isExceeded = useMemo(() => {
+            if (isUnassigned || isManual) return false;
+            const capacityData = machineCapacity?.[machine];
+            const CAPACITY = capacityData?.capacity ?? 0;
+            const overallDoable = machineTotalDoable?.[machine] ?? totalDoable;
+            return CAPACITY > 0 && overallDoable > CAPACITY;
+        }, [
+            machineCapacity,
+            machineTotalDoable,
+            machine,
+            totalDoable,
+            isUnassigned,
+            isManual,
+        ]);
+
         useEffect(() => {
             const sentinel = sentinelRef.current;
             const root = scrollParentRef?.current;
@@ -96,12 +123,21 @@ const MachineSection = memo(
                 ref={outerRef}
                 id={`machine-section-${machine ?? "unassigned"}`}
                 className={`mb-2 rounded-xl transition-all duration-150 ${
-                    isDropTarget
-                        ? "ring-2 ring-info shadow-md"
-                        : isPseudo
-                          ? "ring-1 ring-base-300 opacity-60"
-                          : "ring-1 ring-base-300"
+                    isExceeded
+                        ? "ring-2 ring-error"
+                        : isDropTarget
+                          ? "ring-2 ring-info shadow-md"
+                          : isPseudo
+                            ? "ring-1 ring-base-300 opacity-60"
+                            : "ring-1 ring-base-300"
                 }`}
+                // className={`mb-2 rounded-xl transition-all duration-150 ${
+                //     isDropTarget
+                //         ? "ring-2 ring-info shadow-md"
+                //         : isPseudo
+                //           ? "ring-1 ring-base-300 opacity-60"
+                //           : "ring-1 ring-base-300"
+                // }`}
             >
                 <div ref={sentinelRef} style={{ height: 0 }} />
                 {/* Sticky machine header */}
@@ -183,15 +219,46 @@ const MachineSection = memo(
                                 </td>
 
                                 {/* Lot count + machine name */}
-                                <td className="px-2.5 py-2">
-                                    <div className="leading-0">
+                                <td
+                                    colSpan={3}
+                                    className="sticky left-12 z-20 py-2"
+                                >
+                                    <div className="flex gap-10 items-center leading-0">
+                                        <span
+                                            className={clsx(
+                                                "w-30 text-sm font-semibold",
+                                                isExceeded
+                                                    ? "text-error"
+                                                    : isPseudo
+                                                      ? "italic text-base-content/60"
+                                                      : rows.length === 0
+                                                        ? "text-base-content/30"
+                                                        : "text-base-content",
+                                            )}
+                                            // className={`w-30 text-sm font-semibold ${
+                                            //     isPseudo
+                                            //         ? "italic text-base-content/60"
+                                            //         : rows.length === 0
+                                            //           ? "text-base-content/30"
+                                            //           : "text-base-content"
+                                            // }`}
+                                        >
+                                            {(() => {
+                                                if (machine === null)
+                                                    return "Unassigned";
+                                                if (machine === MACHINE_MANUAL)
+                                                    return "Manual";
+                                                return machine;
+                                            })()}
+                                        </span>
+
                                         <div>
                                             {rows.length === 0 ? (
-                                                <div className="text-[11px] font-medium font-mono text-base-content/30 italic">
+                                                <span className="text-[11px] font-medium font-mono text-base-content/30 italic">
                                                     0 rows
                                                     {otherPackageCount > 0 &&
                                                         ` · ${otherPackageCount} in other packages`}
-                                                </div>
+                                                </span>
                                             ) : (
                                                 <span className="text-[11px] font-mono text-base-content/50">
                                                     <span className="font-bold text-sm text-base-content">
@@ -213,29 +280,11 @@ const MachineSection = memo(
                                 </td>
 
                                 {/* Machine name */}
-                                <td className="px-2.5 py-2">
-                                    <span
-                                        className={`text-sm font-semibold ${
-                                            isPseudo
-                                                ? "italic text-base-content/60"
-                                                : rows.length === 0
-                                                  ? "text-base-content/30"
-                                                  : "text-base-content"
-                                        }`}
-                                    >
-                                        {/* {machineLabel(machine)} */}
-                                        {(() => {
-                                            if (machine === null)
-                                                return "Unassigned";
-                                            if (machine === MACHINE_MANUAL)
-                                                return "Manual";
-                                            return machine;
-                                        })()}
-                                    </span>
-                                </td>
+                                {/* <td className="px-2.5 py-2">
+                                </td> */}
 
                                 {/* Package — empty */}
-                                <td />
+                                {/* <td /> */}
 
                                 {/* Lot ID — drop target indicator */}
                                 <td className="px-2.5 py-2">
@@ -253,23 +302,203 @@ const MachineSection = memo(
                                 {/* Station */}
                                 <td />
 
-                                {/* Qty total */}
-                                <td className="px-2.5 py-2">
+                                {/* 2. Sticky Qty total (assuming Machine Name cell width is 320px -> left = 12 + 320 = 332px) */}
+                                <td className="sticky left-[332px] z-20 px-2.5 py-2">
                                     <span className="text-[11px] font-medium text-base-content/60">
                                         {totalQty.toLocaleString()}
                                     </span>
                                 </td>
 
-                                {/* Doable total */}
-                                <td className="px-2.5 py-2">
-                                    <span className="text-error font-bold text-[11px]">
-                                        {totalDoable.toLocaleString()}
-                                    </span>
+                                <td
+                                    colSpan={3}
+                                    className={`sticky left-[400px] z-20 transition-colors`}
+                                >
+                                    {!isUnassigned && !isManual && (
+                                        <Deferred
+                                            data="machineCapacity"
+                                            fallback={
+                                                <div className="flex flex-col min-w-[170px]">
+                                                    <div className="h-6 w-full rounded-md animate-pulse flex items-center text-[10px] text-base-content/40 font-mono">
+                                                        <span className="loading loading-spinner loading-xs mr-2"></span>{" "}
+                                                        Loading capacity...
+                                                    </div>
+                                                </div>
+                                            }
+                                        >
+                                            {/* Resolved State */}
+                                            {(() => {
+                                                const capacityData =
+                                                    machineCapacity?.[machine];
+
+                                                const CAPACITY =
+                                                    capacityData?.capacity ?? 0;
+                                                const effectiveFrom =
+                                                    capacityData?.effective_from
+                                                        ? capacityData.effective_from.split(
+                                                              "T",
+                                                          )[0]
+                                                        : null;
+
+                                                // 1. Distinguish section Doable vs overall machine Doable
+                                                const sectionDoable =
+                                                    totalDoable ?? 0;
+                                                const overallDoable =
+                                                    machineTotalDoable?.[
+                                                        machine
+                                                    ] ?? sectionDoable;
+                                                const otherDoable = Math.max(
+                                                    0,
+                                                    overallDoable -
+                                                        sectionDoable,
+                                                );
+
+                                                // const isExceeded =
+                                                //     CAPACITY > 0 &&
+                                                //     overallDoable > CAPACITY;
+
+                                                // 2. Compute fill widths relative to Capacity
+                                                const sectionPct =
+                                                    CAPACITY > 0
+                                                        ? Math.min(
+                                                              (sectionDoable /
+                                                                  CAPACITY) *
+                                                                  100,
+                                                              100,
+                                                          )
+                                                        : 0;
+
+                                                const otherPct =
+                                                    CAPACITY > 0
+                                                        ? Math.min(
+                                                              (otherDoable /
+                                                                  CAPACITY) *
+                                                                  100,
+                                                              Math.max(
+                                                                  0,
+                                                                  100 -
+                                                                      sectionPct,
+                                                              ),
+                                                          )
+                                                        : 0;
+
+                                                const capacityTooltip = (
+                                                    <div
+                                                        className={`rounded-md shadow-md border border-opposite-100/20 relative w-full h-6 overflow-hidden flex cursor-pointer ${
+                                                            isExceeded
+                                                                ? "ring-1 ring-error"
+                                                                : ""
+                                                        }`}
+                                                    >
+                                                        {/* Segment A: Current Section Doable */}
+                                                        <div
+                                                            className={`h-full transition-all duration-300 ${
+                                                                isExceeded
+                                                                    ? "bg-error"
+                                                                    : sectionPct +
+                                                                            otherPct >
+                                                                        85
+                                                                      ? "bg-warning/50"
+                                                                      : //   : "bg-base-content/25"
+                                                                        "bg-lime-300/50"
+                                                            }`}
+                                                            style={{
+                                                                width: `${sectionPct}%`,
+                                                            }}
+                                                        />
+
+                                                        {/* Segment B: Other Sections Doable */}
+                                                        <div
+                                                            className={`h-full transition-all duration-300 ${
+                                                                isExceeded
+                                                                    ? "bg-error"
+                                                                    : sectionPct +
+                                                                            otherPct >
+                                                                        85
+                                                                      ? "bg-warning/50"
+                                                                      : //   : "bg-base-content/25"
+                                                                        "bg-lime-300"
+                                                            }`}
+                                                            style={{
+                                                                width: `${otherPct}%`,
+                                                            }}
+                                                        />
+
+                                                        {/* Clean Single-Line Overlay Label */}
+                                                        <div className="absolute inset-0 flex items-center justify-between px-2 font-mono text-[11px] z-10 pointer-events-none whitespace-nowrap">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="text-base-content bg-base-300 rounded px-1 font-black">
+                                                                    {overallDoable.toLocaleString()}{" "}
+                                                                </span>
+                                                                <span className="text-base-content text-[10px] font-normal">
+                                                                    (
+                                                                    {sectionDoable.toLocaleString()}{" "}
+                                                                    here)
+                                                                </span>
+                                                            </div>
+
+                                                            <span className="text-base-content text-[10px] font-normal">
+                                                                /{" "}
+                                                                {CAPACITY.toLocaleString()}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                );
+
+                                                return (
+                                                    <div className="flex flex-col min-w-[170px]">
+                                                        {/* DaisyUI Rich Tooltip */}
+                                                        <HoverCell
+                                                            trigger={
+                                                                capacityTooltip
+                                                            }
+                                                        >
+                                                            <div className="text-xs font-mono rounded-lg text-base-100 space-y-1.5 min-w-[180px] text-left">
+                                                                <div className="flex justify-between items-center gap-3">
+                                                                    <span className="text-primary font-bold">
+                                                                        This
+                                                                        Section:
+                                                                    </span>
+                                                                    <span className="font-bold bg-primary px-1.5 py-0.5 rounded text-[11px]">
+                                                                        {sectionDoable.toLocaleString()}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex justify-between items-center gap-3">
+                                                                    <span className="opacity-70">
+                                                                        Machine
+                                                                        Total:
+                                                                    </span>
+                                                                    <span className="font-semibold">
+                                                                        {overallDoable.toLocaleString()}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex justify-between items-center gap-3 border-t border-neutral-content/15 pt-1">
+                                                                    <span className="opacity-70">
+                                                                        Capacity:
+                                                                    </span>
+                                                                    <span className="font-semibold">
+                                                                        {CAPACITY.toLocaleString()}
+                                                                    </span>
+                                                                </div>
+                                                                {effectiveFrom && (
+                                                                    <div className="text-[10px] opacity-50 pt-0.5 border-t border-neutral-content/10">
+                                                                        Effective:{" "}
+                                                                        {
+                                                                            effectiveFrom
+                                                                        }
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </HoverCell>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </Deferred>
+                                    )}
                                 </td>
 
                                 {/* Rest empty */}
-                                <td />
-                                <td />
+                                {/* <td /> */}
+                                {/* <td /> */}
                                 <td />
                                 <td />
                                 <td />

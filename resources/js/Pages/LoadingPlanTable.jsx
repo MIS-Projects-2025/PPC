@@ -110,8 +110,12 @@
 import DateNav from "@/Components/DateNav";
 import { TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
 import DataIntegrityModal, {
+    DATA_INTEGRITY_MODAL_ID,
     TabBadge,
 } from "@/Components/LoadingPlan/DataIntegrityModal";
+import DisseminationSummaryModal, {
+    DISSEMINATION_MODAL_ID,
+} from "@/Components/LoadingPlan/DisseminationSummary";
 import GlobalTableHeader from "@/Components/LoadingPlan/GlobalTableHeader";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
 import MachineChip from "@/Components/LoadingPlan/MachineChip";
@@ -160,13 +164,12 @@ import {
     useSensor,
     useSensors,
 } from "@dnd-kit/core";
-import { router } from "@inertiajs/react";
+import { Deferred, router } from "@inertiajs/react";
 import clsx from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GoAlert } from "react-icons/go";
 import { CellEditor } from "../Components/LoadingPlan/CellEditor";
 import { DragGhostRow } from "../Components/LoadingPlan/DragGhostRow";
-
 // ---------------------------------------------------------------------------
 // Machine / platform / capacity-band config
 // ---------------------------------------------------------------------------
@@ -463,6 +466,8 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
+    disseminationSummary,
+    machineCapacity,
     partnameMismatches,
     unknownPackages,
     recipeMismatches,
@@ -474,6 +479,7 @@ export default function LoadingPlanTable({
     onLotTransfer,
     onReorder,
 }) {
+    console.log("🚀 ~ LoadingPlanTable ~ machineCapacity:", machineCapacity);
     console.log("🚀 ~ LoadingPlanTable ~ packages:", packageGroupNames);
     const {
         present: data,
@@ -483,6 +489,7 @@ export default function LoadingPlanTable({
         canUndo,
         canRedo,
     } = useLoadingPlanStore();
+    console.log("🚀 ~ LoadingPlanTable ~ data:", data);
 
     const toast = useToast();
     const { mutate } = useMutation();
@@ -1130,6 +1137,8 @@ export default function LoadingPlanTable({
         return map;
     }, [serverMachines]);
 
+    console.log("🚀 ~ LoadingPlanTable ~ machinePlatform:", machinePlatform);
+
     const machines = useMemo(() => {
         return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
     }, [serverMachines]); // fixed: was `[]`, now correctly depends on serverMachines
@@ -1166,6 +1175,28 @@ export default function LoadingPlanTable({
         const el = document.getElementById(`machine-section-${key}`);
         el?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, []);
+
+    const machineTotalDoable = useMemo(() => {
+        const result = {};
+
+        data.forEach((r) => {
+            if (!r.machine || !hasTimeline(r.machine)) return;
+
+            // Skip block rows (non-lot downtime/blocks)
+            if (typeof isBlockRow === "function" && isBlockRow(r)) return;
+
+            const doable = Number(r.Doable ?? r.doable) || 0;
+
+            // Accumulate total per machine
+            result[r.machine] = (result[r.machine] || 0) + doable;
+        });
+
+        return result;
+    }, [data]);
+    console.log(
+        "🚀 ~ LoadingPlanTable ~ machineTotalDoable:",
+        machineTotalDoable,
+    );
 
     const gapInfo = useMemo(() => {
         const result = {};
@@ -2321,8 +2352,19 @@ export default function LoadingPlanTable({
         () => ({
             isSortable,
             scrollParentRef,
+            machineCapacity,
+            machineTotalDoable,
+            // disableAddRowLot,   // Also added if needed
+            // disableAddRowBlock, // Also added if needed
         }),
-        [isSortable],
+        [
+            isSortable,
+            scrollParentRef,
+            machineCapacity,
+            machineTotalDoable,
+            // disableAddRowLot,
+            // disableAddRowBlock
+        ], // 👈 Update dependencies so Context updates when machineCapacity resolves!
     );
 
     const { activeMachines, idleMachines } = useMemo(() => {
@@ -2368,6 +2410,9 @@ export default function LoadingPlanTable({
             : closestCenter(args);
     }, []);
 
+    // console.log("🔍 Provider Value Check:", tableInteractionValue);
+    // console.log("🔍 Raw machineTotalDoable variable:", machineTotalDoable);
+
     // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="relative h-full">
@@ -2376,6 +2421,12 @@ export default function LoadingPlanTable({
                 unknownPackages={unknownPackages}
                 recipeMismatches={recipeMismatches}
             />
+
+            <DisseminationSummaryModal summary={disseminationSummary} />
+
+            {/* <Deferred data={[]} fallback={<span>HAHA</span>}>
+                {JSON.stringify(machineCapacity, null, 2)}
+            </Deferred> */}
 
             {/* <Deferred
                 data="partnameMismatches"
@@ -2522,7 +2573,7 @@ export default function LoadingPlanTable({
                                             onClick={() =>
                                                 document
                                                     .getElementById(
-                                                        "data_integrity_modal",
+                                                        DATA_INTEGRITY_MODAL_ID,
                                                     )
                                                     .showModal()
                                             }
@@ -2549,7 +2600,7 @@ export default function LoadingPlanTable({
                             </div>
 
                             {/* Row 2: package tabs (left) — production line / idle machines (right) */}
-                            <div className="flex flex-wrap items-end justify-between gap-2">
+                            <div className="flex flex-wrap items-end gap-2">
                                 <PackageTabs
                                     packages={packageGroupNames}
                                     active={activePackage}
@@ -2558,6 +2609,24 @@ export default function LoadingPlanTable({
                                         clearSelection();
                                     }}
                                 />
+
+                                <button
+                                    className="ml-auto btn btn-sm mb-2 rounded-box btn-secondary"
+                                    onClick={() =>
+                                        document
+                                            .getElementById(
+                                                DISSEMINATION_MODAL_ID,
+                                            )
+                                            .showModal()
+                                    }
+                                >
+                                    <span>
+                                        {disseminationSummary?.summary?.saved}
+                                    </span>
+                                    <span>
+                                        {disseminationSummary?.unplaced?.length}
+                                    </span>
+                                </button>
 
                                 <div className="flex items-center gap-3 mb-1">
                                     <fieldset className="fieldset rounded-box pb-3 px-2">

@@ -9,6 +9,7 @@ use App\Models\QdnMachine;
 use App\Models\LotQuantity;
 use App\Models\LotSplit;
 use App\Models\CustomerDataWip;
+use Exception;
 use Illuminate\Support\Facades\DB;
 
 class LotSplitService
@@ -437,11 +438,18 @@ class LotSplitService
             ->where('scheduled_date', $date)
             ->first();
 
+        if (! $parentQuantity) {
+            throw new InvalidSplitException("Apparently there's no LotQuantity entries for the parent of this splitting");
+        }
+
         $parentQuantity->update([
             'split_adjustment' => -$activeChildQty,
         ]);
 
-        app(LotScheduleCalculator::class)->recalculate($parentEntry->lot_id, $date);
+        app(LotScheduleCalculator::class, [
+            'date' => $date,
+            'lotIds' => [$parentEntry->lot_id],
+        ])->recalculate($parentEntry->lot_id, $date);
     }
 
     private function resolveParentAttributes(string $lotId, string $date, ?LoadingPlanEntry $entry): array

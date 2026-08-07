@@ -86,6 +86,7 @@ export function DoableCell({ value, status, recipeSource }) {
                     }
                 >
                     <div
+                        className="text-base-100"
                         style={{
                             fontWeight: 600,
                             marginBottom: 4,

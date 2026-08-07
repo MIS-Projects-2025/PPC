@@ -83,7 +83,7 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                 />
 
                 <td
-                    colSpan={4}
+                    colSpan={7}
                     style={{
                         width:
                             COL_WIDTHS.Part_Name +
@@ -96,9 +96,9 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                     <span className="sticky left-12">— elapsed —</span>
                 </td>
 
-                <td style={{ width: COL_WIDTHS.status }} />
-                <td style={{ width: COL_WIDTHS.Remarks }} />
-                <td style={{ width: COL_WIDTHS.Station }} />
+                {/* <td style={{ width: COL_WIDTHS.status }} /> */}
+                {/* <td style={{ width: COL_WIDTHS.Remarks }} /> */}
+                {/* <td style={{ width: COL_WIDTHS.Station }} /> */}
                 <td style={{ width: COL_WIDTHS.Qty }} />
                 <td style={{ width: COL_WIDTHS.Doable }} />
                 <td style={{ width: COL_WIDTHS.Capacity_UPH }} />
@@ -150,16 +150,16 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                     <div
                         ref={floating.refs.setFloating}
                         style={floating.floatingStyles}
-                        className="z-50 bg-base-100 border border-base-300 rounded-lg shadow-lg min-w-[180px] flex flex-col overflow-visible text-base-content"
+                        className="z-50 bg-opposite-100 border border-base-300 rounded-lg shadow-lg min-w-[180px] flex flex-col overflow-visible text-base-100"
                         {...getFloatingProps()}
                     >
                         <FloatingArrow
                             ref={arrowRef}
                             context={floating.context}
-                            width={ARROW_SIZE * 10}
+                            width={ARROW_SIZE * 2}
                             height={ARROW_SIZE}
-                            fill="var(--color-base-300)"
-                            stroke="var(--color-base-300)"
+                            fill="var(--color-base-opposite-300)"
+                            stroke="var(--color-base-opposite-300)"
                         />
                         <div className="p-2.5 overflow-y-auto overflow-x-hidden rounded-lg min-h-0 not-italic">
                             <div className="flex flex-col gap-2">
@@ -172,13 +172,13 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                                             <span
                                                 className={`font-medium px-1.5 py-0.5 rounded-full ${
                                                     seg.kind === "block"
-                                                        ? "bg-base-content/10 text-base-content/60"
+                                                        ? "bg-base-content/10 text-base-100/60"
                                                         : "bg-info/10 text-info"
                                                 }`}
                                             >
                                                 {seg.label}
                                             </span>
-                                            <span className="text-base-content/60 font-mono">
+                                            <span className="text-base-100/60 font-mono">
                                                 {formatExpectedPT(seg.minutes)}
                                             </span>
                                         </div>
@@ -188,7 +188,7 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                                                 {seg.lots.map((lot, li) => (
                                                     <div
                                                         key={`${lot.Lot_Id}-${li}`}
-                                                        className="flex items-center justify-between gap-3 text-[10px] text-base-content/50"
+                                                        className="flex items-center justify-between gap-3 text-[10px] text-base-100/50"
                                                     >
                                                         <span className="font-mono">
                                                             {lot.Lot_Id}

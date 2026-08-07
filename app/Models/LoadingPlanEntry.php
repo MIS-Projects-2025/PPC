@@ -117,20 +117,21 @@ class LoadingPlanEntry extends Model
             ->first();
     }
 
-    public function refreshCapacityUphSnapshot(int $qty): void
-    {
-        if ($this->finalized_at !== null) return; // frozen, no-op rather than throwing — callers shouldn't need to know finalization state to safely call this
+    // currently not in used
+    // public function refreshCapacityUphSnapshot(int $qty): void
+    // {
+    //     if ($this->finalized_at !== null) return; // frozen, no-op rather than throwing — callers shouldn't need to know finalization state to safely call this
 
-        $calc = app(LotScheduleCalculator::class);
-        $fresh = $calc->capacityUph($this->getMachineName(), $qty);
+    //     $calc = app(LotScheduleCalculator::class);
+    //     $fresh = $calc->capacityUph($this->getMachineName(), $qty);
 
-        if ($fresh !== $this->capacity_uph_snapshot) {
-            // scope the update to unfinalized rows specifically, so a concurrent
-            // finalization landing between the read and this write can't be clobbered
-            static::where('id', $this->id)
-                ->whereNull('finalized_at')
-                ->update(['capacity_uph_snapshot' => $fresh]);
-            $this->capacity_uph_snapshot = $fresh;
-        }
-    }
+    //     if ($fresh !== $this->capacity_uph_snapshot) {
+    //         // scope the update to unfinalized rows specifically, so a concurrent
+    //         // finalization landing between the read and this write can't be clobbered
+    //         static::where('id', $this->id)
+    //             ->whereNull('finalized_at')
+    //             ->update(['capacity_uph_snapshot' => $fresh]);
+    //         $this->capacity_uph_snapshot = $fresh;
+    //     }
+    // }
 }

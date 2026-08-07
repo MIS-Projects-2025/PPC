@@ -53,6 +53,8 @@ function mismatchReason(row) {
         : "field_mismatch";
 }
 
+export const DATA_INTEGRITY_MODAL_ID = `data_integrity_modal-${crypto.randomUUID()}`;
+
 function DataIntegrityModal({
     partnameMismatches,
     unknownPackages,
