@@ -379,7 +379,22 @@ class ExcelValidatorService
     $hasData = false;
 
     foreach ($cellIterator as $cell) {
-      $value = $cell->getCalculatedValue();
+      if ($cell->isFormula()) {
+        try {
+          $value = $cell->getCalculatedValue();
+
+          // Fall back if PhpSpreadsheet produced a formula error string (e.g., #VALUE!, #REF!)
+          if (is_string($value) && str_starts_with($value, '#')) {
+            $value = $cell->getOldCalculatedValue();
+          }
+        } catch (\Throwable $e) {
+          // Fall back if PhpSpreadsheet threw an unhandled Exception during calculation
+          $value = $cell->getOldCalculatedValue();
+        }
+      } else {
+        $value = $cell->getValue();
+      }
+
       $sanitized = $this->sanitizeExcelCell($value);
       $rowData[] = $sanitized;
 
