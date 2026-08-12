@@ -12,30 +12,34 @@ import AuthenticatedLayout from "./Layouts/AuthenticatedLayout";
 const appName = import.meta.env.VITE_APP_NAME || "Laravel";
 
 createInertiaApp({
-	title: (title) => `${title} - ${appName}`,
-	resolve: (name) => {
-		const pages = import.meta.glob("./Pages/**/*.jsx", { eager: false });
-		return resolvePageComponent(`./Pages/${name}.jsx`, pages).then((page) => {
-			page.default.layout =
-				page.default.layout ||
-				((page) => <AuthenticatedLayout> {page} </AuthenticatedLayout>);
-			return page;
-		});
-	},
-	setup({ el, App, props }) {
-		const root = createRoot(el);
+    title: (title) => `${title} - ${appName}`,
+    resolve: (name) => {
+        const pages = import.meta.glob("./Pages/**/*.jsx", { eager: false });
+        return resolvePageComponent(`./Pages/${name}.jsx`, pages).then(
+            (page) => {
+                page.default.layout =
+                    page.default.layout ||
+                    ((page) => (
+                        <AuthenticatedLayout> {page} </AuthenticatedLayout>
+                    ));
+                return page;
+            },
+        );
+    },
+    setup({ el, App, props }) {
+        const root = createRoot(el);
 
-		root.render(
-			<>
-				<Toaster position="top-right" reverseOrder={false} />
+        root.render(
+            <>
+                <Toaster position="top-right" reverseOrder={false} />
 
-				<StrictMode>
-					<App {...props} />
-				</StrictMode>
-			</>,
-		);
-	},
-	progress: {
-		color: "#4B5563",
-	},
+                {/* <StrictMode> */}
+                <App {...props} />
+                {/* </StrictMode> */}
+            </>,
+        );
+    },
+    progress: {
+        color: "#4B5563",
+    },
 });

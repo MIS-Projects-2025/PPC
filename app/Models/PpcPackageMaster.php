@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class PpcPackageMaster extends Model
 {
     protected $table = 'ppc_package_master';
+    public $timestamps = false;
     protected $fillable = [
         'package',
         'is_telford',
@@ -17,6 +18,8 @@ class PpcPackageMaster extends Model
     ];
 
     protected $casts = [
+        'updated_at' => 'datetime',
+        'created_at' => 'datetime',
         'is_telford' => 'boolean',
         'is_active'  => 'boolean',
         'valid_from' => 'date',

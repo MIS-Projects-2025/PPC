@@ -1,67 +1,73 @@
 import { create } from "zustand";
 
 export const createUndoStore = (initialState, options = {}) => {
-  const limit = options.limit ?? 100;
+    const limit = options.limit ?? 100;
 
-  return create((set, get) => ({
-    past: [],
-    present: initialState,
-    future: [],
+    return create((set, get) => ({
+        past: [],
+        present: initialState,
+        future: [],
 
-    update: (next, skipHistory = false) => {
-			const { past, present } = get();
-			const newPresent = typeof next === "function" ? next(present) : next;
+        update: (next, skipHistory = false) => {
+            console.log(
+                `[store update #${++window.__updateCounter || (window.__updateCounter = 1)}]`,
+            );
+            console.trace();
+            const { past, present } = get();
+            const newPresent =
+                typeof next === "function" ? next(present) : next;
 
-			if (newPresent === present) return;
+            if (newPresent === present) return;
 
-			if (skipHistory) {
-				set({ present: newPresent });
-			} else {
-				const updatedPast = [...past, present];
-				
-				const limitedPast = updatedPast.length > limit 
-					? updatedPast.slice(updatedPast.length - limit) 
-					: updatedPast;
+            if (skipHistory) {
+                set({ present: newPresent });
+            } else {
+                const updatedPast = [...past, present];
 
-				set({
-					past: limitedPast,
-					present: newPresent,
-					future: [],
-				});
-			}
-		},
+                const limitedPast =
+                    updatedPast.length > limit
+                        ? updatedPast.slice(updatedPast.length - limit)
+                        : updatedPast;
 
-    undo: () => {
-      const { past, present, future } = get();
-      if (past.length === 0) return;
+                set({
+                    past: limitedPast,
+                    present: newPresent,
+                    future: [],
+                });
+            }
+        },
 
-      const previous = past[past.length - 1];
-      const newPast = past.slice(0, past.length - 1);
+        undo: () => {
+            const { past, present, future } = get();
+            if (past.length === 0) return;
 
-      set({
-        past: newPast,
-        present: previous,
-        future: [present, ...future],
-      });
-    },
+            const previous = past[past.length - 1];
+            const newPast = past.slice(0, past.length - 1);
 
-    redo: () => {
-      const { past, present, future } = get();
-      if (future.length === 0) return;
+            set({
+                past: newPast,
+                present: previous,
+                future: [present, ...future],
+            });
+        },
 
-      const next = future[0];
-      const newFuture = future.slice(1);
+        redo: () => {
+            const { past, present, future } = get();
+            if (future.length === 0) return;
 
-      set({
-        past: [...past, present],
-        present: next,
-        future: newFuture,
-      });
-    },
+            const next = future[0];
+            const newFuture = future.slice(1);
 
-		canUndo: () => get().past.length > 0,
-		canRedo: () => get().future.length > 0,
+            set({
+                past: [...past, present],
+                present: next,
+                future: newFuture,
+            });
+        },
 
-    reset: (state) => set({ past: [], present: state, future: [] }),
-  }));
+        canUndo: () => get().past.length > 0,
+        canRedo: () => get().future.length > 0,
+
+        reset: (state) => set({ past: [], present: state, future: [] }),
+    }));
 };

@@ -471,7 +471,7 @@ class WipService
       case 'PL6':
         $query = DB::table('ppc_pickupdb')
           ->selectRaw('ppc_pickupdb.PACKAGE AS PACKAGE, SUM(QTY) AS total_wip, COUNT(DISTINCT LOTID) AS total_lots')
-          ->join('ppc_partnamedb as partname', 'ppc_pickupdb.PARTNAME', '=', 'partname.Partname')
+          ->join('qdn_db.package_list as partname', 'ppc_pickupdb.PARTNAME', '=', 'partname.devicename')
           // ->whereBetween('ppc_pickupdb.DATE_CREATED', [$startDate, $endDate]);
           ->where('ppc_pickupdb.DATE_CREATED', ">=", $startDate)
           ->where('ppc_pickupdb.DATE_CREATED', "<", $endDate);

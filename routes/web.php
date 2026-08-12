@@ -5,6 +5,8 @@ use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware};
 use App\Http\Controllers\{
+    LoadingPlanController,
+    LoadingPlanEntryController,
     AutoImportController,
     BodySizeController,
     DashboardController,
@@ -21,6 +23,8 @@ use App\Http\Controllers\{
     PartNameController,
     PickupController,
     PlPackageMasterController,
+    LoadingPlanSplitController,
+    LoadingPlanMergeController,
     PlRuleController,
     WipController,
     LotController,
@@ -34,6 +38,34 @@ $app_name = env('APP_NAME', '');
 Route::redirect('/', "/$app_name");
 
 require __DIR__ . '/auth.php';
+
+Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
+    Route::post('move', [LoadingPlanEntryController::class, 'move'])->name('move');
+    Route::post('transfer', [LoadingPlanEntryController::class, 'transfer'])->name('transfer');
+    Route::post('bulk-transfer', [LoadingPlanEntryController::class, 'bulkTransfer'])->name('bulk-transfer');
+    Route::post('blocks', [LoadingPlanEntryController::class, 'addBlock'])->name('blocks.store');
+    Route::delete('entries/{id}', [LoadingPlanEntryController::class, 'destroy'])->name('entries.destroy');
+    Route::post('bulk-delete', [LoadingPlanEntryController::class, 'bulkDestroy'])->name('bulk-delete');
+    Route::patch('entries/{id}', [LoadingPlanEntryController::class, 'updateField'])->name('entries.update');
+    Route::post('bulk-update', [LoadingPlanEntryController::class, 'bulkUpdateField'])->name('bulk-update');
+    Route::post('batch-apply', [LoadingPlanEntryController::class, 'batchApply'])->name('batch-apply');
+    Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
+    Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
+    Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine');
+
+    Route::prefix('splits')->name('splits.')->group(function () {
+        Route::post('/', [LoadingPlanSplitController::class, 'store'])->name('store');
+        Route::delete('{splitId}', [LoadingPlanSplitController::class, 'destroy'])->name('destroy');
+        Route::get('{rootLotId}/history', [LoadingPlanSplitController::class, 'history'])->name('history');
+    });
+
+    Route::prefix('merges')->name('merges.')->group(function () {
+        Route::post('/', [LoadingPlanMergeController::class, 'store'])->name('store');
+        Route::delete('{mergeId}', [LoadingPlanMergeController::class, 'destroy'])->name('destroy');
+        Route::get('{targetLotId}/history', [LoadingPlanMergeController::class, 'history'])->name('history');
+    });
+});
+
 
 Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::get('/{productionLine}', [LotController::class, 'index'])

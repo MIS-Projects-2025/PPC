@@ -20,7 +20,7 @@ class PlPackageMasterController extends Controller
   public function index(Request $request)
   {
     $search  = $request->input('search', '');
-    $perPage = $request->input('perPage', 25);
+    $perPage = $request->input('perPage', 1000);
 
     $packages = PpcPackageMaster::query()
       ->when($search, fn($q) => $q->where('package', 'like', "%{$search}%"))

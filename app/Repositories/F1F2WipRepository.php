@@ -26,7 +26,6 @@ class F1F2WipRepository
   private const DISTINCT_PACKAGE_CACHE_KEY = 'distinct_packages';
   private const DISTINCT_STATION_CACHE_KEY = 'f1f2_distinct_stations';
   private const CACHE_HOURS = 23;
-  private const PPC_TABLE = "ppc_productionline_packagereference";
   protected $packageFilterService;
   protected $packageGroupRepo;
   protected $analogCalendarRepo;
@@ -134,7 +133,6 @@ class F1F2WipRepository
 
     CustomerDataWip::insert($data);
   }
-
 
   public function applyStationFilter($query, array $includeStations = [], array $excludeStations = []): Builder
   {

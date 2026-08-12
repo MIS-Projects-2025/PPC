@@ -986,7 +986,7 @@ export default function LotsUpstream({
     }, []);
 
     return (
-        <div className="bg-base-200 font-mono">
+        <div className="bg-base-200 font-mono w-full">
             <Toaster position="top-left" />
 
             <dialog

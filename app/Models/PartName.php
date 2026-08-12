@@ -9,27 +9,29 @@ class PartName extends Model
 {
     use HasFactory;
 
+    protected $connection = 'qdn_db';
 
-    protected $table = 'ppc_partnamedb';
+    protected $table = 'package_list';
 
-    protected $primaryKey = 'ppc_partnamedb_id';
+    protected $primaryKey = 'id';
 
     protected $fillable = [
-        'Partname',
-        'Focus_grp',
-        'Factory',
-        'PL',
-        'Packagename',
-        'Packagecategory',
-        'Leadcount',
-        'Bodysize',
-        'Package',
-        // 'added_by',
-        // 'date_created',
+        'devicename',
+        'focus_grp',
+        'areas',
+        'productline',
+        'package_type',
+        'lead_count',
+        'dimensions',
+        'allocation',
+        'generic_name',
+        'drypack',
+        'recipe',
     ];
 
     protected $casts = [
         'date_created' => 'datetime',
+        'date_updated' => 'datetime',
     ];
 
     public $timestamps = false;
