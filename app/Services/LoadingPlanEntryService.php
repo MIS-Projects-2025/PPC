@@ -189,6 +189,7 @@ class LoadingPlanEntryService
             $this->assertDateNotFinalized($date);
 
             $targetMachineId = $this->resolveMachineId($targetMachine);
+            // var_dump("🚀 ~ LoadingPlanEntryService ~ bulkTransfer ~ $targetMachineId:", $targetMachineId);
 
             $lotEntries = LoadingPlanEntry::with('machineModel')->whereIn('lot_id', $lotIds)
                 ->where('scheduled_date', $date)
@@ -259,6 +260,9 @@ class LoadingPlanEntryService
                     'sequence_order' => $nextSeq,
                     'lock_version'   => 1,
                 ]);
+
+                $calculator->recalculateAndRetime($lotId, $date, $targetMachineId);
+
                 $updated->push($entry);
                 $nextSeq += self::GAP_SEED;
             }
@@ -573,7 +577,7 @@ class LoadingPlanEntryService
 
                         $row->save();
 
-                        $calc->recalculateAndRetime($lotId, $scheduledDate, $affected->machine_id);
+                        $calc->recalculateAndRetime($lotId, $scheduledDate, $existing->machine_id);
                     }
 
                     $entries[] = LoadingPlanEntry::find($id);

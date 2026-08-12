@@ -111,8 +111,6 @@ class LotSplitService
                 $date,
             );
 
-            $calc = new LotScheduleCalculator([$date], [$rootLotId, $childLotId]);
-
             $split = LotSplit::create([
                 'parent_lot_id'    => $parentLotId,
                 'child_lot_id'     => $childLotId,

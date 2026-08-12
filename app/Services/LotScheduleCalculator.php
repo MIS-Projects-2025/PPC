@@ -9,6 +9,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use App\Models\LoadingPlanEntry;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class LotScheduleCalculator
 {
@@ -58,12 +59,16 @@ class LotScheduleCalculator
     public function recalculateAndRetime(
         string $lotId,
         string $scheduledDate,
-        int $machineId,
+        ?int $machineId,
         ?string $newPartName = null,
     ): void {
-        $machineName = $this->machineNumById->get($machineId);
+        $machineName = $machineId !== null ? $this->machineNumById->get($machineId) : null;
 
         $this->recalculate($lotId, $scheduledDate, $machineName, $newPartName);
+
+        if ($machineId === null) {
+            return; // unplaced lot — quantity/recipe recalculated, nothing to retime
+        }
 
         $entry = LoadingPlanEntry::where('lot_id', $lotId)
             ->where('scheduled_date', $scheduledDate)
@@ -195,7 +200,7 @@ class LotScheduleCalculator
         return $default;
     }
 
-    private function recalculate(string $lotId, string $scheduledDate, string $machineName, ?string $newPartName = null): void
+    private function recalculate(string $lotId, string $scheduledDate, ?string $machineName, ?string $newPartName = null): void
     {
         $row = LotQuantity::where('lot_id', $lotId)
             ->where('scheduled_date', $scheduledDate)
