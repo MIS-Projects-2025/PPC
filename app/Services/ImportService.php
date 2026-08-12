@@ -501,6 +501,11 @@ class ImportService
 
         $partnameID = $this->partnameRepository->getIDByPartname($rowData['PARTNAME'] ?? null);
         if (!$partnameID) {
+          $ignoredPartnameRows[] = [
+            'devicename' => $rowData['PARTNAME'] ?? null,
+            'package_type' => $rowData['PACKAGE'],
+            'lead_count' => $rowData['LC'],
+          ];
           $rowsWithUnknownPartname[] = $rowData;
         }
 
@@ -581,7 +586,11 @@ class ImportService
 
       if (!$partnameID) {
         $rowData["Factory"] = "F3";
-        $ignoredPartnameRows[] = $rowData;
+        $ignoredPartnameRows[] = [
+          'devicename' => $rowData['PARTNAME'] ?? null,
+          'areas' => $rowData['Factory'],
+          'package_type' => $rowData['PACKAGE'],
+        ];
       }
 
       if (!$f3RawPackage) {
@@ -629,7 +638,6 @@ class ImportService
         $rowData = $this->extractRowData($map_headers, $rowData, $found_headers);
 
         $f3RawPackage = $this->f3RawPackageRepository->getByRawPackage($rowData['PACKAGE'] ?? null);
-        var_dump("🚀 ~ ImportService ~ importF3PickUp ~ $f3RawPackage:", $f3RawPackage);
         $rowData['ADDED_BY'] = $importedBy;
         $rowData['PACKAGE'] = $f3RawPackage->package_name;
         $rowData['LC'] = $f3RawPackage->lead_count;
