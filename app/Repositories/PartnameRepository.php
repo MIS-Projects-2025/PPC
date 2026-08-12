@@ -18,7 +18,7 @@ class PartnameRepository
 {
   public function getIDByPartname(?string $partname): ?int
   {
-    return PartName::where('Partname', $partname)
-      ->value('ppc_partnamedb_id');
+    return PartName::where('devicename', $partname)
+      ->value('id');
   }
 }

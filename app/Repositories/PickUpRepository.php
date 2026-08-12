@@ -294,7 +294,7 @@ class PickUpRepository
     $upserter = new BulkUpserter(
       new PickUp(),
       [
-        'LC' => 'required|integer',
+        'LC' => 'nullable|integer',
         'QTY' => 'required|integer',
         'PARTNAME' => 'required',
         'PACKAGE' => 'required',

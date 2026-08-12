@@ -506,6 +506,11 @@ class ImportService
 
         $partnameID = $this->partnameRepository->getIDByPartname($rowData['PARTNAME'] ?? null);
         if (!$partnameID) {
+          $ignoredPartnameRows[] = [
+            'devicename' => $rowData['PARTNAME'] ?? null,
+            'package_type' => $rowData['PACKAGE'],
+            'lead_count' => $rowData['LC'],
+          ];
           $rowsWithUnknownPartname[] = $rowData;
         }
 
@@ -586,7 +591,11 @@ class ImportService
 
       if (!$partnameID) {
         $rowData["Factory"] = "F3";
-        $ignoredPartnameRows[] = $rowData;
+        $ignoredPartnameRows[] = [
+          'devicename' => $rowData['PARTNAME'] ?? null,
+          'areas' => $rowData['Factory'],
+          'package_type' => $rowData['PACKAGE'],
+        ];
       }
 
       if (!$f3RawPackage) {
