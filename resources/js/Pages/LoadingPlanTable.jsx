@@ -480,6 +480,7 @@ export default function LoadingPlanTable({
     onReorder,
 }) {
     console.log("🚀 ~ LoadingPlanTable ~ machineCapacity:", machineCapacity);
+    console.log("🚀 ~ packageGroups ~ packageGroups:", packageGroups);
     console.log("🚀 ~ LoadingPlanTable ~ packages:", packageGroupNames);
     const {
         present: data,

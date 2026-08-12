@@ -233,7 +233,7 @@ class DisseminationService
         $entries = LoadingPlanEntry::query()
             ->today()
             ->entryType('lot')
-            ->with('lotQuantity')
+            ->with(['lotQuantity' => fn($q) => $q->whereDate('scheduled_date', now()->toDateString())])
             ->get();
 
         $committed = $entries->groupBy('machine_id')->map(function ($group) {

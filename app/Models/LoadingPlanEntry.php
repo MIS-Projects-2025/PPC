@@ -45,9 +45,13 @@ class LoadingPlanEntry extends Model
 
     public function lotQuantity(): HasOne
     {
-        return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id')
-            ->whereColumn('lot_quantities.scheduled_date', 'loading_plan_entries.scheduled_date');
+        return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id');
     }
+    // public function lotQuantity(): HasOne
+    // {
+    //     return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id')
+    //         ->whereColumn('lot_quantities.scheduled_date', 'loading_plan_entries.scheduled_date');
+    // }
 
     public function getQuantityRow(): ?LotQuantity
     {

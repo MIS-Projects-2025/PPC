@@ -629,6 +629,7 @@ class ImportService
         $rowData = $this->extractRowData($map_headers, $rowData, $found_headers);
 
         $f3RawPackage = $this->f3RawPackageRepository->getByRawPackage($rowData['PACKAGE'] ?? null);
+        var_dump("🚀 ~ ImportService ~ importF3PickUp ~ $f3RawPackage:", $f3RawPackage);
         $rowData['ADDED_BY'] = $importedBy;
         $rowData['PACKAGE'] = $f3RawPackage->package_name;
         $rowData['LC'] = $f3RawPackage->lead_count;
@@ -700,6 +701,7 @@ class ImportService
         }
 
         $rowData = $this->extractRowData($map_headers, $rowData, $found_headers);
+        Log::info("🚀 ~ ImportService ~ importF3 ~ :", [$rowData]);
 
         $rowData['imported_by'] = $importedBy;
         $rowData['date_received'] = $this->parseDate($rowData['date_received'] ?? null);

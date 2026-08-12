@@ -111,7 +111,7 @@ class LotSplitService
                 $date,
             );
 
-            app(LotScheduleCalculator::class)->recalculate($childLotId, $date, machineOverride: $targetMachine);
+            $calc = new LotScheduleCalculator([$date], [$rootLotId, $childLotId]);
 
             $split = LotSplit::create([
                 'parent_lot_id'    => $parentLotId,
@@ -131,6 +131,7 @@ class LotSplitService
 
             $freshParent = $parentEntry->fresh();
             $this->entryService->enrichEntryForResponse($freshParent, $rootLotId, $date);
+
             $freshParent->splitInfo = [
                 'isParent'  => true,
                 'isChild'   => false,
@@ -447,9 +448,9 @@ class LotSplitService
         ]);
 
         app(LotScheduleCalculator::class, [
-            'date' => $date,
+            'dates' => [$date],
             'lotIds' => [$parentEntry->lot_id],
-        ])->recalculate($parentEntry->lot_id, $date);
+        ])->recalculateAndRetime($parentEntry->lot_id, $date, $parentEntry->machine_id);
     }
 
     private function resolveParentAttributes(string $lotId, string $date, ?LoadingPlanEntry $entry): array

@@ -8,8 +8,8 @@ use App\Models\LoadingPlanEntry;
 use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
-use App\Models\PpcPackageMaster; // maps to ppc_package_master\
-use App\Models\MachineCapacity; // maps to ppc_package_master\
+use App\Models\PpcPackageMaster;
+use App\Models\MachineCapacity;
 use App\Services\LotScheduleCalculator;
 use App\Services\LoadingPlanPackageCoverage;
 use App\Services\LoadingPlanPartnameIntegrity;
@@ -24,6 +24,7 @@ use App\Services\LotSplitService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\App;
+use Carbon\Carbon;
 
 class LoadingPlanController extends Controller
 {
@@ -31,6 +32,7 @@ class LoadingPlanController extends Controller
     {
         $date = $request->get('date', ShiftDay::current());
         $selectedLocation = $request->get('location', 'PL1');
+        $previousDate = Carbon::parse($date)->subDay()->toDateString();
 
         $packageLineMap = PpcPackageMaster::query()
             ->where('is_telford', 1)
@@ -61,10 +63,10 @@ class LoadingPlanController extends Controller
         ]);
 
         $wipRows = $this->getWipRows($date, $selectedLocation);
+        // var_dump("🚀 ~ LoadingPlanController ~ index ~ wipRows:", $wipRows);
 
-        $allEntries = LoadingPlanEntry::with('machineModel')
-            ->where('scheduled_date', $date)
-            ->get();
+        $allEntries = $this->getEntriesIncludingLeaked($date, $previousDate);
+        // var_dump("🚀 ~ LoadingPlanController ~ index ~ allentries:", $allEntries);
 
         $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
 
@@ -75,9 +77,10 @@ class LoadingPlanController extends Controller
             ->values()
             ->all();
 
-        $calc = new LotScheduleCalculator($date, $relevantLotIds);
+        $calc = new LotScheduleCalculator([$date, $previousDate], $relevantLotIds);
 
-        $result = $this->buildPlanRows($date, $selectedLocation, $packageLineMap, $wipRows, $calc, $allEntries);
+        $result = $this->buildPlanRows($date, $previousDate, $selectedLocation, $packageLineMap, $wipRows, $calc, $allEntries);
+        // var_dump("🚀 ~ LoadingPlanController ~ index ~ $result:", $result);
 
         $unassignedRows = $result->filter(function ($row) {
             if ($row['isBlock']) {
@@ -150,11 +153,16 @@ class LoadingPlanController extends Controller
             'unknownPackages' => Inertia::defer(function () use ($date) {
                 return (new LoadingPlanPackageCoverage())->findUnknownPackages($date);
             }),
-            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $calc, $date) {
+            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $calc, $date, $previousDate) {
                 // scoped the same way buildPlanRows() does, since this needs its own lookup independently
-                $entryLotIds = LoadingPlanEntry::where('scheduled_date', $date)->where('entry_type', 'lot')->pluck('lot_id');
+                $entryLotIds = LoadingPlanEntry::whereIn('scheduled_date', [$date, $previousDate])
+                    ->where('entry_type', 'lot')
+                    ->pluck('lot_id');
                 $relevantLotIds = $wipRows->pluck('Lot_Id')->merge($entryLotIds)->filter()->unique();
-                $lotQuantities = LotQuantity::where('scheduled_date', $date)->whereIn('lot_id', $relevantLotIds)->get()->keyBy('lot_id');
+                $lotQuantities = LotQuantity::whereIn('scheduled_date', [$date, $previousDate])
+                    ->whereIn('lot_id', $relevantLotIds)
+                    ->get()
+                    ->keyBy('lot_id');
 
                 return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $lotQuantities);
             }),
@@ -173,6 +181,7 @@ class LoadingPlanController extends Controller
 
     public function byMachine(Request $request)
     {
+        // stale — unchanged
         $data = $request->validate([
             'date'       => 'required|date',
             'machines'   => 'required|array|min:1',
@@ -190,7 +199,7 @@ class LoadingPlanController extends Controller
         $wipRows = $this->getWipRows($data['date'], $selectedLocation);
         $calc = new LotScheduleCalculator();
 
-        $result = $this->buildPlanRows($data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc);
+        $result = $this->buildPlanRows($data['date'], $data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc, collect());
 
         $filtered = $result->whereIn('machine', $data['machines'])->values();
 
@@ -226,8 +235,46 @@ class LoadingPlanController extends Controller
             ->get();
     }
 
+    /**
+     * Today's plan entries, plus any entry from the previous scheduled_date
+     * whose cumulative accu_time on its machine (ordered by sequence_order)
+     * exceeds 1440 minutes — meaning it spilled past midnight and is still
+     * physically running today. Bounded to one day of lookback: planning
+     * restarts fresh at the daily CustomerDataWip import, so a queue never
+     * accumulates enough accu_time to cross a second midnight under normal
+     * operation. If that import is ever skipped or delayed past 10 AM, a
+     * lot could leak two days deep and this query would miss it silently.
+     */
+    private function getEntriesIncludingLeaked(string $date, string $previousDate): Collection
+    {
+        $today = LoadingPlanEntry::with('machineModel')
+            ->where('scheduled_date', $date)
+            ->get();
+
+        $leakedCalc = DB::table('loading_plan_entries')
+            ->select('id')
+            ->selectRaw('SUM(accu_time) OVER (PARTITION BY machine_id ORDER BY sequence_order) AS running_total')
+            ->where('scheduled_date', $previousDate)
+            ->whereNotNull('machine_id');
+
+        $leakedIds = DB::query()
+            ->fromSub($leakedCalc, 'leaked_calc')
+            ->where('running_total', '>', 1440)
+            ->pluck('id');
+
+        // var_dump("🚀 ~ LoadingPlanController ~ getEntriesIncludingLeaked ~ f:", $leakedIds);
+        if ($leakedIds->isEmpty()) {
+            return $today;
+        }
+
+        $leaked = LoadingPlanEntry::with('machineModel')->whereIn('id', $leakedIds)->get();
+
+        return $today->concat($leaked);
+    }
+
     private function buildPlanRows(
         string $date,
+        string $previousDate,
         string $selectedLocation,
         $packageLineMap,
         $wipRows,
@@ -255,15 +302,14 @@ class LoadingPlanController extends Controller
 
         // Scope lot_quantities to only the lots actually in play for this page —
         // WIP rows already filtered by package/location, plus any manual/split
-        // lots that exist as loading_plan_entries but aren't in wipRows. Fetching
-        // the whole day unscoped pulls every lot the trigger ever inserted
-        // (~33k rows), when only ~1.5k+ are ever displayed here.
+        // lots that exist as loading_plan_entries but aren't in wipRows, plus
+        // leaked lots whose LotQuantity row is dated the previous scheduled_date.
         $relevantLotIds = $wipRows->pluck('Lot_Id')
             ->merge($lotEntries->keys())
             ->filter()
             ->unique();
 
-        $lotQuantities = LotQuantity::where('scheduled_date', $date)
+        $lotQuantities = LotQuantity::whereIn('scheduled_date', [$date, $previousDate])
             ->whereIn('lot_id', $relevantLotIds)
             ->get()
             ->keyBy('lot_id');
@@ -275,7 +321,7 @@ class LoadingPlanController extends Controller
 
         $snapshotUpdates = [];
 
-        $lotResults = $wipRows->map(function ($wip) use ($lotQuantities, $packageListById, $lotEntries, $calc, &$snapshotUpdates, $splitsByParent, $splitsByChild, $mergesByTarget, $mergesBySource) {
+        $lotResults = $wipRows->map(function ($wip) use ($date, $lotQuantities, $packageListById, $lotEntries, $calc, &$snapshotUpdates, $splitsByParent, $splitsByChild, $mergesByTarget, $mergesBySource) {
             $entry = $lotEntries->get($wip->Lot_Id);
             $quantity = $lotQuantities->get($wip->Lot_Id);
 
@@ -363,6 +409,7 @@ class LoadingPlanController extends Controller
                 'lockVersion'         => $entry->lock_version ?? null,
                 'isBlock'             => false,
                 'cycleTimeExceedResidual' => $cycleTimeExceedResidual,
+                'isLeaked'            => $entry && $entry->scheduled_date !== $date,
                 'cycleTimeExceed'     => $cycleTimeExceed,
                 'isBakeHighlight'     => $isBakeHighlight,
                 'splitInfo'           => LotSplitService::buildSplitMeta($wip->Lot_Id, $splitsByParent, $splitsByChild),
@@ -378,12 +425,28 @@ class LoadingPlanController extends Controller
 
         $wipLotIds = $wipRows->pluck('Lot_Id')->all();
 
+        // $manualLotEntries = $lotEntries->reject(function ($entry, $lotId) use ($wipLotIds, $selectedLocation, $packageLineMap) {
+        //     if (in_array($lotId, $wipLotIds)) return true;
+        //     return $packageLineMap->get($entry->package_name) !== $selectedLocation;
+        // });
         $manualLotEntries = $lotEntries->reject(function ($entry, $lotId) use ($wipLotIds, $selectedLocation, $packageLineMap) {
             if (in_array($lotId, $wipLotIds)) return true;
-            return $packageLineMap->get($entry->package_name) !== $selectedLocation;
-        });
 
-        $manualLotResults = $manualLotEntries->map(function ($entry) use ($packageListById, $lotQuantities, $calc, $splitsByParent, $splitsByChild, $wipRows, $mergesByTarget, $mergesBySource) {
+            $mapped = $packageLineMap->get($entry->package_name);
+            if ($mapped !== $selectedLocation) {
+                // \Log::info('rejected', [
+                //     'lot_id' => $lotId,
+                //     'package_name' => $entry->package_name,
+                //     'mapped_location' => $mapped,
+                //     'selected_location' => $selectedLocation,
+                // ]);
+                return true;
+            }
+            return false;
+        });
+        // var_dump($lotEntries->map(fn($e) => ['lot_id' => $e->lot_id, 'package_name' => $e->package_name]));
+
+        $manualLotResults = $manualLotEntries->map(function ($entry) use ($date, $packageListById, $lotQuantities, $calc, $splitsByParent, $splitsByChild, $wipRows, $mergesByTarget, $mergesBySource) {
             $machine = $entry->finalized_at ? $entry->machine_snapshot : $entry->getMachineName();
 
             $quantity = $lotQuantities->get($entry->lot_id);
@@ -404,6 +467,8 @@ class LoadingPlanController extends Controller
             // Split children inherit display-only WIP fields from the root lot —
             // these describe the physical lot, not the qty fragment, so no
             // separate storage/sync needed, just a lookup at render time.
+            // For a leaked lot no longer in today's WIP import (completed the
+            // line), rootWip stays null and these fields render blank — expected.
             $rootWip = null;
             if ($splitInfo && $splitInfo['rootLotId']) {
                 $rootWip = $wipRows->firstWhere('Lot_Id', $splitInfo['rootLotId']);
@@ -446,6 +511,7 @@ class LoadingPlanController extends Controller
                 'lockVersion'         => $entry->lock_version,
                 'isBlock'             => false,
                 'isManual'            => true,
+                'isLeaked'            => $entry && $entry->scheduled_date !== $date,
                 'splitInfo'           => LotSplitService::buildSplitMeta($entry->lot_id, $splitsByParent, $splitsByChild),
                 'mergeInfo'           => LotMergeService::buildMergeMeta($entry->lot_id, $mergesByTarget, $mergesBySource),
             ];

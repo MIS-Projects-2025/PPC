@@ -2,17 +2,34 @@ import React, { useContext } from "react";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import { TableActionsContext } from "./RowContent";
 
-export function LotIdCell({ lotId, splitInfo, mergeInfo }) {
+export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
+    console.log("🚀 ~ LotIdCell ~ isPlannedYesterday:", isPlannedYesterday);
     const { handleShowHistory = noop, handleShowMergeHistory = noop } =
         useContext(TableActionsContext);
 
     if (!splitInfo && !mergeInfo) {
-        return <span className="font-mono">{lotId}</span>;
+        return (
+            <span className="font-mono">
+                {isPlannedYesterday && (
+                    <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
+                        past
+                    </span>
+                )}
+                {lotId}
+            </span>
+        );
     }
 
     return (
         <span className="flex items-center justify-between gap-1.5">
-            <div className="font-mono">{lotId}</div>
+            <div className="font-mono">
+                {isPlannedYesterday && (
+                    <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
+                        past
+                    </span>
+                )}
+                {lotId}
+            </div>
 
             <div>
                 {splitInfo && (

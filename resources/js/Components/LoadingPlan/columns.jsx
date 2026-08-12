@@ -52,12 +52,13 @@ export const COLUMNS = [
 
     columnHelper.accessor("Lot_Id", {
         header: "Lot ID",
-        size: 180,
+        size: 220,
         cell: (info) => (
             <LotIdCell
                 lotId={info.getValue()}
                 splitInfo={info.row.original.splitInfo}
                 mergeInfo={info.row.original.mergeInfo}
+                isPlannedYesterday={info.row.original.isLeaked}
             />
         ),
     }),

@@ -55,9 +55,9 @@ class LoadingPlanEntryService
 
             if ($entryType === 'lot') {
                 app(LotScheduleCalculator::class, [
-                    'date' => $date,
+                    'dates' => [$date],
                     'lotIds' => [$lotId],
-                ])->recalculate($lotId, $date, machineOverride: $machineId);
+                ])->recalculateAndRetime($lotId, $date, $machineId);
             }
 
             return $entry->fresh('machineModel');
@@ -68,6 +68,7 @@ class LoadingPlanEntryService
     {
         return DB::transaction(function () use ($entryType, $lotId, $entryId, $targetMachine, $beforeEntryId, $afterEntryId, $date) {
             $entry = $this->resolveEntry($entryType, $lotId, $entryId, $date);
+            $sourceMachineId = $entry->machine_id;
             $this->assertNotFinalized($entry);
 
             $targetMachineId = $this->resolveMachineId($targetMachine);
@@ -96,15 +97,35 @@ class LoadingPlanEntryService
             ]);
 
             if ($entryType === 'lot') {
-                app(LotScheduleCalculator::class, [
-                    'date' => $date,
-                    'lotIds' => [$lotId],
-                ])->recalculate($lotId, $date, machineOverride: $targetMachine);
+                app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])
+                    ->recalculateAndRetime($lotId, $date, $targetMachineId);
+
+                if ($sourceMachineId && $sourceMachineId !== $targetMachineId) {
+                    $sourceRestart = $this->findFirstRemainingRow($sourceMachineId, $date);
+                    if ($sourceRestart) {
+                        app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($sourceRestart, $sourceMachineId);
+                    }
+                }
             }
 
             return $entry->fresh('machineModel');
         });
     }
+
+    /**
+     * The first row remaining on $machineId for $scheduledDate, in sequence
+     * order — used after a lot is removed from this machine (e.g. via
+     * transferEntry) to find where to restart the timing walk. Returns null
+     * if the machine now has no rows left for this date at all.
+     */
+    public function findFirstRemainingRow(int $machineId, string $scheduledDate): ?LoadingPlanEntry
+    {
+        return LoadingPlanEntry::where('machine_id', $machineId)
+            ->where('scheduled_date', $scheduledDate)
+            ->orderBy('sequence_order')
+            ->first();
+    }
+
 
     public function addBlock(string $machine, string $date, string $label, int $durationMinutes, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
     {
@@ -205,7 +226,7 @@ class LoadingPlanEntryService
 
             $updated = collect();
 
-            $calculator = new LotScheduleCalculator($date, $lotIds);
+            $calculator = new LotScheduleCalculator([$date], $lotIds);
 
             foreach ($movers as $entry) {
                 $this->assertNotFinalized($entry);
@@ -217,7 +238,7 @@ class LoadingPlanEntryService
                 ]);
 
                 if ($entry->entry_type === 'lot') {
-                    $calculator->recalculate($entry->lot_id, $date, machineOverride: $targetMachine);
+                    $calculator->recalculateAndRetime($entry->lot_id, $date, $targetMachineId);
                 }
 
                 $updated->push($entry->fresh('machineModel'));
@@ -303,7 +324,7 @@ class LoadingPlanEntryService
 
             $updated = collect();
 
-            $calculator = new LotScheduleCalculator($date, $lotIds);
+            $calculator = new LotScheduleCalculator([$date], $lotIds);
 
             \Log::info('calculator', ['mb_start_for_loop' => memory_get_usage(true) / 1048576]);
 
@@ -325,7 +346,7 @@ class LoadingPlanEntryService
                 ]);
 
                 if ($entry->entry_type === 'lot') {
-                    $calculator->recalculate($entry->lot_id, $date, machineOverride: $targetMachineCode);
+                    $calculator->recalculateAndRetime($entry->lot_id, $date, $targetMachineId);
                 }
 
                 $updated->push($entry->fresh('machineModel'));
@@ -430,9 +451,9 @@ class LoadingPlanEntryService
             ]);
 
             app(LotScheduleCalculator::class, [
-                'date' => $date,
+                'dates' => [$date],
                 'lotIds' => [$lotId],
-            ])->recalculate($lotId, $date, machineOverride: $machine);
+            ])->recalculateAndRetime($lotId, $date, $machineId);
 
             return $entry;
         });
@@ -502,7 +523,8 @@ class LoadingPlanEntryService
 
             $row->save();
 
-            app(LotScheduleCalculator::class)->recalculate($lotId, $date, $fields['part_name'] ?? null);
+            app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])
+                ->recalculateAndRetime($lotId, $date, $existing->machine_id);
         }
 
         return LoadingPlanEntry::findOrFail($existing->id);
@@ -519,7 +541,7 @@ class LoadingPlanEntryService
             $lotIds = collect($updates)->pluck('lot_id')->filter()->unique()->values()->all();
             $date = $updates[0]['scheduled_date'] ?? null; // this assumes that all updates shares exactly one scheduled_date
 
-            $calc = app(LotScheduleCalculator::class, ['date' => $date, 'lotIds' => $lotIds]);
+            $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
 
             foreach ($updates as $u) {
                 $id = $u['id'] ?? null;
@@ -551,7 +573,7 @@ class LoadingPlanEntryService
 
                         $row->save();
 
-                        $calc->recalculate($lotId, $scheduledDate, $fields['part_name'] ?? null);
+                        $calc->recalculateAndRetime($lotId, $scheduledDate, $affected->machine_id);
                     }
 
                     $entries[] = LoadingPlanEntry::find($id);
@@ -589,7 +611,7 @@ class LoadingPlanEntryService
 
                         $row->save();
 
-                        $calc->recalculate($lotId, $scheduledDate, $fields['part_name'] ?? null);
+                        // $calc->recalculateAndRetime($lotId, $scheduledDate, $affected->machine_id);
                     }
                 } catch (\Illuminate\Database\QueryException $e) {
                     $existing = LoadingPlanEntry::where('lot_id', $lotId)
@@ -615,7 +637,7 @@ class LoadingPlanEntryService
 
                         $row->save();
 
-                        $calc->recalculate($lotId, $scheduledDate, $fields['part_name'] ?? null);
+                        $calc->recalculateAndRetime($lotId, $scheduledDate, $existing->machine_id);
                     }
 
                     $entries[] = $existing->fresh();
@@ -858,13 +880,13 @@ class LoadingPlanEntryService
             ->values()
             ->all();
 
-        $calc = app(LotScheduleCalculator::class, ['date' => $date, 'lotIds' => $lotIds]);
+        $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
 
         // bulk SQL update above doesn't touch lot_quantities — refresh capacity
         // for every lot entry that just changed machine.
         foreach ($resolvedPlacements as $p) {
             if ($p['entry_type'] === 'lot') {
-                $calc->recalculate($p['lot_id'], $date, machineOverride: $machine);
+                $calc->recalculateAndRetime($p['lot_id'], $date, $machineId);
             }
         }
 
