@@ -466,6 +466,7 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
+    machineDayStarts,
     disseminationSummary,
     machineCapacity,
     partnameMismatches,
@@ -475,10 +476,11 @@ export default function LoadingPlanTable({
     packageGroupNames,
     packageGroups,
     status,
-    baseTimes = {},
+    baseTimes,
     onLotTransfer,
     onReorder,
 }) {
+    console.log("🚀 ~ LoadingPlanTable ~ serverMachines:", serverMachines);
     console.log("🚀 ~ LoadingPlanTable ~ machineCapacity:", machineCapacity);
     console.log("🚀 ~ packageGroups ~ packageGroups:", packageGroups);
     console.log("🚀 ~ LoadingPlanTable ~ packages:", packageGroupNames);
@@ -793,6 +795,8 @@ export default function LoadingPlanTable({
     const handleBulkTransfer = useCallback(
         (targetMachine) => {
             const selectedRows = data.filter((r) => selectedIds.has(r._dndId));
+            console.log("🚀 ~ LoadingPlanTable ~ selectedRows:", selectedRows);
+            console.log("🚀 ~ LoadingPlanTable ~ selectedRows:", selectedRows);
             const lotIds = selectedRows
                 .filter((r) => !isBlockRow(r) && r.Lot_Id)
                 .map((r) => r.Lot_Id);
@@ -836,6 +840,10 @@ export default function LoadingPlanTable({
                                             ? e.id === r.entryId
                                             : e.lot_id === r.Lot_Id,
                                     );
+                                    console.log(
+                                        "🚀 ~ AD AS AS AS ~ match:",
+                                        match,
+                                    );
                                     return match
                                         ? {
                                               ...r,
@@ -843,15 +851,20 @@ export default function LoadingPlanTable({
                                               sequenceOrder:
                                                   match.sequence_order,
                                               lockVersion: match.lock_version,
+                                              accuTime: match.accu_time,
+                                              machine: targetMachine,
+                                              timeStart: match.time_start,
+                                              timeEnd: match.time_end,
                                           }
                                         : r;
                                 }),
                             true, // skipHistory — server-sync bookkeeping, not a new user action
                         );
                     })
-                    .catch((err) =>
-                        console.error("Bulk transfer failed:", err),
-                    );
+                    .catch((err) => {
+                        console.error("Bulk transfer failed:", err);
+                        toast?.error?.(error);
+                    });
             }
         },
         [selectedIds, update, baseTimes, clearSelection, data, date],

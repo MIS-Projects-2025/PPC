@@ -5,7 +5,7 @@ namespace App\Services;
 class PackageGroups
 {
     public const GROUPS = [
-        // 'RN' => ['QSOP', 'QSOP_EP', 'SOIC_N', 'SOIC_N_EP'],
+        'RN' => ['QSOP', 'QSOP_EP', 'SOIC_N', 'SOIC_N_EP'],
         // 'MSOP' => ['MINI_SO', 'MINI_SO_EP'],
         // 'QFP/BGA' => [
         //     'BGA',

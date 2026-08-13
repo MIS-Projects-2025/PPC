@@ -1,11 +1,47 @@
 import { useEffect, useRef, useState } from "react";
 import { MdChevronLeft, MdChevronRight } from "react-icons/md";
 
+const STORAGE_KEY = "loadingPlan:packageTabs:active";
+
 export default function PackageTabs({ packages, active, onChange }) {
     const scrollRef = useRef(null);
     const tabRefs = useRef(new Map());
     const [canScrollLeft, setCanScrollLeft] = useState(false);
     const [canScrollRight, setCanScrollRight] = useState(false);
+    const didInit = useRef(false);
+
+    // On mount, restore the last active tab from localStorage.
+    // If nothing is stored, or the stored value isn't a current package,
+    // fall back to the last package in the list.
+    useEffect(() => {
+        if (didInit.current) return;
+        if (!packages || packages.length === 0) return;
+        didInit.current = true;
+
+        let stored = null;
+        try {
+            stored = localStorage.getItem(STORAGE_KEY);
+        } catch {
+            // localStorage unavailable (e.g. private/incognito mode) - ignore
+        }
+
+        const isValid = stored && packages.includes(stored);
+        const next = isValid ? stored : packages[packages.length - 1];
+
+        if (next !== active) {
+            onChange(next);
+        }
+    }, [packages]);
+
+    // Persist active tab whenever it changes.
+    useEffect(() => {
+        if (!active) return;
+        try {
+            localStorage.setItem(STORAGE_KEY, active);
+        } catch {
+            // ignore write failures
+        }
+    }, [active]);
 
     const updateScrollState = () => {
         const el = scrollRef.current;

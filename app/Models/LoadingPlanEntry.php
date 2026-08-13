@@ -23,6 +23,8 @@ class LoadingPlanEntry extends Model
         'remarks',
         'block_label',
         'accu_time',
+        'time_start',
+        'time_end',
         'lock_version',
         'machine_snapshot',
         'doable_snapshot',
@@ -33,6 +35,8 @@ class LoadingPlanEntry extends Model
         'scheduled_date' => 'date',
         'sequence_order' => 'float',
         'finalized_at'   => 'datetime',
+        'time_start'     => 'datetime',
+        'time_end'       => 'datetime',
     ];
 
     /**
