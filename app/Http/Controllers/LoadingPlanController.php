@@ -42,8 +42,39 @@ class LoadingPlanController extends Controller
 
         $activeMachines = QdnMachine::active()
             ->where('location', $selectedLocation)
-            ->select('machine_num', 'machine_platform', 'location')
+            ->select('id', 'machine_num', 'machine_platform', 'location')
+            ->get();
+
+        $machineDayStarts = DB::table('machine_day_starts')
+            ->whereIn('machine_id', $activeMachines->pluck('id'))
+            ->where('scheduled_date', $date)
             ->get()
+            ->keyBy('machine_id');
+
+        $machinesNeedingFallback = $activeMachines
+            ->pluck('id')
+            ->diff($machineDayStarts->keys());
+
+        $leakedPredecessorEnds = LoadingPlanEntry::whereIn('machine_id', $machinesNeedingFallback)
+            ->where('scheduled_date', '<', $date)
+            ->whereNotNull('time_end')
+            ->orderBy('scheduled_date', 'desc')
+            ->orderBy('sequence_order', 'desc')
+            ->get()
+            ->unique('machine_id') // first row per machine after the above ordering = most recent
+            ->keyBy('machine_id');
+
+        $baseTimes = $activeMachines
+            ->mapWithKeys(function ($machine) use ($machineDayStarts, $leakedPredecessorEnds) {
+                $anchor = $machineDayStarts->get($machine->id)?->day_start_time
+                    ?? $leakedPredecessorEnds->get($machine->id)?->time_end?->format('H:i:s');
+
+                return [$machine->machine_num => $anchor];
+            })
+            ->filter() // still drop machines with genuinely nothing — brand new, no history at all
+            ->all();
+
+        $activeMachines = $activeMachines
             ->map(fn($machine) => [
                 'name' => $machine->machine_num,
                 'platform' => match (strtoupper($machine->machine_platform)) {
@@ -53,6 +84,7 @@ class LoadingPlanController extends Controller
                     default => $machine->machine_platform,
                 },
                 'location' => $machine->location,
+                'dayStartTime' => $machineDayStarts->get($machine->id)?->day_start_time,
             ])
             ->values();
 
@@ -140,6 +172,7 @@ class LoadingPlanController extends Controller
             'data'             => $result,
             'date'             => $date,
             'machines'         => $activeMachines,
+            'baseTimes'        => $baseTimes,
             'packageGroupNames' => $packages,
             'packageGroups'    => PackageGroups::GROUPS,
             'selectedLocation' => $selectedLocation,
@@ -402,6 +435,8 @@ class LoadingPlanController extends Controller
                 'doableRecipeSource'  => $doableRecipeSource,
                 'Capacity_UPH'        => $capacityUph,
                 'accuTime'            => $accuTime,
+                'timeStart'           => $entry->time_start ?? null,
+                'timeEnd'             => $entry->time_end ?? null,
                 'CT'                  => $ct,
                 'OSL'                 => $osl,
                 'Remarks'             => $entry->remarks ?? null,
@@ -506,6 +541,8 @@ class LoadingPlanController extends Controller
                 'doableRecipeSource'  => $doableRecipeSource,
                 'Capacity_UPH'        => $capacityUph,
                 'accuTime'            => $entry->accu_time,
+                'timeStart'           => $entry->time_start ?? null,
+                'timeEnd'             => $entry->time_end ?? null,
                 'Remarks'             => $entry->remarks ?? null,
                 'tag'                 => $entry->tag ?? null,
                 'lockVersion'         => $entry->lock_version,
@@ -552,6 +589,8 @@ class LoadingPlanController extends Controller
                 'doableRecipeSource'  => null,
                 'Capacity_UPH'        => null,
                 'accuTime'            => $entry->accu_time,
+                'timeStart'           => $entry->time_start ?? null,
+                'timeEnd'             => $entry->time_end ?? null,
                 'Remarks'             => null,
                 'tag'                 => null,
                 'lockVersion'         => $entry->lock_version,

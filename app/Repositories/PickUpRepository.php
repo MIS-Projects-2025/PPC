@@ -71,9 +71,9 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '>=', $startDate)
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) use ($factory) {
-        $q->select('Partname')
+        $q->select('devicename')
           ->from(self::PART_NAME_TABLE)
-          ->where('Factory', $factory);
+          ->where('areas', $factory);
       })
       ->whereExists(function ($q) use ($pl) {
         $q->select(DB::raw(1))

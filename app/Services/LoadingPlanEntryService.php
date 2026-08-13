@@ -137,7 +137,7 @@ class LoadingPlanEntryService
             $rows = $this->lockMachineRows([$machineId], $date);
             $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
 
-            return LoadingPlanEntry::create([
+            $entry = LoadingPlanEntry::create([
                 'entry_type'      => 'block',
                 'lot_id'          => null,
                 'scheduled_date'  => $date,
@@ -147,17 +147,28 @@ class LoadingPlanEntryService
                 'accu_time'       => $durationMinutes,
                 'lock_version'    => 1,
             ]);
+
+            $calc = app(LotScheduleCalculator::class);
+            $calc->recomputeTimeStartAndEnd($entry, $machineId);
+
+            if ($calc->findPredecessor($entry) === null) {
+                DB::table('machine_day_starts')->updateOrInsert(
+                    ['machine_id' => $machineId, 'scheduled_date' => $date],
+                    ['day_start_time' => $entry->fresh()->time_start->format('H:i:s'), 'updated_at' => now()]
+                );
+            }
+
+            return $entry->fresh();
         });
     }
 
     public function deleteEntry(int $id, ?string $machine, string $date, bool $forceDelete = false): void
     {
         DB::transaction(function () use ($id, $machine, $date, $forceDelete) {
-            if ($machine) {
-                $machineId = $this->resolveMachineId($machine);
-                if ($machineId) {
-                    $this->lockMachineRows([$machineId], $date);
-                }
+            $machineId = $machine ? $this->resolveMachineId($machine) : null;
+
+            if ($machineId) {
+                $this->lockMachineRows([$machineId], $date);
             }
 
             $entry = LoadingPlanEntry::where('id', $id)
@@ -170,16 +181,25 @@ class LoadingPlanEntryService
 
             $this->assertNotFinalized($entry);
 
+            $vacatedMachineId = $entry->machine_id;
+
             if ($forceDelete || $entry->entry_type === 'block') {
                 $entry->delete();
-                return;
+            } else {
+                $entry->update([
+                    'machine_id'     => null,
+                    'sequence_order' => null,
+                    'lock_version'   => DB::raw('lock_version + 1'),
+                ]);
             }
 
-            $entry->update([
-                'machine_id'     => null,
-                'sequence_order' => null,
-                'lock_version'   => DB::raw('lock_version + 1'),
-            ]);
+            if ($vacatedMachineId) {
+                $calc = app(LotScheduleCalculator::class);
+                $restart = $this->findFirstRemainingRow($vacatedMachineId, $date);
+                if ($restart) {
+                    $calc->recomputeTimeStartAndEnd($restart, $vacatedMachineId);
+                }
+            }
         });
     }
 
@@ -263,7 +283,7 @@ class LoadingPlanEntryService
 
                 $calculator->recalculateAndRetime($lotId, $date, $targetMachineId);
 
-                $updated->push($entry);
+                $updated->push($entry->fresh('machineModel'));
                 $nextSeq += self::GAP_SEED;
             }
 
@@ -413,6 +433,18 @@ class LoadingPlanEntryService
                 ]);
             }
 
+            // every affected machine now has one or more rows removed/vacated —
+            // retime each from whatever's now its first-remaining row
+            if (!empty($machines)) {
+                $calc = app(LotScheduleCalculator::class);
+                foreach ($machines as $machineId) {
+                    $restart = $this->findFirstRemainingRow($machineId, $date);
+                    if ($restart) {
+                        $calc->recomputeTimeStartAndEnd($restart, $machineId);
+                    }
+                }
+            }
+
             // avoid a fresh() query per row — we already know the new values
             $unassigned = $others->map(function ($entry) {
                 $entry->machine_id = null;
@@ -469,20 +501,30 @@ class LoadingPlanEntryService
 
     public function editField(int $id, array $fields, int $expectedLockVersion): LoadingPlanEntry
     {
+        $existing = LoadingPlanEntry::find($id);
+
         $affected = LoadingPlanEntry::where('id', $id)
             ->where('lock_version', $expectedLockVersion)
             ->whereNull('finalized_at')
             ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
 
         if ($affected === 0) {
-            $entry = LoadingPlanEntry::find($id);
-            if ($entry && $entry->finalized_at !== null) {
-                throw new LoadingPlanDateFinalizedException($entry->scheduled_date, $entry->id);
+            if ($existing && $existing->finalized_at !== null) {
+                throw new LoadingPlanDateFinalizedException($existing->scheduled_date, $existing->id);
             }
-            throw new StaleWriteException($entry);
+            throw new StaleWriteException($existing);
         }
 
-        return LoadingPlanEntry::findOrFail($id);
+        $entry = LoadingPlanEntry::findOrFail($id);
+
+        // accu_time changes need to cascade — anything else (remarks, tag,
+        // status) doesn't affect timing at all
+        if (array_key_exists('accu_time', $fields) && $entry->machine_id !== null) {
+            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $entry->machine_id);
+            $entry = $entry->fresh();
+        }
+
+        return $entry;
     }
 
     public function editLotField(string $lotId, string $date, array $fields, ?int $expectedLockVersion): LoadingPlanEntry

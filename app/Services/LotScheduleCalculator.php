@@ -91,6 +91,8 @@ class LotScheduleCalculator
      */
     public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, int $machineId): void
     {
+        $scheduledDate = $affectedEntry->scheduled_date->toDateString();
+
         DB::table('loading_plan_entries')
             ->where('machine_id', $machineId)
             ->where('scheduled_date', '>=', $affectedEntry->scheduled_date)
@@ -99,10 +101,12 @@ class LotScheduleCalculator
 
         $predecessor = $this->findPredecessor($affectedEntry);
 
-        $cursor = $predecessor
-            ? $predecessor->time_end
-            : $this->getOrCreateDayStart($machineId, $affectedEntry->scheduled_date);
+        // $test = $this->getOrCreateDayStart($machineId, $sch0eduledDate);
 
+        $cursor = ($predecessor && $predecessor->time_end !== null)
+            ? $predecessor->time_end
+            : $this->getOrCreateDayStart($machineId, $scheduledDate);
+        // var_dump('predecessor:', $predecessor?->id, $predecessor?->time_end, 'cursor:', $cursor);
         $current = $affectedEntry;
 
         while ($current !== null) {
@@ -133,7 +137,7 @@ class LotScheduleCalculator
      * session. Returns null if $entry is genuinely the first row this machine
      * has ever had.
      */
-    private function findPredecessor(LoadingPlanEntry $entry): ?LoadingPlanEntry
+    public function findPredecessor(LoadingPlanEntry $entry): ?LoadingPlanEntry
     {
         return LoadingPlanEntry::where('machine_id', $entry->machine_id)
             ->where(function ($q) use ($entry) {
@@ -169,11 +173,11 @@ class LotScheduleCalculator
     }
 
     /**
-     * The stored real start time for a machine's session on a given date.
-     * Written once, the first time a row is placed for that machine+date
-     * with no prior row — never overwritten after.
+     * If this machine+date already has a stored start, returns it. Otherwise,
+     * this is genuinely the first row ever placed for this machine+date — its
+     * own chosen/computed start time becomes the stored anchor going forward.
      */
-    private function getOrCreateDayStart(int $machineId, string $scheduledDate): Carbon
+    private function getOrCreateDayStart(int $machineId, string $scheduledDate, ?Carbon $firstLotStart = null): Carbon
     {
         $row = DB::table('machine_day_starts')
             ->where('machine_id', $machineId)
@@ -184,20 +188,20 @@ class LotScheduleCalculator
             return Carbon::parse("{$scheduledDate} {$row->day_start_time}");
         }
 
-        // No stored start yet — this is genuinely the first row ever placed
-        // for this machine+date. Default anchor; adjust to your actual
-        // convention (e.g. midnight, or a user-chosen time from the UI).
-        $default = Carbon::parse("{$scheduledDate} 00:00:00");
+        // No predecessor row exists on ANY prior date for this machine either —
+        // this really is the very first lot this machine has ever had. Anchor
+        // to midnight only in that bootstrap case.
+        $anchor = $firstLotStart ?? Carbon::parse("{$scheduledDate} 00:00:00");
 
         DB::table('machine_day_starts')->insert([
             'machine_id' => $machineId,
             'scheduled_date' => $scheduledDate,
-            'day_start_time' => $default->format('H:i:s'),
+            'day_start_time' => $anchor->format('H:i:s'),
             'created_at' => now(),
             'updated_at' => now(),
         ]);
 
-        return $default;
+        return $anchor;
     }
 
     private function recalculate(string $lotId, string $scheduledDate, ?string $machineName, ?string $newPartName = null): void
