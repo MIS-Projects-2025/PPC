@@ -57,64 +57,79 @@ class BulkUpserter
     $inserted = [];
     $updated = [];
 
-    DB::transaction(function () use ($rows, &$errors, &$updated, &$inserted) {
-      foreach ($rows as $row) {
-        $id = $row['id'] ?? null;
-        $fields = $row;
-        if (empty($fields)) continue;
-        $isNew = $this->isNewRow($id);
+    $connectionName = $this->model->getConnectionName();
 
-        Log::info(($isNew ? "Inserting" : "Updating") . " row: " . json_encode($fields));
+    try {
+      DB::connection($connectionName)->transaction(function () use ($rows, &$errors, &$updated, &$inserted) {
+        foreach ($rows as $index => $row) {
+          $id = $row['id'] ?? null;
+          $fields = $row;
+          if (empty($fields)) continue;
+          $isNew = $this->isNewRow($id);
 
-        // $modelInstance = $this->model->find($id);
-        // if (!$modelInstance) continue;
+          Log::info(($isNew ? "Inserting" : "Updating") . " row: " . json_encode($fields));
 
-        $fieldsForValidation = $fields;
+          $fieldsForValidation = $fields;
 
-        foreach ($fieldsForValidation as $column => $value) {
-          if (isset($this->columnHandlers[$column]) && is_callable($this->columnHandlers[$column])) {
-            $fieldsForValidation[$column] = call_user_func($this->columnHandlers[$column], $value);
+          foreach ($fieldsForValidation as $column => $value) {
+            if (isset($this->columnHandlers[$column]) && is_callable($this->columnHandlers[$column])) {
+              $fieldsForValidation[$column] = call_user_func($this->columnHandlers[$column], $value);
+            }
+          }
+
+          $rules = [];
+          foreach ($this->columnRules as $column => $rule) {
+            $rules[$column] = $rule instanceof \Closure
+              ? $rule($isNew ? null : $id, $fieldsForValidation)
+              : $rule;
+          }
+
+          $validator = Validator::make(
+            $fieldsForValidation,
+            $rules,
+            [
+              '*.integer' => 'Invalid value :input for column :attribute. Must be an integer.',
+              '*.string' => 'Invalid value :input for column :attribute. Must be a string.',
+              '*.date' => 'Invalid date :input for column :attribute.',
+              '*.exists' => 'Value :input for column :attribute does not exist.',
+              '*.unique' => 'Value :input for column :attribute already exists.',
+            ],
+            $this->attributeNames
+          );
+
+          if ($validator->fails()) {
+            // keyed by index, not $id — avoids collisions since new rows
+            // share id === null / 'new-x' placeholders
+            $errors[$index] = $validator->errors()->messages();
+            continue;
+          }
+
+          $normalizedData = $this->normalizeFields($fields);
+
+          if ($isNew) {
+            $modelInstance = $this->model->create($normalizedData);
+            $inserted[] = $modelInstance;
+          } else {
+            $modelInstance = $this->model->find($id);
+            if (!$modelInstance) continue;
+            $modelInstance->update($normalizedData);
+            $updated[] = $modelInstance;
           }
         }
 
-        $rules = [];
-        foreach ($this->columnRules as $column => $rule) {
-          $rules[$column] = $rule instanceof \Closure
-            ? $rule($isNew ? null : $id, $fieldsForValidation)
-            : $rule;
+        // ALL-OR-NOTHING: if any row failed validation, force a rollback
+        // of everything inserted/updated earlier in this same batch.
+        if (!empty($errors)) {
+          throw new \RuntimeException('Validation errors present, rolling back batch.');
         }
-
-        $validator = Validator::make(
-          $fieldsForValidation,
-          $rules,
-          [
-            '*.integer' => 'Invalid value :input for column :attribute. Must be an integer.',
-            '*.string' => 'Invalid value :input for column :attribute. Must be a string.',
-            '*.date' => 'Invalid date :input for column :attribute.',
-            '*.exists' => 'Value :input for column :attribute does not exist.',
-            '*.unique' => 'Value :input for column :attribute already exists.',
-          ],
-          $this->attributeNames
-        );
-
-        $normalizedData = $this->normalizeFields($fields);
-
-        if ($validator->fails()) {
-          $errors[$id] = $validator->errors()->messages();
-          continue;
-        }
-
-        if ($isNew) {
-          $modelInstance = $this->model->create($normalizedData);
-          $inserted[] = $modelInstance;
-        } else {
-          $modelInstance = $this->model->find($id);
-          if (!$modelInstance) continue;
-          $modelInstance->update($normalizedData);
-          $updated[] = $modelInstance;
-        }
-      }
-    });
+      });
+    } catch (\RuntimeException $e) {
+      // Transaction was rolled back — nothing in this batch was actually
+      // persisted, so clear these out even though objects were appended
+      // to them during the (now-undone) transaction.
+      $inserted = [];
+      $updated = [];
+    }
 
     if (!empty($errors)) {
       $maxErrorRows = 20;
@@ -123,8 +138,7 @@ class BulkUpserter
         foreach ($columns as $column => $messages) {
           foreach ($messages as $msg) {
 
-            $cleanMsg = str_replace($column, $column, $msg);
-            $errorMessages[] = "Row " . ($rowId ?? '?') . ": {$cleanMsg}";
+            $errorMessages[] = "Row " . ($rowId ?? '?') . ": {$msg}";
 
             if (count($errorMessages) >= $maxErrorRows) {
               break 3;

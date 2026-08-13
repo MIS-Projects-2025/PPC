@@ -17,7 +17,7 @@ trait F3Trait
   use NormalizeStringTrait;
   public const PACKAGES_TABLE = "f3_package_names";
   public const RAW_PACKAGES = "f3_raw_packages";
-  private const PPC_TABLE = "ppc_productionline_packagereference";
+  // private const PPC_TABLE = "ppc_productionline_packagereference";
   private const EXTERNAL_FILE_HEADERS = [
     "f3.running_ct",
     "f3.date_received",
@@ -106,8 +106,6 @@ trait F3Trait
     }
 
     if ($joinPpc) {
-      // $query->join(self::PPC_TABLE . ' as plref', 'f3_pkg.package_name', '=', 'plref.Package');
-
       if ($joinPpc !== true) {
         $query->where('f3.production_line', $joinPpc);
       }

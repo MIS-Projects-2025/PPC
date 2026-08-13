@@ -6,6 +6,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use App\Exceptions\InvalidDateRangeException;
+use App\Exceptions\LoadingPlanDateFinalizedException;
 use Illuminate\Session\Middleware\StartSession;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -24,6 +25,17 @@ return Application::configure(basePath: dirname(__DIR__))
                     'type'    => get_class($e),
                 ], 400);
             }
+
+            if ($e instanceof LoadingPlanDateFinalizedException) {
+                return response()->json([
+                    'status'         => 'error',
+                    'message'        => $e->getMessage(),
+                    'type'           => get_class($e),
+                    'scheduled_date' => $e->scheduledDate,
+                    'entry_id'       => $e->entryId,
+                ], 422);
+            }
+
             if ($request->is('api/*')) {
                 $status = 500;
                 if ($e instanceof HttpException) {
