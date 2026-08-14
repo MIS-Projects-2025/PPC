@@ -142,4 +142,15 @@ class LoadingPlanEntry extends Model
     //         $this->capacity_uph_snapshot = $fresh;
     //     }
     // }
+
+    public static function findOrFailNotFinalized(int $id): self
+    {
+        $entry = static::where('id', $id)->lockForUpdate()->firstOrFail();
+
+        if ($entry->is_finalized) {
+            throw new \RuntimeException("Loading plan entry for the lot is already finalized.");
+        }
+
+        return $entry;
+    }
 }

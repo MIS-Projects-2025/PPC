@@ -65,12 +65,12 @@ class LotMergeService
             $targetEntry = LoadingPlanEntry::where('lot_id', $targetLotId)->where('scheduled_date', $date)->first();
             $calc->recalculateAndRetime($targetLotId, $date, $targetEntry->machine_id);
             $targetEntry = $targetEntry->fresh();
-            $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $date);
+            $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId());
 
             $sourceEntry = LoadingPlanEntry::where('lot_id', $sourceLotId)->where('scheduled_date', $date)->first();
             $calc->recalculateAndRetime($sourceLotId, $date, $sourceEntry->machine_id);
             $sourceEntry = $sourceEntry->fresh();
-            $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $date);
+            $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId());
 
             $targetEntry->mergeInfo = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $sourceLotId];
             $sourceEntry->mergeInfo = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $targetLotId];
@@ -121,14 +121,14 @@ class LotMergeService
             if ($targetEntry) {
                 $calc->recalculateAndRetime($merge->target_lot_id, $date, $targetEntry->machine_id);
                 $targetEntry = $targetEntry->fresh();
-                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $date);
+                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId());
                 $targetEntry->mergeInfo = null;
             }
 
             if ($sourceEntry) {
                 $calc->recalculateAndRetime($merge->source_lot_id, $date, $sourceEntry->machine_id);
                 $sourceEntry = $sourceEntry->fresh();
-                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $date);
+                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId());
                 $sourceEntry->mergeInfo = null;
             }
 
@@ -176,14 +176,14 @@ class LotMergeService
             if ($targetEntry) {
                 $calc->recalculateAndRetime($merge->target_lot_id, $date, $targetEntry->machine_id);
                 $targetEntry = $targetEntry->fresh();
-                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId(), $date);
+                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId());
                 $targetEntry->mergeInfo = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
             }
 
             if ($sourceEntry) {
                 $calc->recalculateAndRetime($merge->source_lot_id, $date, $sourceEntry->machine_id);
                 $sourceEntry = $sourceEntry->fresh();
-                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId(), $date);
+                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId());
                 $sourceEntry->mergeInfo = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
             }
 

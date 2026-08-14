@@ -315,7 +315,7 @@ class LoadingPlanController extends Controller
         Collection $allEntries,
     ): \Illuminate\Support\Collection {
         $activeSplits = \App\Models\LotSplit::active()
-            ->where('scheduled_date', $date)
+            ->whereIn('scheduled_date', [$date, $previousDate])
             ->get();
 
         $splitsByParent = $activeSplits->groupBy('parent_lot_id');
@@ -329,7 +329,9 @@ class LoadingPlanController extends Controller
             return $location === null || $location === $selectedLocation;
         });
 
-        $activeMerges = \App\Models\LotMerge::active()->where('scheduled_date', $date)->get();
+        $activeMerges = \App\Models\LotMerge::active()
+            ->whereIn('scheduled_date', [$date, $previousDate])
+            ->get();
         $mergesByTarget = $activeMerges->groupBy('target_lot_id');
         $mergesBySource = $activeMerges->keyBy('source_lot_id');
 

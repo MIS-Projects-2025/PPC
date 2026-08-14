@@ -10,6 +10,7 @@ use App\Models\LoadingPlanEntry;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
 use App\Models\CustomerDataWip;
+use Exception;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
@@ -28,46 +29,50 @@ class LoadingPlanEntryService
         $this->machineIdByNum = QdnMachine::pluck('id', 'machine_num')->all();
     }
 
-    public function resolveEntry(string $entryType, string|int|null $lotId, ?int $entryId, string $date): LoadingPlanEntry
+    public function resolveEntry(int $entryId): LoadingPlanEntry
     {
-        return $entryType === 'block'
-            ? LoadingPlanEntry::with('machineModel')->where('id', $entryId)
-            ->where('entry_type', 'block')
-            ->where('scheduled_date', $date)
-            ->firstOrFail()
-            : LoadingPlanEntry::with('machineModel')->where('lot_id', $lotId)
-            ->where('scheduled_date', $date)
-            ->firstOrFail();
+        if ($entryId !== null) {
+            return LoadingPlanEntry::with('machineModel')
+                ->where('id', $entryId)
+                ->firstOrFail();
+        }
+
+        throw new Exception("The lot was not found.");
     }
 
-    public function moveEntry(string $entryType, ?string $lotId, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine, string $date): LoadingPlanEntry
+    public function moveEntry(string $entryType, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine): LoadingPlanEntry
     {
-        return DB::transaction(function () use ($entryType, $lotId, $entryId, $beforeEntryId, $afterEntryId, $machine, $date) {
-            $entry = $this->resolveEntry($entryType, $lotId, $entryId, $date);
+        return DB::transaction(function () use ($entryType, $entryId, $beforeEntryId, $afterEntryId, $machine) {
+            $entry = $this->resolveEntry($entryId);
             $this->assertNotFinalized($entry);
+
+            $resolvedDate = $entry->scheduled_date->toDateString();
 
             $machineId = $this->resolveMachineId($machine);
 
-            $rows = $this->lockMachineRows([$machineId], $date);
-            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
+            $rows = $this->lockMachineRows([$machineId], $resolvedDate);
+            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $resolvedDate);
 
             $entry->update(['sequence_order' => $newOrder, 'lock_version' => DB::raw('lock_version + 1')]);
 
             if ($entryType === 'lot') {
                 app(LotScheduleCalculator::class, [
-                    'dates' => [$date],
-                    'lotIds' => [$lotId],
-                ])->recalculateAndRetime($lotId, $date, $machineId);
+                    'dates' => [$resolvedDate],
+                    'lotIds' => [$entry->lot_id],
+                ])->recalculateAndRetime($entry->lot_id, $resolvedDate, $machineId);
             }
 
             return $entry->fresh('machineModel');
         });
     }
 
-    public function transferEntry(string $entryType, ?string $lotId, ?int $entryId, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId, string $date): LoadingPlanEntry
+    public function transferEntry(string $entryType, ?int $entryId, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
     {
-        return DB::transaction(function () use ($entryType, $lotId, $entryId, $targetMachine, $beforeEntryId, $afterEntryId, $date) {
-            $entry = $this->resolveEntry($entryType, $lotId, $entryId, $date);
+        return DB::transaction(function () use ($entryType, $entryId, $targetMachine, $beforeEntryId, $afterEntryId) {
+            $entry = $this->resolveEntry($entryId);
+
+            $resolvedDate = $entry->scheduled_date->toDateString();
+
             $sourceMachineId = $entry->machine_id;
             $this->assertNotFinalized($entry);
 
@@ -80,14 +85,14 @@ class LoadingPlanEntryService
                 ->values()
                 ->all();
 
-            $rows = $this->lockMachineRows($machinesToLock, $date);
+            $rows = $this->lockMachineRows($machinesToLock, $resolvedDate);
 
             $newOrder = $this->resolveSequenceOrder(
                 $rows->where('machine_id', $targetMachineId),
                 $beforeEntryId,
                 $afterEntryId,
                 $targetMachine,
-                $date,
+                $resolvedDate,
             );
 
             $entry->update([
@@ -97,11 +102,11 @@ class LoadingPlanEntryService
             ]);
 
             if ($entryType === 'lot') {
-                app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])
-                    ->recalculateAndRetime($lotId, $date, $targetMachineId);
+                app(LotScheduleCalculator::class, ['dates' => [$resolvedDate], 'lotIds' => [$entry->lot_id]])
+                    ->recalculateAndRetime($entry->lot_id, $resolvedDate, $targetMachineId);
 
                 if ($sourceMachineId && $sourceMachineId !== $targetMachineId) {
-                    $sourceRestart = $this->findFirstRemainingRow($sourceMachineId, $date);
+                    $sourceRestart = $this->findFirstRemainingRow($sourceMachineId, $resolvedDate);
                     if ($sourceRestart) {
                         app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($sourceRestart, $sourceMachineId);
                     }
@@ -118,14 +123,13 @@ class LoadingPlanEntryService
      * transferEntry) to find where to restart the timing walk. Returns null
      * if the machine now has no rows left for this date at all.
      */
-    public function findFirstRemainingRow(int $machineId, string $scheduledDate): ?LoadingPlanEntry
+    public function findFirstRemainingRow(int $machineId, string $date): ?LoadingPlanEntry
     {
         return LoadingPlanEntry::where('machine_id', $machineId)
-            ->where('scheduled_date', $scheduledDate)
+            ->where('scheduled_date', $date)
             ->orderBy('sequence_order')
             ->first();
     }
-
 
     public function addBlock(string $machine, string $date, string $label, int $durationMinutes, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
     {
@@ -162,18 +166,17 @@ class LoadingPlanEntryService
         });
     }
 
-    public function deleteEntry(int $id, ?string $machine, string $date, bool $forceDelete = false): void
+    public function deleteEntry(int $id, ?string $machine, bool $forceDelete = false): void
     {
-        DB::transaction(function () use ($id, $machine, $date, $forceDelete) {
+        DB::transaction(function () use ($id, $machine, $forceDelete) {
             $machineId = $machine ? $this->resolveMachineId($machine) : null;
+            $entry = LoadingPlanEntry::where('id', $id)->first();
+            $date = $entry->scheduled_date;
 
             if ($machineId) {
                 $this->lockMachineRows([$machineId], $date);
             }
 
-            $entry = LoadingPlanEntry::where('id', $id)
-                ->where('scheduled_date', $date)
-                ->first();
 
             if (!$entry) {
                 return;
@@ -203,15 +206,15 @@ class LoadingPlanEntryService
         });
     }
 
-    public function bulkTransfer(array $lotIds, array $blockEntryIds, ?string $targetMachine, string $date): Collection
+    public function bulkTransfer(array $entryIds, array $blockEntryIds, ?string $targetMachine, string $date): Collection
     {
-        return DB::transaction(function () use ($lotIds, $blockEntryIds, $targetMachine, $date) {
+        return DB::transaction(function () use ($entryIds, $blockEntryIds, $targetMachine, $date) {
             $this->assertDateNotFinalized($date);
 
             $targetMachineId = $this->resolveMachineId($targetMachine);
             // var_dump("🚀 ~ LoadingPlanEntryService ~ bulkTransfer ~ $targetMachineId:", $targetMachineId);
 
-            $lotEntries = LoadingPlanEntry::with('machineModel')->whereIn('lot_id', $lotIds)
+            $lotEntries = LoadingPlanEntry::with('machineModel')->whereIn('id', $entryIds)
                 ->where('scheduled_date', $date)
                 ->where('entry_type', 'lot')
                 ->get();
@@ -223,8 +226,8 @@ class LoadingPlanEntryService
                 ->where('entry_type', 'block')
                 ->get();
 
-            $plannedLotIds = $lotEntries->pluck('lot_id')->all();
-            $unplannedLotIds = array_values(array_diff($lotIds, $plannedLotIds));
+            $plannedLotIds = $lotEntries->pluck('id')->all();
+            $unplannedLotIds = array_values(array_diff($entryIds, $plannedLotIds));
 
             $allEntries = $lotEntries->concat($blockEntries);
             $movers = $allEntries->filter(fn($e) => $e->machine_id !== $targetMachineId);
@@ -247,6 +250,7 @@ class LoadingPlanEntryService
 
             $updated = collect();
 
+            $lotIds = $movers->pluck('lot_id')->all();
             $calculator = new LotScheduleCalculator([$date], $lotIds);
 
             foreach ($movers as $entry) {
@@ -266,7 +270,14 @@ class LoadingPlanEntryService
                 $nextSeq += self::GAP_SEED;
             }
 
-            $wip = CustomerDataWip::query()->forDate($date)->whereIn('Lot_Id', $unplannedLotIds)->get()->keyBy('Lot_Id');
+            $wip = CustomerDataWip::query()
+                ->select('Lot_Id', 'Package_Name', 'import_date')
+                ->whereIn('Lot_Id', $unplannedLotIds)
+                ->orderBy('Lot_Id')
+                ->orderByDesc('import_date')
+                ->get()
+                ->unique('Lot_Id')
+                ->keyBy('Lot_Id');
 
             foreach ($unplannedLotIds as $lotId) {
                 $wipItem = $wip->get($lotId);
@@ -527,13 +538,11 @@ class LoadingPlanEntryService
         return $entry;
     }
 
-    public function editLotField(string $lotId, string $date, array $fields, ?int $expectedLockVersion): LoadingPlanEntry
+    public function editLotField(int $entry_id, string $date, array $fields, ?int $expectedLockVersion): LoadingPlanEntry
     {
         $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
 
-        $existing = LoadingPlanEntry::where('lot_id', $lotId)
-            ->where('scheduled_date', $date)
-            ->first();
+        $existing = LoadingPlanEntry::where('id', $entry_id)->first();
 
         if (!$existing) {
             $this->assertDateNotFinalized($date);
@@ -854,6 +863,9 @@ class LoadingPlanEntryService
             ->lockForUpdate()
             ->get();
 
+        // var_dump("LOG ~ LoadingPlanEntryService.php:857 ~ LoadingPlanEntryService ~ rebalance :", $rows);
+        \Illuminate\Support\Facades\Log::debug(json_encode($rows, JSON_PRETTY_PRINT));
+
         if ($rows->isEmpty()) {
             return $rows;
         }
@@ -889,15 +901,24 @@ class LoadingPlanEntryService
         $machineId = $this->resolveMachineId($machine);
         $placements = $op['placements'];
 
+        $entries = LoadingPlanEntry::whereIn('id', collect($placements)->pluck('entry_id'))->get();
+        $dates = $entries->pluck('scheduled_date')->map(fn($d) => $d->toDateString())->unique();
+
+        if ($dates->count() > 1) {
+            throw new \InvalidArgumentException("Reordering lots got planned in different dates is not allowed — got: " . $dates->implode(', '));
+        }
+
+        // var_dump("LOG ~ LoadingPlanEntryService.php:892 ~ LoadingPlanEntryService ~ applyBulkReorder ~:", $placements);
+
         $rows = $this->rebalance($machineId, $date);
+
+        var_dump("LOG ~ LoadingPlanEntryService.php:896 ~ LoadingPlanEntryService ~ applyBulkReorder ~ $rows:", $rows);
 
         // $rows already contains every lot/block entry on this machine for this
         // date (rebalance() pulled the full locked set) — match against it
         // directly instead of firing another query.
         $resolvedPlacements = collect($placements)->map(function ($p) use ($rows) {
-            $entry = $p['entry_type'] === 'block'
-                ? $rows->firstWhere('id', $p['entry_id'])
-                : $rows->firstWhere('lot_id', $p['lot_id']);
+            $entry = $rows->firstWhere('id', $p['entry_id']);
 
             if (!$entry) {
                 throw new \RuntimeException("Bulk reorder: could not resolve entry for placement: " . json_encode($p));
@@ -908,7 +929,8 @@ class LoadingPlanEntryService
             return [
                 'id'              => $entry->id,
                 'entry_type'      => $p['entry_type'],
-                'lot_id'          => $p['entry_type'] === 'lot' ? $p['lot_id'] : null,
+                'lot_id'          => $p['entry_type'] === 'lot' ? $entry->lot_id : null,
+                'scheduled_date'  => $entry->scheduled_date->toDateString(),
                 'before_entry_id' => $p['before_entry_id'] ?? null,
                 'after_entry_id'  => $p['after_entry_id'] ?? null,
             ];
@@ -928,16 +950,17 @@ class LoadingPlanEntryService
 
         $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
 
-        // bulk SQL update above doesn't touch lot_quantities — refresh capacity
-        // for every lot entry that just changed machine.
+        // Timing cascade: no date cutoff here — recomputeTimeStartAndEnd
+        // already walks forward via findNextInSequence across scheduled_date
+        // boundaries by design, and that's correct — a changed duration on a
+        // leaked lot genuinely does shift tomorrow's real start times.
         foreach ($resolvedPlacements as $p) {
             if ($p['entry_type'] === 'lot') {
-                $calc->recalculateAndRetime($p['lot_id'], $date, $machineId);
+                $calc->recalculateAndRetime($p['lot_id'], $p['scheduled_date'], $machineId);
             }
         }
 
         return LoadingPlanEntry::whereIn('id', array_column($positions, 'id'))
-            ->where('scheduled_date', $date)
             ->get();
     }
 
@@ -1066,9 +1089,7 @@ class LoadingPlanEntryService
                         continue;
                     }
 
-                    $entryId = $op['entry_type'] === 'block'
-                        ? $op['entry_id']
-                        : LoadingPlanEntry::where('lot_id', $op['lot_id'])->where('scheduled_date', $date)->value('id');
+                    $entryId = $op['entry_id'];
 
                     $bulkResultsByIndex[$idx] = $entriesById[$entryId] ?? null;
                     $bulkHandledIndexes[] = $idx;
@@ -1096,7 +1117,7 @@ class LoadingPlanEntryService
                         $op['before_entry_id'] ?? null,
                         $op['after_entry_id'] ?? null,
                     ),
-                    'delete' => $this->applyDelete($op, $date),
+                    'delete' => $this->applyDelete($op),
                     'update_field' => $this->applyUpdateField($op, $date),
                     'split' => $this->applySplit($op, $date),
                     'revert_split' => $this->applyRevertSplit($op),
@@ -1250,10 +1271,10 @@ class LoadingPlanEntryService
         return $entry;
     }
 
-    private function applyDelete(array $op, string $date)
+    private function applyDelete(array $op)
     {
         $entry = LoadingPlanEntry::with('machineModel')->findOrFail($op['entry_id']);
-        $this->deleteEntry($op['entry_id'], $entry->getMachineName(), $date, forceDelete: true);
+        $this->deleteEntry($op['entry_id'], $entry->getMachineName(), forceDelete: true);
         return ['deleted' => $op['entry_id']];
     }
 
@@ -1273,10 +1294,12 @@ class LoadingPlanEntryService
      * Mutates $entry in place and returns the LotQuantity row it looked up,
      * so callers can reuse it if they need anything else off it.
      */
-    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId, string $date): ?LotQuantity
+    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId): ?LotQuantity
     {
+        $entryDate = $entry->scheduled_date->toDateString();
+
         $quantity = LotQuantity::where('lot_id', $entry->lot_id)
-            ->where('scheduled_date', $date)
+            ->where('scheduled_date', $entryDate)
             ->first();
 
         $entry->setAttribute('qty', $quantity?->effectiveQty());
@@ -1291,7 +1314,10 @@ class LoadingPlanEntryService
         ] : null);
         $entry->setAttribute('capacityUph', $quantity?->capacity_uph_snapshot);
 
-        $rootWip = CustomerDataWip::query()->forDate($date)->where('Lot_Id', $rootLotId)->first();
+        $rootWip = CustomerDataWip::query()
+            ->where('Lot_Id', $rootLotId)
+            ->orderByDesc('import_date')
+            ->first();
 
         $ct = LoadingPlanFormulas::computeCT($rootWip->Date_Loaded, $rootWip->BE_Starttime);
         $osl = LoadingPlanFormulas::computeOSL($ct, $rootWip->Backend_Leadtime);

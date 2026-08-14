@@ -20,22 +20,18 @@ class LoadingPlanEntryController extends Controller
     {
         $data = $request->validate([
             'entry_type'      => 'required|in:lot,block',
-            'lot_id'          => 'required_if:entry_type,lot|nullable|string',
             'entry_id'        => 'required_if:entry_type,block|nullable|integer',
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
             'machine'         => 'nullable|string',
-            'scheduled_date'  => 'required|date',
         ]);
 
         $entry = $this->service->moveEntry(
             $data['entry_type'],
-            $data['lot_id'] ?? null,
             $data['entry_id'] ?? null,
             $data['before_entry_id'] ?? null,
             $data['after_entry_id'] ?? null,
             $data['machine'],
-            $data['scheduled_date'],
         );
 
         return response()->json($entry);
@@ -45,7 +41,6 @@ class LoadingPlanEntryController extends Controller
     {
         $data = $request->validate([
             'entry_type'      => 'required|in:lot,block',
-            'lot_id'          => 'required_if:entry_type,lot|nullable|string',
             'entry_id'        => 'required_if:entry_type,block|nullable|integer',
             'target_machine'  => 'nullable|string',
             'before_entry_id' => 'nullable|integer',
@@ -58,10 +53,7 @@ class LoadingPlanEntryController extends Controller
         // does exactly that: clears machine/sequence_order, keeps the row.
         if ($data['target_machine'] === null) {
             $entry = $this->service->resolveEntry(
-                $data['entry_type'],
-                $data['lot_id'] ?? null,
                 $data['entry_id'] ?? null,
-                $data['scheduled_date'],
             );
 
             $this->service->deleteEntry($entry->id, $entry->getMachineName(), $data['scheduled_date']);
@@ -71,12 +63,10 @@ class LoadingPlanEntryController extends Controller
 
         $entry = $this->service->transferEntry(
             $data['entry_type'],
-            $data['lot_id'] ?? null,
             $data['entry_id'] ?? null,
             $data['target_machine'],
             $data['before_entry_id'] ?? null,
             $data['after_entry_id'] ?? null,
-            $data['scheduled_date'],
         );
 
         return response()->json($entry);
@@ -85,8 +75,8 @@ class LoadingPlanEntryController extends Controller
     public function bulkTransfer(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'lot_ids'          => 'nullable|array',
-            'lot_ids.*'        => 'string',
+            'entry_ids'          => 'nullable|array',
+            'entry_ids.*'        => 'string',
             'block_entry_ids'  => 'nullable|array',
             'block_entry_ids.*' => 'integer',
             'target_machine'   => 'nullable|string',
@@ -94,7 +84,7 @@ class LoadingPlanEntryController extends Controller
         ]);
 
         $updated = $this->service->bulkTransfer(
-            $data['lot_ids'] ?? [],
+            $data['entry_ids'] ?? [],
             $data['block_entry_ids'] ?? [],
             $data['target_machine'],
             $data['scheduled_date'],
@@ -137,7 +127,7 @@ class LoadingPlanEntryController extends Controller
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
         ]);
-
+        // TODO: no lot ?
         $entry = $this->service->createManualLot(
             $data['machine'],
             $data['scheduled_date'],
