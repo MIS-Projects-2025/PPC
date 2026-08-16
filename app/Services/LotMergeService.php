@@ -8,6 +8,7 @@ use App\Models\LotQuantity;
 use App\Exceptions\InvalidMergeException;
 use App\Exceptions\LoadingPlanDateFinalizedException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Database\Eloquent\Collection;
 
 class LotMergeService
 {
@@ -191,21 +192,28 @@ class LotMergeService
         });
     }
 
-    public static function buildMergeMeta(?string $lotId, $mergesByTarget, $mergesBySource): ?array
-    {
-        if (!$lotId) return null;
-        // TODO: what if the lot is both source and target
+    public static function buildMergeMeta(
+        ?string $lotId,
+        ?Collection $mergesByTarget = null,
+        ?Collection $mergesBySource = null
+    ): ?array {
+        if (! $lotId || ! $mergesByTarget || ! $mergesBySource) {
+            return null;
+        }
+
         $asTarget = $mergesByTarget->has($lotId);
         $asSource = $mergesBySource->get($lotId);
 
-        if (!$asTarget && !$asSource) return null;
+        if (! $asTarget && ! $asSource) {
+            return null;
+        }
 
         return [
             'isTarget'   => $asTarget,
             'isSource'   => $asSource !== null,
             'mergeId'    => $asSource?->id ?? $mergesByTarget->get($lotId)?->first()?->id,
             'mergedInto' => $asSource?->target_lot_id ?? null,
-            'mergedFrom' => $asSource ?? $mergesByTarget->get($lotId)?->first()?->source_lot_id
+            'mergedFrom' => $asSource ?? $mergesByTarget->get($lotId)?->first()?->source_lot_id,
         ];
     }
 

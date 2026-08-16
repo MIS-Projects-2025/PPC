@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Builder;
 
 class PpcPackageMaster extends Model
 {
@@ -25,4 +26,10 @@ class PpcPackageMaster extends Model
         'valid_from' => 'date',
         'valid_to'   => 'date',
     ];
+
+    public function scopeActiveTelford(Builder $query): Builder
+    {
+        return $query->where('is_telford', true)
+            ->where('is_active', true);
+    }
 }

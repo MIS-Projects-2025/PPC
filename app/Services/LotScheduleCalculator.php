@@ -20,7 +20,7 @@ class LotScheduleCalculator
 
     public function __construct(array $dates = [], array $lotIds = [])
     {
-        \Log::info('LotScheduleCalculator constructed', ['mb_start' => memory_get_usage(true) / 1048576]);
+        // \Log::info('LotScheduleCalculator constructed', ['mb_start' => memory_get_usage(true) / 1048576]);
 
         $this->machinePlatforms = QdnMachine::pluck('machine_platform', 'machine_num');
         $this->machineNumById = QdnMachine::pluck('machine_num', 'id'); // new — id => name
@@ -29,7 +29,7 @@ class LotScheduleCalculator
             ->get()
             ->groupBy('platform');
 
-        Log::info('After capacityBands', ['mb' => memory_get_usage(true) / 1048576]);
+        // Log::info('After capacityBands', ['mb' => memory_get_usage(true) / 1048576]);
 
         $partNames = LotQuantity::whereIn('lot_id', $lotIds)
             ->whereIn('scheduled_date', $dates)
@@ -46,7 +46,7 @@ class LotScheduleCalculator
 
         $this->packageListByDeviceName = $query->get()->keyBy('devicename');
 
-        Log::info('After packageListByDeviceName', ['mb' => memory_get_usage(true) / 1048576]);
+        // Log::info('After packageListByDeviceName', ['mb' => memory_get_usage(true) / 1048576]);
     }
 
     /**

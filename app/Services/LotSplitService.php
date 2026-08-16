@@ -9,8 +9,8 @@ use App\Models\QdnMachine;
 use App\Models\LotQuantity;
 use App\Models\LotSplit;
 use App\Models\CustomerDataWip;
-use Exception;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Database\Eloquent\Collection;
 
 class LotSplitService
 {
@@ -528,28 +528,31 @@ class LotSplitService
         }
     }
 
-    public static function buildSplitMeta(?string $lotId, $splitsByParent, $splitsByChild): ?array
-    {
-        if (!$lotId) {
+    public static function buildSplitMeta(
+        ?string $lotId,
+        ?Collection $splitsByParent = null,
+        ?Collection $splitsByChild = null
+    ): ?array {
+        if (! $lotId || ! $splitsByParent || ! $splitsByChild) {
             return null;
         }
 
         $isParent = $splitsByParent->has($lotId);
-        $childSplit = $splitsByChild->get($lotId); // null if not a child
+        $childSplit = $splitsByChild->get($lotId);
 
-        if (!$isParent && !$childSplit) {
+        if (! $isParent && ! $childSplit) {
             return null;
         }
 
         $rootLotId = $childSplit
             ? $childSplit->root_lot_id
-            : $splitsByParent->get($lotId)->first()->root_lot_id;
+            : $splitsByParent->get($lotId)?->first()?->root_lot_id;
 
         return [
             'isParent'  => $isParent,
             'isChild'   => $childSplit !== null,
             'rootLotId' => $rootLotId,
-            'splitId'   => $childSplit?->id, // unambiguous for children, null for parents
+            'splitId'   => $childSplit?->id,
         ];
     }
 }

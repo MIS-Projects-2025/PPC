@@ -1342,4 +1342,63 @@ class LoadingPlanEntryService
 
         return $quantity;
     }
+
+    /**
+     * Fetch today's plan entries for the selected location.
+     *
+     * @param string $date
+     * @param array<int, string> $allowedPackages
+     * @return Collection<int, LoadingPlanEntry>
+     */
+    public static function getToday(string $date, array $allowedPackages): Collection
+    {
+        if (empty($allowedPackages)) {
+            return collect();
+        }
+
+        return LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
+            ->where('scheduled_date', $date)
+            ->where(function ($query) use ($allowedPackages) {
+                $query->whereIn('package_name', $allowedPackages)
+                    ->orWhere('entry_type', 'block'); // Ensure block rows are fetched
+            })
+            ->get();
+    }
+
+    /**
+     * Fetch entries from the previous scheduled date that spilled past midnight (> 1440 mins).
+     *
+     * @param string $previousDate
+     * @param array<int, string> $allowedPackages
+     * @return Collection<int, LoadingPlanEntry>
+     */
+    public static function getTodayLeaked(string $previousDate, array $allowedPackages): Collection
+    {
+        if (empty($allowedPackages)) {
+            return collect();
+        }
+
+        $leakedCalc = DB::table('loading_plan_entries')
+            ->select('id')
+            ->selectRaw('SUM(accu_time) OVER (PARTITION BY machine_id ORDER BY sequence_order) AS running_total')
+            ->where('scheduled_date', $previousDate)
+            ->where(function ($query) use ($allowedPackages) {
+                $query->whereIn('package_name', $allowedPackages)
+                    ->orWhere('entry_type', 'block'); // Ensure block rows are fetched
+            })
+            ->whereNotNull('machine_id');
+
+        $leakedIds = DB::query()
+            ->fromSub($leakedCalc, 'leaked_calc')
+            ->where('running_total', '>', 1440)
+            ->pluck('id');
+
+        if ($leakedIds->isEmpty()) {
+            return collect();
+        }
+
+        return LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
+            ->whereIn('id', $leakedIds)
+            ->get();
+    }
 }

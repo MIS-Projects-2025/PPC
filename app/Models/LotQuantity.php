@@ -30,4 +30,9 @@ class LotQuantity extends Model
     {
         return $this->qty_base + $this->split_adjustment + $this->merge_adjustment;
     }
+
+    public function packageListEntry()
+    {
+        return $this->belongsTo(PartName::class, 'recipe_source_id');
+    }
 }
