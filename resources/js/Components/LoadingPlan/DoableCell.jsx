@@ -45,87 +45,67 @@ export function DoableCell({ value, status, recipeSource }) {
     return (
         <HoverCell
             trigger={
-                <span
-                    style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                        cursor: "help",
-                        textDecoration: "underline dotted",
-                        textUnderlineOffset: 3,
-                        textDecorationColor: "#bbb",
-                    }}
-                >
+                <span className="inline-flex items-center gap-1 cursor-help underline decoration-dotted underline-offset-[3px] decoration-base-content/40">
                     {display}
                 </span>
             }
         >
-            {statusCopy && (
-                <div style={{ marginBottom: recipeSource ? 8 : 0 }}>
-                    <div
-                        style={{
-                            fontWeight: 600,
-                            marginBottom: 2,
-                            fontSize: 13,
-                        }}
-                    >
-                        {statusCopy.label}
+            <div className="text-xs font-mono rounded-lg text-base-100 space-y-2 min-w-[180px] text-left">
+                {statusCopy && (
+                    <div className={recipeSource ? "mb-2" : ""}>
+                        <div className="font-semibold text-xs mb-0.5 text-base-100">
+                            {statusCopy.label}
+                        </div>
+                        <div className="text-xs text-base-100/70">
+                            {statusCopy.description}
+                        </div>
                     </div>
-                    <div style={{ color: "#666", fontSize: 13 }}>
-                        {statusCopy.description}
-                    </div>
-                </div>
-            )}
+                )}
 
-            {recipeSource && (
-                <div
-                    style={
-                        statusCopy
-                            ? { borderTop: "1px solid #eee", paddingTop: 8 }
-                            : undefined
-                    }
-                >
+                {recipeSource && (
                     <div
-                        className="text-base-100"
-                        style={{
-                            fontWeight: 600,
-                            marginBottom: 4,
-                            fontSize: 13,
-                        }}
+                        className={
+                            statusCopy
+                                ? "border-t border-base-content/15 pt-2"
+                                : ""
+                        }
                     >
-                        Recipe source
-                    </div>
-                    <table style={{ fontSize: 13, color: "#666" }}>
-                        <tbody>
-                            <tr>
-                                <td style={{ paddingRight: 8, color: "#999" }}>
-                                    Device
-                                </td>
-                                <td>{recipeSource.devicename}</td>
-                            </tr>
-                            <tr>
-                                <td style={{ paddingRight: 8, color: "#999" }}>
-                                    Recipe qty
-                                </td>
-                                <td>{recipeSource.recipe}</td>
-                            </tr>
-                            {recipeSource.packageType && (
+                        <div className="font-semibold text-xs mb-1 text-primary">
+                            Recipe source
+                        </div>
+                        <table className="text-xs text-base-100/80 border-separate border-spacing-y-0.5">
+                            <tbody>
                                 <tr>
-                                    <td
-                                        style={{
-                                            paddingRight: 8,
-                                            color: "#999",
-                                        }}
-                                    >
-                                        Package
+                                    <td className="pr-3 text-base-100/50 font-normal">
+                                        Device
                                     </td>
-                                    <td>{recipeSource.packageType}</td>
+                                    <td className="font-medium text-base-100">
+                                        {recipeSource.devicename}
+                                    </td>
                                 </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            )}
+                                <tr>
+                                    <td className="pr-3 text-base-100/50 font-normal">
+                                        Recipe qty
+                                    </td>
+                                    <td className="font-medium text-base-100">
+                                        {recipeSource.recipe}
+                                    </td>
+                                </tr>
+                                {recipeSource.packageType && (
+                                    <tr>
+                                        <td className="pr-3 text-base-100/50 font-normal">
+                                            Package
+                                        </td>
+                                        <td className="font-medium text-base-100">
+                                            {recipeSource.packageType}
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
         </HoverCell>
     );
 }
@@ -141,8 +121,8 @@ export function DoableCell({ value, status, recipeSource }) {
 //     cell: (info) => (
 //       <DoableCell
 //         value={info.getValue()}
-//         status={info.row.original.doableStatus}
-//         recipeSource={info.row.original.doableRecipeSource}
+//         status={info.row.original.doable_status}
+//         recipeSource={info.row.original.doable_recipe_source}
 //       />
 //     ),
 //   }),

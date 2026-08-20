@@ -16,23 +16,21 @@ class LoadingPlanMergeController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'lot_id_a'       => 'required|string',
-            'lot_id_b'       => 'required|string',
-            'scheduled_date' => 'required|date',
+            'entry_id_a' => 'required|integer|exists:loading_plan_entries,id',
+            'entry_id_b' => 'required|integer|exists:loading_plan_entries,id',
         ]);
 
         try {
             $result = $this->mergeService->merge(
-                $data['lot_id_a'],
-                $data['lot_id_b'],
-                $data['scheduled_date'],
-                $request->user()?->emp_name ?? null, // adjust to match your auth user shape
+                (int) $data['entry_id_a'],
+                (int) $data['entry_id_b'],
+                $request->user()?->emp_name ?? null,
             );
 
             return response()->json($result, 201);
         } catch (InvalidMergeException $e) {
             return response()->json([
-                'error'   => 'invalid_split',
+                'error'   => 'invalid_merge',
                 'message' => $e->getMessage(),
             ], 422);
         } catch (LoadingPlanDateFinalizedException $e) {

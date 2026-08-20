@@ -27,7 +27,7 @@ export function hasTimeline(machine) {
     return true;
 }
 
-/** Capacity_UPH for a given qty on a given platform, per CAPACITY_BANDS.
+/** capacity_uph for a given qty on a given platform, per CAPACITY_BANDS.
  *  Returns null if platform is unknown or qty falls outside every band
  *  (e.g. no platform — MANUAL/unassigned — or qty <= 0). */
 // export function lookupCapacityUPH(qty, platform) {

@@ -6,27 +6,38 @@ use App\Models\LoadingPlanEntry;
 use App\Models\LotMerge;
 use App\Models\LotQuantity;
 use App\Exceptions\InvalidMergeException;
-use App\Exceptions\LoadingPlanDateFinalizedException;
+use App\Traits\ValidatesLoadingPlanEntries;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Collection;
 
 class LotMergeService
 {
-    public function __construct(
-        private LoadingPlanEntryService $entryService,
-    ) {}
+    use ValidatesLoadingPlanEntries;
 
-    public function merge(string $lotIdA, string $lotIdB, string $date, ?string $createdBy): array
+    public function __construct() {}
+
+    public function merge(int $entryIdA, int $entryIdB, ?string $createdBy): array
     {
-        return DB::transaction(function () use ($lotIdA, $lotIdB, $date, $createdBy) {
+        return DB::transaction(function () use ($entryIdA, $entryIdB, $createdBy) {
+            if ($entryIdA === $entryIdB) {
+                throw new InvalidMergeException("Cannot merge an entry into itself.");
+            }
+
+            $entryA = LoadingPlanEntry::findOrFail($entryIdA);
+            $entryB = LoadingPlanEntry::findOrFail($entryIdB);
+
+            // Derive and validate that both entries share the exact same scheduled date
+            $date = $this->assertConsistentDates([$entryA, $entryB]);
+
             $this->assertDateNotFinalized($date);
 
-            if ($lotIdA === $lotIdB) {
+            if ($entryA->lot_id === $entryB->lot_id) {
                 throw new InvalidMergeException("Cannot merge a lot into itself.");
             }
 
-            $quantityA = LotQuantity::where('lot_id', $lotIdA)->where('scheduled_date', $date)->first();
-            $quantityB = LotQuantity::where('lot_id', $lotIdB)->where('scheduled_date', $date)->first();
+            // Fetch LotQuantity records via LoadingPlanEntry attributes
+            $quantityA = $entryA->getQuantityRow();
+            $quantityB = $entryB->getQuantityRow();
 
             if (!$quantityA || !$quantityB) {
                 throw new InvalidMergeException("Both lots must have a resolvable quantity to merge.");
@@ -40,9 +51,12 @@ class LotMergeService
             $qtyB = $quantityB->effectiveQty();
 
             // Larger qty is target/parent; smaller is source/child. Equal → A wins arbitrarily.
-            [$targetLotId, $sourceLotId, $targetQty, $sourceQty, $targetQuantity, $sourceQuantity] = ($qtyA >= $qtyB)
-                ? [$lotIdA, $lotIdB, $qtyA, $qtyB, $quantityA, $quantityB]
-                : [$lotIdB, $lotIdA, $qtyB, $qtyA, $quantityB, $quantityA];
+            [$targetEntry, $sourceEntry, $targetQuantity, $sourceQuantity, $targetQty, $sourceQty] = ($qtyA >= $qtyB)
+                ? [$entryA, $entryB, $quantityA, $quantityB, $qtyA, $qtyB]
+                : [$entryB, $entryA, $quantityB, $quantityA, $qtyB, $qtyA];
+
+            $targetLotId = $targetEntry->lot_id;
+            $sourceLotId = $sourceEntry->lot_id;
 
             // Target absorbs source's qty on top of whatever it currently has.
             $targetQuantity->update(['merge_adjustment' => $targetQuantity->merge_adjustment + $sourceQty]);
@@ -51,35 +65,40 @@ class LotMergeService
             $sourceQuantity->update(['merge_adjustment' => $sourceQuantity->merge_adjustment - $sourceQty]);
 
             $merge = LotMerge::create([
-                'target_lot_id'    => $targetLotId,
-                'source_lot_id'    => $sourceLotId,
-                'scheduled_date'   => $date,
-                'transferred_qty'  => $sourceQty,
-                'created_by'       => $createdBy,
+                'target_lot_id'   => $targetLotId,
+                'source_lot_id'   => $sourceLotId,
+                'scheduled_date'  => $date,
+                'transferred_qty' => $sourceQty,
+                'created_by'      => $createdBy,
             ]);
 
             $calc = app(LotScheduleCalculator::class, [
-                'dates' => [$date],
+                'dates'  => [$date],
                 'lotIds' => [$targetLotId, $sourceLotId],
             ]);
+            $calc->loadPackageList();
 
-            $targetEntry = LoadingPlanEntry::where('lot_id', $targetLotId)->where('scheduled_date', $date)->first();
-            $calc->recalculateAndRetime($targetLotId, $date, $targetEntry->machine_id);
-            $targetEntry = $targetEntry->fresh();
-            $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId());
+            $loadingPlanService = new LoadingPlanService($date);
 
-            $sourceEntry = LoadingPlanEntry::where('lot_id', $sourceLotId)->where('scheduled_date', $date)->first();
-            $calc->recalculateAndRetime($sourceLotId, $date, $sourceEntry->machine_id);
-            $sourceEntry = $sourceEntry->fresh();
-            $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId());
+            $calc->recalculateAndRetime($targetEntry->getKey(), $targetEntry->machine_id);
+            $targetEnriched = $loadingPlanService->enrichEntryForResponse(
+                $targetEntry->fresh(),
+                $targetEntry->resolveRootLotId()
+            );
 
-            $targetEntry->mergeInfo = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $sourceLotId];
-            $sourceEntry->mergeInfo = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $targetLotId];
+            $calc->recalculateAndRetime($sourceEntry->getKey(), $sourceEntry->machine_id);
+            $sourceEnriched = $loadingPlanService->enrichEntryForResponse(
+                $sourceEntry->fresh(),
+                $sourceEntry->resolveRootLotId()
+            );
+
+            $targetEnriched->merge_info = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $sourceLotId];
+            $sourceEnriched->merge_info = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $targetLotId];
 
             return [
                 'merge'  => $merge->fresh(),
-                'target' => $targetEntry,
-                'source' => $sourceEntry,
+                'target' => $targetEnriched,
+                'source' => $sourceEnriched,
             ];
         });
     }
@@ -118,19 +137,26 @@ class LotMergeService
                 'dates' => [$date],
                 'lotIds' => [$merge->target_lot_id, $merge->source_lot_id],
             ]);
+            $calc->loadPackageList();
+
+            $loadingPlanService = new LoadingPlanService($date);
 
             if ($targetEntry) {
-                $calc->recalculateAndRetime($merge->target_lot_id, $date, $targetEntry->machine_id);
-                $targetEntry = $targetEntry->fresh();
-                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId());
-                $targetEntry->mergeInfo = null;
+                $calc->recalculateAndRetime($targetEntry->getKey(), $targetEntry->machine_id);
+                $targetEntry = $loadingPlanService->enrichEntryForResponse(
+                    $targetEntry->fresh(),
+                    $targetEntry->resolveRootLotId()
+                );
+                $targetEntry->merge_info = null;
             }
 
             if ($sourceEntry) {
-                $calc->recalculateAndRetime($merge->source_lot_id, $date, $sourceEntry->machine_id);
-                $sourceEntry = $sourceEntry->fresh();
-                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId());
-                $sourceEntry->mergeInfo = null;
+                $calc->recalculateAndRetime($sourceEntry->getKey(), $sourceEntry->machine_id);
+                $sourceEntry = $loadingPlanService->enrichEntryForResponse(
+                    $sourceEntry->fresh(),
+                    $sourceEntry->resolveRootLotId()
+                );
+                $sourceEntry->merge_info = null;
             }
 
             return [
@@ -173,19 +199,26 @@ class LotMergeService
                 'dates' => [$date],
                 'lotIds' => [$merge->target_lot_id, $merge->source_lot_id],
             ]);
+            $calc->loadPackageList();
+
+            $loadingPlanService = new LoadingPlanService($date);
 
             if ($targetEntry) {
-                $calc->recalculateAndRetime($merge->target_lot_id, $date, $targetEntry->machine_id);
-                $targetEntry = $targetEntry->fresh();
-                $this->entryService->enrichEntryForResponse($targetEntry, $targetEntry->resolveRootLotId());
-                $targetEntry->mergeInfo = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
+                $calc->recalculateAndRetime($targetEntry->getKey(), $targetEntry->machine_id);
+                $targetEntry = $loadingPlanService->enrichEntryForResponse(
+                    $targetEntry->fresh(),
+                    $targetEntry->resolveRootLotId()
+                );
+                $targetEntry->merge_info = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
             }
 
             if ($sourceEntry) {
-                $calc->recalculateAndRetime($merge->source_lot_id, $date, $sourceEntry->machine_id);
-                $sourceEntry = $sourceEntry->fresh();
-                $this->entryService->enrichEntryForResponse($sourceEntry, $sourceEntry->resolveRootLotId());
-                $sourceEntry->mergeInfo = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
+                $calc->recalculateAndRetime($sourceEntry->getKey(), $sourceEntry->machine_id);
+                $sourceEntry = $loadingPlanService->enrichEntryForResponse(
+                    $sourceEntry->fresh(),
+                    $sourceEntry->resolveRootLotId()
+                );
+                $sourceEntry->merge_info = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
             }
 
             return ['merge' => $merge->fresh(), 'target' => $targetEntry, 'source' => $sourceEntry];
@@ -195,10 +228,29 @@ class LotMergeService
     public static function buildMergeMeta(
         ?string $lotId,
         ?Collection $mergesByTarget = null,
-        ?Collection $mergesBySource = null
+        ?Collection $mergesBySource = null,
+        string|array|null $scheduledDate = null
     ): ?array {
-        if (! $lotId || ! $mergesByTarget || ! $mergesBySource) {
+        if (! $lotId) {
             return null;
+        }
+
+        // Fetch from DB if collections are not provided
+        if ($mergesByTarget === null || $mergesBySource === null) {
+            $query = LotMerge::active()
+                ->where(function ($q) use ($lotId) {
+                    $q->where('target_lot_id', $lotId)
+                        ->orWhere('source_lot_id', $lotId);
+                });
+
+            if ($scheduledDate !== null) {
+                $dates = (array) $scheduledDate;
+                $query->whereIn('scheduled_date', $dates);
+            }
+
+            $merges = $query->get();
+            $mergesByTarget = $merges->groupBy('target_lot_id');
+            $mergesBySource = $merges->keyBy('source_lot_id');
         }
 
         $asTarget = $mergesByTarget->has($lotId);
@@ -215,20 +267,6 @@ class LotMergeService
             'mergedInto' => $asSource?->target_lot_id ?? null,
             'mergedFrom' => $asSource ?? $mergesByTarget->get($lotId)?->first()?->source_lot_id,
         ];
-    }
-
-    private function currentQty(string $lotId, string $date): ?int
-    {
-        $quantity = LotQuantity::where('lot_id', $lotId)->where('scheduled_date', $date)->first();
-        return $quantity?->effectiveQty();
-    }
-
-    private function assertDateNotFinalized(string $date): void
-    {
-        $isFinalized = LoadingPlanEntry::where('scheduled_date', $date)->whereNotNull('finalized_at')->exists();
-        if ($isFinalized) {
-            throw new LoadingPlanDateFinalizedException($date);
-        }
     }
 
     public function historyFor(string $lotId): \Illuminate\Support\Collection

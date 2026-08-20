@@ -26,15 +26,22 @@ class LoadingPlanEntryController extends Controller
             'machine'         => 'nullable|string',
         ]);
 
-        $entry = $this->service->moveEntry(
-            $data['entry_type'],
-            $data['entry_id'] ?? null,
-            $data['before_entry_id'] ?? null,
-            $data['after_entry_id'] ?? null,
-            $data['machine'],
-        );
+        try {
+            $entry = $this->service->moveEntry(
+                $data['entry_type'],
+                $data['entry_id'] ?? null,
+                $data['before_entry_id'] ?? null,
+                $data['after_entry_id'] ?? null,
+                $data['machine'],
+            );
 
-        return response()->json($entry);
+            return response()->json($entry);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'error'   => 'bad_request',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     public function transfer(Request $request): JsonResponse
@@ -45,7 +52,6 @@ class LoadingPlanEntryController extends Controller
             'target_machine'  => 'nullable|string',
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
-            'scheduled_date'  => 'required|date',
         ]);
 
         // Unassigned isn't a real machine — order doesn't apply there, so this
@@ -75,8 +81,8 @@ class LoadingPlanEntryController extends Controller
     public function bulkTransfer(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'entry_ids'          => 'nullable|array',
-            'entry_ids.*'        => 'string',
+            'lot_ids'          => 'nullable|array',
+            'lot_ids.*'        => 'string',
             'block_entry_ids'  => 'nullable|array',
             'block_entry_ids.*' => 'integer',
             'target_machine'   => 'nullable|string',
@@ -84,7 +90,7 @@ class LoadingPlanEntryController extends Controller
         ]);
 
         $updated = $this->service->bulkTransfer(
-            $data['entry_ids'] ?? [],
+            $data['lot_ids'] ?? [],
             $data['block_entry_ids'] ?? [],
             $data['target_machine'],
             $data['scheduled_date'],
@@ -121,9 +127,9 @@ class LoadingPlanEntryController extends Controller
         $data = $request->validate([
             'machine'         => 'required|string',
             'scheduled_date'  => 'required|date',
-            'fields.Part_Name'    => 'nullable|string|max:100',
-            'fields.Package_Name' => 'nullable|string|max:50',
-            'fields.Qty'          => 'nullable|integer',
+            'fields.part_name'    => 'nullable|string|max:100',
+            'fields.package_name' => 'nullable|string|max:50',
+            'fields.qty'          => 'nullable|integer',
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
         ]);
@@ -159,7 +165,7 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $result = $this->service->bulkDelete($data['ids'], $data['scheduled_date']);
+        $result = $this->service->bulkDelete($data['ids']);
 
         return response()->json($result);
     }
@@ -172,8 +178,6 @@ class LoadingPlanEntryController extends Controller
 
         $data = $request->validate([
             'entry_type'        => 'required|in:lot,block',
-            'lot_id'            => 'required_if:entry_type,lot|nullable|string',
-            'scheduled_date'    => 'required|date',
             'fields'            => 'required|array',
             'fields.status'     => 'sometimes|nullable|string',
             'fields.remarks'    => 'sometimes|nullable|string',
@@ -187,7 +191,7 @@ class LoadingPlanEntryController extends Controller
 
         try {
             if ($data['entry_type'] === 'lot') {
-                $entry = $this->service->editLotField($data['lot_id'], $data['scheduled_date'], $fields, $data['lock_version'] ?? null);
+                $entry = $this->service->editLotField($id, $fields, $data['lock_version'] ?? null);
             } else {
                 $entry = $this->service->editField($id, $fields, $data['lock_version']);
             }
@@ -205,12 +209,10 @@ class LoadingPlanEntryController extends Controller
     public function bulkUpdateField(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'updates'                  => 'required|array|min:1',
-            'updates.*.id'             => 'nullable|integer',
-            'updates.*.lot_id'         => 'nullable|string',
-            'updates.*.scheduled_date' => 'nullable|date',
-            'updates.*.fields'         => 'required|array',
-            'updates.*.lock_version'   => 'nullable|integer',
+            'updates'                => 'required|array|min:1',
+            'updates.*.entry_id'     => 'required|integer',
+            'updates.*.fields'       => 'required|array',
+            'updates.*.lock_version' => 'nullable|integer',
         ]);
 
         try {
@@ -222,6 +224,8 @@ class LoadingPlanEntryController extends Controller
                 'message'   => $e->getMessage(),
                 'conflicts' => $e->conflicts,
             ], 409);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         }
     }
 
@@ -263,7 +267,7 @@ class LoadingPlanEntryController extends Controller
                 'scheduled_date' => $e->scheduledDate,
             ], 422);
         } catch (\Throwable $e) {
-            Log::error('batchApply failed', ['message' => $e->getMessage()]);
+            Log::error('batchApply failed', ['exception' => $e]);
             return response()->json([
                 'error'   => 'server_error',
                 'message' => 'Could not apply the batch of changes. Nothing was saved.',

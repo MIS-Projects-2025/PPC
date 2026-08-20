@@ -6,7 +6,8 @@ use App\Models\CustomerDataWip;
 use App\Models\LoadingPlanEntry;
 use App\Models\LotQuantity;
 use App\Models\PpcPackageMaster;
-
+use Carbon\Carbon;
+use Carbon\CarbonInterface;
 //TODO: distinguish Collection from Eloquence and Support
 use Illuminate\Support\Collection;
 
@@ -19,6 +20,10 @@ class LoadingPlanService
     protected Collection $splitsByChild;
     protected Collection $mergesByTarget;
     protected Collection $mergesBySource;
+    public readonly Collection $todayWipRows;
+    public readonly Collection $todayLeakedWipRows;
+    public readonly Collection $todayLeakedPlannedLotEntries;
+    public readonly Collection $todayPlannedLotEntries;
 
     // should WipRows be the source of truth everywhere, even in lot previous?
     // I'd say yes.
@@ -98,74 +103,101 @@ class LoadingPlanService
     //     $rootWip = $wipRows->firstWhere('Lot_Id', $splitInfo['rootLotId']);
     // }
 
-
     public function __construct(
-        protected CarbonInterface|string $date,
-        protected string $selectedLocation,
+        protected CarbonInterface|string|null $date = null,
+        protected ?string $selectedLocation = null,
         ?string $previousDate = null,
     ) {
-        $dateObj = $this->date instanceof CarbonInterface
-            ? $this->date
-            : Carbon::parse($this->date);
+        $dateObj = match (true) {
+            $this->date instanceof CarbonInterface => $this->date,
+            is_string($this->date) => Carbon::parse($this->date),
+            default => now(),
+        };
 
         $this->date = $dateObj->toDateString();
-        $this->previousDate = $previousDate ?? $dateObj->subDay()->toDateString();
+        $this->previousDate = $previousDate ?? $dateObj->copy()->subDay()->toDateString();
+
         $this->calc = new LotScheduleCalculator([
             'dates' => [$this->previousDate, $this->date],
             'lotIds' => [],
         ]);
+    }
 
+    public function initWipAndEntries()
+    {
+        //TODO: do you need loadPackageList here?
         $this->selectedPackages = PpcPackageMaster::query()
             ->activeTelford()
-            ->where('default_pl', $this->selectedLocation)
+            ->when($this->selectedLocation !== null, fn($q) => $q->where('default_pl', $this->selectedLocation))
             ->pluck('package')
             ->map(fn($p) => trim((string) $p))
             ->all();
+        // var_dump("LOG ~ LoadingPlanService.php:124 ~ LoadingPlanService ~ __construct ~ selectedPackages:", $this->selectedPackages);
 
         $this->initSplitsAndMerges();
+
+        $this->todayWipRows = $this->getWipRowsForToday($this->selectedPackages);
+        $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
+        $this->todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot($this->todayLeakedPlannedLotEntries->pluck('lot_id')->all());
+        $this->todayPlannedLotEntries = LoadingPlanEntryService::getToday($this->date, $this->selectedPackages);
     }
 
     public function initEntries()
     {
-        // continue https://claude.ai/chat/3c9e2acb-60ed-4c84-a2e5-0ed671e78269
+        // continue https://claude.ai/chat/3c9e2acb-60ed-4c84-a2e5-0ed671e78269 //jbvhert2002
+        // var_dump("LOG ~ LoadingPlanService.php:143 ~ LoadingPlanService ~ initEntries ~ todayPlannedLotEntries:", $this->todayPlannedLotEntries);
+        // var_dump("LOG ~ LoadingPlanService.php:146 ~ LoadingPlanService ~ initEntries ~ todayWipRows:", $this->todayWipRows);
 
-        $todayPlannedLotEntries = LoadingPlanEntryService::getToday($this->date, $this->selectedPackages);
-        $todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
+        $todayPlannedLotIds = $this->todayPlannedLotEntries->pluck('lot_id')->all();
 
-        $todayWipRows = $this->getWipRowsForToday($this->selectedPackages);
-        $todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot($todayLeakedPlannedLotEntries->pluck('lot_id')->all());
+        // var_dump("LOG ~ LoadingPlanService.php:145 ~ LoadingPlanService ~ initEntries ~ todayPlannedLotIds:", $todayPlannedLotIds);
+        // var_dump("WIP Keys Count:", count($this->todayWipRows->keys()));
+        // var_dump("Planned Lot IDs Count:", count($todayPlannedLotIds));
+        // var_dump("Matching Lot IDs:", array_intersect($this->todayWipRows->keys()->all(), $todayPlannedLotIds));
+        // $unassignedTodayWip  = $this->todayWipRows->except($todayPlannedLotIds);
+        // Ensure todayWipRows is keyed by lot ID
+        $unassignedTodayWip = $this->todayWipRows
+            ->toBase()
+            ->except($todayPlannedLotIds);
 
-        $todayPlannedLotIds = $todayPlannedLotEntries->pluck('lot_id')->filter()->all();
-        $unassignedTodayWip  = $todayWipRows->except($todayPlannedLotIds);
+        // var_dump("LOG ~ LoadingPlanService.php:149 ~ LoadingPlanService ~ initEntries ~ unassignedTodayWip:", $unassignedTodayWip);
+
 
         $filterLocation = fn($entry) => $entry->machineModel?->location === null
             || $entry->machineModel?->location === $this->selectedLocation;
 
-        $todayPlannedBlockEntries = $todayPlannedLotEntries->where('entry_type', 'block')->filter($filterLocation);
-        $todayLeakedPlannedBlockEntries = $todayLeakedPlannedLotEntries->where('entry_type', 'block')->filter($filterLocation);
+        $todayPlannedBlockEntries = $this->todayPlannedLotEntries->where('entry_type', 'block')->filter($filterLocation);
+        $todayLeakedPlannedBlockEntries = $this->todayLeakedPlannedLotEntries->where('entry_type', 'block')->filter($filterLocation);
 
         // 3. Separate WIP-backed vs Manual Lot Entries via O(1) Lookups
-        $todayWipPlannedEntries = $todayPlannedLotEntries
+        $todayWipPlannedEntries = $this->todayPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->filter(fn($entry) => $todayWipRows->has($entry->lot_id));
+            ->filter(fn($entry) => $this->todayWipRows->has($entry->lot_id));
 
-        $todayManualPlannedEntries = $todayPlannedLotEntries
+        $todayManualPlannedEntries = $this->todayPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->reject(fn($entry) => $todayWipRows->has($entry->lot_id));
+            ->reject(fn($entry) => $this->todayWipRows->has($entry->lot_id));
 
-        $todayLeakedWipPlannedEntries = $todayLeakedPlannedLotEntries
+        $todayLeakedWipPlannedEntries = $this->todayLeakedPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->filter(fn($entry) => $todayLeakedWipRows->has($entry->lot_id));
+            ->filter(fn($entry) => $this->todayLeakedWipRows->has($entry->lot_id));
 
-        $todayLeakedManualPlannedEntries = $todayLeakedPlannedLotEntries
+        $todayLeakedManualPlannedEntries = $this->todayLeakedPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->reject(fn($entry) => $todayLeakedWipRows->has($entry->lot_id));
+            ->reject(fn($entry) => $this->todayLeakedWipRows->has($entry->lot_id));
 
         $buildLotPayload = function (
             ?LoadingPlanEntry $entry = null,
             ?CustomerDataWip $wip = null,
             ?LotQuantity $quantity = null
         ) {
+
+            // dump([
+            //     'quantity' => $quantity?->toArray(),
+            //     'wip'      => $wip?->toArray(),
+            //     'entry'    => $entry?->toArray(),
+            // ]);
+
             $resolvedQuantity = $quantity ?? $entry?->lotQuantity;
 
             return $this->createPlannedLot(
@@ -192,12 +224,14 @@ class LoadingPlanService
             );
         });
 
+        // var_dump("LOG ~ LoadingPlanService.php:207 ~ LoadingPlanService ~ initEntries ~ unassignedResults:", $unassignedResults);
+
         // 5. Transform All Groups via createPlannedLot
         $lotResults = $todayWipPlannedEntries
-            ->map(fn($entry) => $buildLotPayload($entry, $todayWipRows->get($entry->lot_id)));
+            ->map(fn($entry) => $buildLotPayload($entry, $this->todayWipRows->get($entry->lot_id)));
 
         $leakedLotResults = $todayLeakedWipPlannedEntries
-            ->map(fn($entry) => $buildLotPayload($entry, $todayLeakedWipRows->get($entry->lot_id)));
+            ->map(fn($entry) => $buildLotPayload($entry, $this->todayLeakedWipRows->get($entry->lot_id)));
 
         $manualLotResults = $todayLeakedManualPlannedEntries
             ->concat($todayManualPlannedEntries)
@@ -208,10 +242,11 @@ class LoadingPlanService
             ->map(fn($entry) => $buildLotPayload($entry, null));
 
         // 6. Merge All Streams and Apply Machine/Sequence Sorting
-        $result = $lotResults
+        $result =
+            $lotResults
+            ->concat($leakedLotResults)
             ->concat($unassignedResults)
             ->concat($manualLotResults)
-            ->concat($leakedLotResults)
             ->concat($blockResults);
 
         return self::sortEntriesByMachineAndSequence($result);
@@ -262,7 +297,7 @@ class LoadingPlanService
             ->keyBy('Lot_Id'); // Explicitly keys collection by Lot_Id
     }
 
-    private function initSplitsAndMerges(): void
+    public function initSplitsAndMerges(): void
     {
         $activeSplits = \App\Models\LotSplit::active()
             ->whereIn('scheduled_date', [$this->date, $this->previousDate])
@@ -280,7 +315,7 @@ class LoadingPlanService
     }
 
     /**
-     * Sort entries by machine name (natural order, nulls last) and sequenceOrder ascending.
+     * Sort entries by machine name (natural order, nulls last) and sequence_order ascending.
      *
      * @param Collection<int, array<string, mixed>> $entries
      * @return Collection<int, array<string, mixed>>
@@ -299,9 +334,20 @@ class LoadingPlanService
                     return strnatcasecmp($a['machine'] ?? '', $b['machine'] ?? '');
                 }
 
-                // 3. Ascending order by sequenceOrder (missing/null sequences go last)
-                $seqA = $a['sequenceOrder'] ?? PHP_FLOAT_MAX;
-                $seqB = $b['sequenceOrder'] ?? PHP_FLOAT_MAX;
+                // 3. Chronological: scheduled_date first — a leaked lot (earlier
+                // date) must sort before today's own rows regardless of what its
+                // sequence_order happens to be, since sequence_order only orders
+                // rows WITHIN one date, never across dates.
+                $dateA = $a['scheduled_date'] ?? null;
+                $dateB = $b['scheduled_date'] ?? null;
+
+                if ($dateA !== $dateB) {
+                    return ($dateA === null) <=> ($dateB === null) ?: ($dateA <=> $dateB);
+                }
+
+                // 4. Same date — ascending sequence_order (missing/null goes last)
+                $seqA = $a['sequence_order'] ?? PHP_FLOAT_MAX;
+                $seqB = $b['sequence_order'] ?? PHP_FLOAT_MAX;
 
                 if ($seqA == $seqB) {
                     return 0;
@@ -313,6 +359,11 @@ class LoadingPlanService
     }
 
     public function createPlannedLot(
+        // TODO: review entry and wipRow should be the partname base on scheduled_date
+        // if it is the case where planned lot values retained wip details on that date.
+        // but if the business logic is that planned lot needs to be updated with what wip
+        // tells it, then entry and wipRow variable is not necessarily have the same
+        // scheduled_date and import_date
         ?CustomerDataWip $wipRow,
         ?LoadingPlanEntry $entry,
         ?LotQuantity $quantity = null,
@@ -329,9 +380,13 @@ class LoadingPlanService
             'packageType' => $quantity->packageListEntry?->package_type,
         ] : null;
 
-        $accuTime = $entry?->finalized_at
-            ? $entry->accu_time
-            : $this->calc->accuTime($doable, $capacityUph);
+        $isBlocked = $entry?->entry_type === 'block';
+
+        // $accuTime = ($isBlocked || $entry?->finalized_at)
+        //     ? $entry?->accu_time
+        //     : $this->calc->accuTime($doable, $capacityUph);
+
+        $accuTime = $entry?->accu_time ? $entry?->accu_time : $this->calc->accuTime($doable, $capacityUph);
 
         $machine = $entry?->finalized_at ? $entry->machine_snapshot : $entry?->getMachineName();
 
@@ -340,58 +395,108 @@ class LoadingPlanService
 
         $lotId = $wipRow?->Lot_Id ?? $entry?->lot_id ?? null;
 
+        $startTime = $entry?->time_start ? Carbon::parse($entry->time_start) : null;
+        $endTime   = $entry?->time_end   ? Carbon::parse($entry->time_end)   : null;
+
+        $scheduledDate = $entry?->scheduled_date?->toDateString() ?? null;
+        $isLeaked = $scheduledDate === $this->previousDate;
+
         return [
-            'entryId'             => $entry?->id,
-            'entryType'           => $entry?->entry_type,
-            'isBlock'             => $entry?->entry_type === 'block',
-            'isLeaked'            => $entry?->scheduled_date === $this->previousDate,
-            'machine'             => $machine,
+            // Entry Metadata
+            'entry_id'                   => $entry?->id,
+            'entry_type'                 => $entry?->entry_type,
+            'is_block'                   => $isBlocked,
+            'is_leaked'                  => $isLeaked,
+            'block_label'                => $entry?->block_label,
+            'machine'                    => $machine,
+            'scheduled_date'             => $scheduledDate,
 
-            'id'                  => $wipRow?->customer_data_id ?? $entry?->id,
-            'Part_Name'           => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',
-            'Lead_Count'          => $wipRow?->Lead_Count ?? null,
-            'Package_Name'        => $wipRow?->Package_Name ?? $entry?->package_name ?? null,
-            'Lot_Id'              => $lotId,
-            'Station'             => $wipRow?->Station ?? null,
-            'Lot_Type'            => $wipRow?->Lot_Type ?? null,
-            'Prod_Area'           => $wipRow?->Prod_Area ?? null,
-            'Lot_Status'          => $wipRow?->Lot_Status ?? null,
-            'Focus_Group'         => $wipRow?->Focus_Group ?? null,
-            'Stage'               => $wipRow?->Stage ?? null,
-            'Lot_Entry_Time_Days' => $wipRow?->Lot_Entry_Time_Days ?? null,
-            'CR3'                 => $wipRow?->CR3 ?? null,
-            'BE_OSL_Days'         => $wipRow?->BE_OSL_Days ?? null,
-            'Body_Size'           => $wipRow?->Body_Size ?? null,
-            'Ramp_Time'           => $wipRow?->Ramp_Time ?? null,
-            'Backend_Leadtime'    => $wipRow?->Backend_Leadtime ?? null,
-            'Date_Loaded'         => $wipRow?->Date_Loaded?->format('n/j/Y g:i:s A'),
-            'BE_Starttime'        => $wipRow?->BE_Starttime?->format('n/j/Y g:i:s A'),
+            // Lot & WIP Identifiers/Specs
+            'id'                         => $wipRow?->customer_data_id ?? $entry?->id,
+            'part_name'                  => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',
+            'lead_count'                 => $wipRow?->Lead_Count ?? null,
+            'package_name'               => $wipRow?->Package_Name ?? $entry?->package_name ?? null,
+            'lot_id'                     => $lotId,
+            'station'                    => $wipRow?->Station ?? null,
+            'lot_type'                   => $wipRow?->Lot_Type ?? null,
+            'prod_area'                  => $wipRow?->Prod_Area ?? null,
+            'lot_status'                 => $wipRow?->Lot_Status ?? null,
+            'focus_group'                => $wipRow?->Focus_Group ?? null,
+            'stage'                      => $wipRow?->Stage ?? null,
+            'lot_entry_time_days'        => $wipRow?->Lot_Entry_Time_Days ?? null,
+            'cr3'                        => $wipRow?->CR3 ?? null,
+            'be_osl_days'                => $wipRow?->BE_OSL_Days ?? null,
+            'body_size'                  => $wipRow?->Body_Size ?? null,
+            'ramp_time'                  => $wipRow?->Ramp_Time ?? null,
+            'backend_leadtime'           => $wipRow?->Backend_Leadtime ?? null,
+            'date_loaded'                => transform($wipRow?->Date_Loaded, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
+            'be_starttime'               => transform($wipRow?->BE_Starttime, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
 
-            'status'              => $entry?->status ?? null,
-            'sequenceOrder'       => $entry?->sequence_order,
-            'item'                => $entry?->sequence_order,
-            'timeStart'           => $entry?->time_start ?? null,
-            'timeEnd'             => $entry?->time_end ?? null,
-            'Remarks'             => $entry?->remarks ?? null,
-            'tag'                 => $entry?->tag ?? null,
-            'lockVersion'         => $entry?->lock_version ?? null,
+            // Execution & Timing
+            'status'                     => $entry?->status ?? null,
+            'sequence_order'             => $entry?->sequence_order,
+            'item'                       => $entry?->sequence_order,
+            'time_start'                 => $startTime?->format('H:i'),
+            'time_end'                   => $endTime?->format('H:i'),
 
-            'accuTime'            => $accuTime,
-            'doableRecipeSource'  => $doableRecipeSource,
+            // Day offset relative to today (-1 = yesterday, 0 = today, +1 = tomorrow)
+            // 'time_start_day_offset'      => $startTime ? (int) Carbon::parse($this->date)->diffInDays($startTime->copy()->startOfDay(), false) : null,
+            // 'time_end_day_offset'        => $endTime   ? (int) Carbon::parse($this->date)->diffInDays($endTime->copy()->startOfDay(), false)   : null,
 
-            'Qty'                 => $effectiveQty,
-            'Doable'              => $doable,
-            'doableStatus'        => $doableStatus,
-            'Capacity_UPH'        => $capacityUph,
+            'remarks'                    => $entry?->remarks ?? null,
+            'tag'                        => $entry?->tag ?? null,
+            'lock_version'               => $entry?->lock_version ?? null,
 
-            'CT'                      => $formulas->ct,
-            'OSL'                     => $formulas->osl,
-            'cycleTimeExceed'         => $formulas->cycleTimeExceed,
-            'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
-            'isBakeHighlight'         => $formulas->isBakeHighlight,
+            // Capacity & Recipe Metadata
+            'accu_time'                  => $accuTime,
+            'doable_recipe_source'       => $doableRecipeSource,
+            'qty'                        => $effectiveQty,
+            'doable'                     => $doable,
+            'doable_status'              => $doableStatus,
+            'capacity_uph'               => $capacityUph,
 
-            'splitInfo'           => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent, $this->splitsByChild),
-            'mergeInfo'           => LotMergeService::buildMergeMeta($lotId, $this->mergesByTarget, $this->mergesBySource),
+            // Formula Calculated Metrics
+            'ct'                         => $formulas->ct,
+            'osl'                        => $formulas->osl,
+            'cycle_time_exceed'          => $formulas->cycleTimeExceed,
+            'cycle_time_exceed_residual' => $formulas->cycleTimeExceedResidual,
+            'is_bake_highlight'          => $formulas->isBakeHighlight,
+
+            // Split & Merge Metadata
+            'split_info' => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent ?? null, $this->splitsByChild ?? null, $scheduledDate),
+            'merge_info' => LotMergeService::buildMergeMeta($lotId, $this->mergesByTarget ?? null, $this->mergesBySource ?? null, $scheduledDate),
         ];
+    }
+
+    /**
+     * Attaches qty/doable/capacity + inherited WIP display fields (Lead_Count,
+     * Body_Size, CR3, etc.) onto a lot entry for API response purposes.
+     * Split children have no WIP row of their own, so these are pulled from
+     * the root lot's CustomerDataWip row rather than stored/duplicated.
+     *
+     * Mutates $entry in place and returns the LotQuantity row it looked up,
+     * so callers can reuse it if they need anything else off it.
+     */
+    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId): LoadingPlanEntry
+    {
+        $entryDate = $entry->scheduled_date->toDateString();
+
+        $quantity = LotQuantity::where('lot_id', $entry->lot_id)
+            ->where('scheduled_date', $entryDate)
+            ->first();
+
+        $rootWip = CustomerDataWip::query()
+            ->where('Lot_Id', $rootLotId)
+            ->orderByDesc('import_date')
+            ->first();
+
+        $data = $this->createPlannedLot($rootWip, $entry, $quantity);
+
+        foreach ($data as $key => $value) {
+            // TODO: now that the shape of the entry has changed
+            $entry->setAttribute($key, $value);
+        }
+
+        return $entry;
     }
 }

@@ -8,7 +8,7 @@ import HoverCell from "./HoverCell";
 import { TableInteractionContext } from "./MachineSectionBody";
 import MachineSectionBody from "./MachineSectionBody.jsx";
 
-export const isBlockRow = (row) => row?.isBlock === true;
+export const isBlockRow = (row) => row?.is_block === true;
 
 const MachineSection = memo(
     function MachineSection({
@@ -56,7 +56,7 @@ const MachineSection = memo(
         const totalDoable = useMemo(
             () =>
                 rows.reduce(
-                    (s, r) => s + (isBlockRow(r) ? 0 : r.Doable || 0),
+                    (s, r) => s + (isBlockRow(r) ? 0 : r.doable || 0),
                     0,
                 ),
             [rows],
@@ -78,7 +78,7 @@ const MachineSection = memo(
         };
 
         const incompleteCount = useMemo(
-            () => rows.filter((r) => !isBlockRow(r) && !r.Lot_Id).length,
+            () => rows.filter((r) => !isBlockRow(r) && !r.lot_id).length,
             [rows],
         );
 

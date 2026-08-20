@@ -288,8 +288,8 @@ export default function SelectionToolbar({
                 ref={mergeModalRef}
                 lotA={selectedRows[0]}
                 lotB={selectedRows[1]}
-                onConfirm={({ targetLotId, sourceLotId }) =>
-                    onMergeRows({ targetLotId, sourceLotId })
+                onConfirm={({ targetLotEntryId, sourceLotEntryId }) =>
+                    onMergeRows({ targetLotEntryId, sourceLotEntryId })
                 }
                 onClose={() => mergeModalRef.current?.close()}
             />
@@ -299,8 +299,8 @@ export default function SelectionToolbar({
                 machines={machines}
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
-                parentLotId={selectedRow?.Lot_Id}
-                totalQty={selectedRow?.Qty}
+                parentLotId={selectedRow?.lot_id}
+                totalQty={selectedRow?.qty}
                 onConfirm={({
                     childLotId,
                     childQty,
@@ -308,7 +308,7 @@ export default function SelectionToolbar({
                     targetMachine,
                 }) =>
                     onSplitRow({
-                        parentLotId: selectedRow?.Lot_Id,
+                        parentEntryLotId: selectedRow?.entry_id,
                         childLotId,
                         childQty,
                         parentQty,

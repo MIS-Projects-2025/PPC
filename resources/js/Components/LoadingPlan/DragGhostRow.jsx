@@ -57,13 +57,13 @@ export function DragGhostRow({ row }) {
                                         {value}
                                     </span>
                                 );
-                            } else if (key === "accuTime") {
+                            } else if (key === "accu_time") {
                                 const v = Number(value) || 0;
                                 const h = Math.floor(v / 60);
                                 const m = v % 60;
                                 display = h > 0 ? `${h}h ${m}m` : `${m}m`;
                             } else if (key === "expectedPT") {
-                                display = formatExpectedPT(row.accuTime);
+                                display = formatExpectedPT(row.accu_time);
                             } else if (key === "CT") {
                                 display = fmt2dp(computeCT(row));
                             } else if (key === "OSL") {
@@ -72,8 +72,8 @@ export function DragGhostRow({ row }) {
                                     computeOSL(ct, row.Backend_Leadtime),
                                 );
                             } else if (key === "focusGroupStage") {
-                                const fg = row.Focus_Group ?? "";
-                                const st = row.Stage ?? "";
+                                const fg = row.focus_group ?? "";
+                                const st = row.stage ?? "";
                                 display =
                                     fg && st
                                         ? `${fg} / ${st}`

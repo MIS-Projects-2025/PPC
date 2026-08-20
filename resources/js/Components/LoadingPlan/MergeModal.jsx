@@ -6,7 +6,7 @@ import { GoGitMerge } from "react-icons/go";
  *  backend's merge() logic (equal qty → lotA wins arbitrarily). */
 function resolveTargetSource(lotA, lotB) {
     if (!lotA || !lotB) return { target: null, source: null };
-    return (lotA.Qty ?? 0) >= (lotB.Qty ?? 0)
+    return (lotA.qty ?? 0) >= (lotB.qty ?? 0)
         ? { target: lotA, source: lotB }
         : { target: lotB, source: lotA };
 }
@@ -21,15 +21,15 @@ const MergeModal = forwardRef(function MergeModal(
     );
 
     const canConfirm = !!target && !!source;
-    const targetQty = target?.Qty ?? 0;
-    const sourceQty = source?.Qty ?? 0;
+    const targetQty = target?.qty ?? 0;
+    const sourceQty = source?.qty ?? 0;
     const mergedQty = targetQty + sourceQty;
 
     const handleConfirm = () => {
         if (!canConfirm) return;
         onConfirm({
-            targetLotId: target.Lot_Id,
-            sourceLotId: source.Lot_Id,
+            targetLotEntryId: target.entry_id,
+            sourceLotEntryId: source.entry_id,
         });
         ref.current?.close();
     };
@@ -53,7 +53,7 @@ const MergeModal = forwardRef(function MergeModal(
                                     Source &middot; absorbed
                                 </div>
                                 <div className="font-mono text-sm text-base-content/80">
-                                    {source.Lot_Id}
+                                    {source.lot_id}
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">
@@ -84,7 +84,7 @@ const MergeModal = forwardRef(function MergeModal(
                                     Target &middot; result
                                 </div>
                                 <div className="font-mono text-sm text-base-content/80">
-                                    {target.Lot_Id}
+                                    {target.lot_id}
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">

@@ -26,7 +26,7 @@ export const COLUMNS = [
     }),
 
     // ── Read-only data columns ──────────────────────────────────────────────
-    columnHelper.accessor("Part_Name", {
+    columnHelper.accessor("part_name", {
         header: "Part Name",
         size: 200,
         cell: (info) => (
@@ -34,13 +34,13 @@ export const COLUMNS = [
         ),
     }),
 
-    columnHelper.accessor("Lead_Count", {
+    columnHelper.accessor("lead_count", {
         header: "Leads",
         size: 55,
         cell: (info) => info.getValue() ?? "—",
     }),
 
-    columnHelper.accessor("Package_Name", {
+    columnHelper.accessor("package_name", {
         header: "Package",
         size: 150,
         // Rendering for normal rows is special-cased in RowContent (clickable,
@@ -50,15 +50,15 @@ export const COLUMNS = [
         cell: (info) => info.getValue() ?? "—",
     }),
 
-    columnHelper.accessor("Lot_Id", {
+    columnHelper.accessor("lot_id", {
         header: "Lot ID",
         size: 220,
         cell: (info) => (
             <LotIdCell
                 lotId={info.getValue()}
-                splitInfo={info.row.original.splitInfo}
-                mergeInfo={info.row.original.mergeInfo}
-                isPlannedYesterday={info.row.original.isLeaked}
+                splitInfo={info.row.original.split_info}
+                mergeInfo={info.row.original.merge_info}
+                isPlannedYesterday={info.row.original.is_leaked}
             />
         ),
     }),
@@ -74,45 +74,45 @@ export const COLUMNS = [
     }),
 
     // ── Editable free-text ──────────────────────────────────────────────────
-    columnHelper.accessor("Remarks", {
+    columnHelper.accessor("remarks", {
         header: "Remarks",
         size: 160,
         cell: (info) => <RemarksCell value={info.getValue()} />,
     }),
 
-    columnHelper.accessor("Station", {
+    columnHelper.accessor("station", {
         header: "Station",
         size: 120,
     }),
 
-    columnHelper.accessor("Qty", {
+    columnHelper.accessor("qty", {
         header: "Qty",
         size: 80,
         cell: (info) => info.getValue()?.toLocaleString() ?? "—",
     }),
 
     // ── Editable columns ────────────────────────────────────────────────────
-    columnHelper.accessor("Doable", {
+    columnHelper.accessor("doable", {
         header: "Doable",
         size: 80,
         cell: (info) => (
             <DoableCell
                 value={info.getValue()}
-                status={info.row.original.doableStatus}
-                recipeSource={info.row.original.doableRecipeSource}
+                status={info.row.original.doable_status}
+                recipeSource={info.row.original.doable_recipe_source}
             />
         ),
     }),
 
-    // ── Derived: Capacity_UPH (from Qty + current machine's platform) ──────
-    columnHelper.accessor("Capacity_UPH", {
+    // ── Derived: capacity_uph (from Qty + current machine's platform) ──────
+    columnHelper.accessor("capacity_uph", {
         header: "Capacity UPH",
         size: 140,
         enableSorting: false,
         cell: (info) => info.getValue()?.toLocaleString() ?? "—",
     }),
 
-    columnHelper.accessor("accuTime", {
+    columnHelper.accessor("accu_time", {
         header: "Accu. Time",
         size: 85,
         cell: (info) => {
@@ -125,27 +125,27 @@ export const COLUMNS = [
     }),
 
     // ── Derived time columns ────────────────────────────────────────────────
-    columnHelper.accessor("timeStart", {
+    columnHelper.accessor("time_start", {
         header: "Time Start",
         size: 120,
         enableSorting: false,
         cell: (info) => {
             const row = info.row.original;
-            return row.timeStartDayOffset > 0
-                ? `${info.getValue()} +${row.timeStartDayOffset}d`
-                : info.getValue();
+            const offset = row.time_start_day_offset;
+            if (!offset) return info.getValue();
+            return `${info.getValue()} ${offset > 0 ? "+" : ""}${offset}d`;
         },
     }),
 
-    columnHelper.accessor("timeEnd", {
+    columnHelper.accessor("time_end", {
         header: "Time End",
         size: 120,
         enableSorting: false,
         cell: (info) => {
             const row = info.row.original;
-            return row.timeEndDayOffset > 0
-                ? `${info.getValue()} +${row.timeEndDayOffset}d`
-                : info.getValue();
+            const offset = row.time_end_day_offset;
+            if (!offset) return info.getValue();
+            return `${info.getValue()} ${offset > 0 ? "+" : ""}${offset}d`;
         },
     }),
 
@@ -154,16 +154,16 @@ export const COLUMNS = [
         header: "Expected PT",
         size: 120,
         enableSorting: false,
-        cell: (info) => formatExpectedPT(info.row.original.accuTime),
+        cell: (info) => formatExpectedPT(info.row.original.accu_time),
     }),
 
     // ── More read-only data columns ─────────────────────────────────────────
-    columnHelper.accessor("Lot_Type", {
+    columnHelper.accessor("lot_type", {
         header: "Lot Type",
         size: 95,
     }),
 
-    columnHelper.accessor("Lot_Status", {
+    columnHelper.accessor("lot_status", {
         header: "Lot Status",
         size: 90,
     }),
@@ -174,8 +174,8 @@ export const COLUMNS = [
         size: 140,
         cell: (info) => {
             const r = info.row.original;
-            const fg = r.Focus_Group ?? "";
-            const st = r.Stage ?? "";
+            const fg = r.focus_group ?? "";
+            const st = r.stage ?? "";
             if (!fg && !st) return "—";
             if (!st) return fg;
             if (!fg) return st;
@@ -183,26 +183,26 @@ export const COLUMNS = [
         },
     }),
 
-    columnHelper.accessor("Lot_Entry_Time_Days", {
+    columnHelper.accessor("lot_entry_time_days", {
         header: "Entry Days",
         size: 95,
         cell: (info) => fmt2dp(info.getValue()),
     }),
 
-    columnHelper.accessor("CR3", {
+    columnHelper.accessor("cr3", {
         header: "CR3",
         size: 65,
         cell: (info) => info.getValue() ?? "—",
     }),
 
-    columnHelper.accessor("BE_OSL_Days", {
+    columnHelper.accessor("be_osl_days", {
         header: "BE OSL Days",
         size: 125,
         cell: (info) => fmt2dp(info.getValue()),
     }),
 
     columnHelper.display({
-        id: "CT",
+        id: "ct",
         header: "CT",
         size: 100,
         enableSorting: false,
@@ -210,7 +210,7 @@ export const COLUMNS = [
     }),
 
     columnHelper.display({
-        id: "OSL",
+        id: "osl",
         header: "OSL",
         size: 100,
         enableSorting: false,
@@ -218,13 +218,13 @@ export const COLUMNS = [
     }),
 
     // ── More read-only data columns ─────────────────────────────────────────
-    columnHelper.accessor("Body_Size", {
+    columnHelper.accessor("body_size", {
         header: "Body Size",
         size: 145,
         cell: (info) => info.getValue() ?? "—",
     }),
 
-    columnHelper.accessor("Ramp_Time", {
+    columnHelper.accessor("ramp_time", {
         header: "Ramp Time",
         size: 80,
         cell: (info) => info.getValue() ?? "—",

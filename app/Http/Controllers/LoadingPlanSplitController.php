@@ -16,19 +16,17 @@ class LoadingPlanSplitController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'parent_lot_id'   => 'required|string',
-            'scheduled_date'  => 'required|date',
-            'child_qty'       => 'required|integer|min:1',
-            'target_machine'  => 'required|string',
-            'before_entry_id' => 'nullable|integer',
-            'after_entry_id'  => 'nullable|integer',
-            'child_lot_id'    => 'nullable|string',
+            'parent_entry_lot_id'   => 'required|int',
+            'child_qty'             => 'required|integer|min:1',
+            'target_machine'        => 'required|string',
+            'before_entry_id'       => 'nullable|integer',
+            'after_entry_id'        => 'nullable|integer',
+            'child_lot_id'          => 'nullable|string',
         ]);
 
         try {
             $result = $this->service->split(
-                $data['parent_lot_id'],
-                $data['scheduled_date'],
+                $data['parent_entry_lot_id'],
                 $data['child_qty'],
                 $data['target_machine'],
                 $data['before_entry_id'] ?? null,

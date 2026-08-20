@@ -31,40 +31,40 @@
  *                                       // an already-saved plan keeps
  *                                       // whatever machine/MANUAL it has.
  *     item:               number,   // 1-based queue position — auto-managed
- *     Part_Name:          string,
- *     Lead_Count:         number,   // integer, read-only
- *     Package_Name:       string,
- *     Lot_Id:             string,
+ *     part_name:          string,
+ *     lead_count:         number,   // integer, read-only
+ *     package_name:       string,
+ *     lot_id:             string,
  *     status:             string,   // dropdown: "DONE" | "RUNNING" | "FOR PROCESS" | "FVI" | "BOXING" | "LWAIT" | null
- *     Station:            string,
- *     Qty:                number,
- *     Lot_Type:           string,
- *     Lot_Status:         string,
- *     Focus_Group:        string,
- *     Stage:              string,
- *     Lot_Entry_Time_Days:number,
- *     CR3:                string|number,
- *     BE_OSL_Days:        number,
- *     Body_Size:          string,
- *     Ramp_Time:          number|string,
+ *     station:            string,
+ *     qty:                number,
+ *     lot_type:           string,
+ *     lot_status:         string,
+ *     focus_group:        string,
+ *     stage:              string,
+ *     lot_entry_time_days:number,
+ *     cr3:                string|number,
+ *     be_osl_days:        number,
+ *     body_size:          string,
+ *     ramp_time:          number|string,
  *     // Hidden columns used for derived calculations:
- *     Date_Loaded:        string,   // "6/23/2026 4:38:45 AM"
- *     BE_Starttime:       string,   // "6/23/2026 4:38:45 AM"
- *     Backend_Leadtime:   number,   // integer (days)
+ *     date_loaded:        string,   // "6/23/2026 4:38:45 AM"
+ *     be_starttime:       string,   // "6/23/2026 4:38:45 AM"
+ *     backend_leadtime:   number,   // integer (days)
  *     tag:                string|null, // "expedite" | "hold" | "flag" | null
  *   }
  *
  * Editable fields (stored in a separate table, merged on the frontend):
- *   Doable, accuTime (the duration in minutes), Remarks
+ *   doable, accu_time (the duration in minutes), Remarks
  *
  * Derived (computed, never stored directly):
- *   timeStart, timeEnd  — recomputed from accuTime + baseTimes; null/blank
+ *   time_start, time_end  — recomputed from accu_time + baseTimes; null/blank
  *                          for Unassigned (machine === null), since there's
  *                          no schedule there to compute
- *   expectedPT          — accuTime / 60, displayed as "Xh Ymin"
- *   CT                  — (Date_Loaded - BE_Starttime) in days, 2 dp
- *   OSL                 — CT - Backend_Leadtime, 2 dp
- *   Capacity_UPH         — looked up from CAPACITY_BANDS using (Qty, the
+ *   expectedPT          — accu_time / 60, displayed as "Xh Ymin"
+ *   ct                  — (Date_Loaded - BE_Starttime) in days, 2 dp
+ *   osl                 — CT - Backend_Leadtime, 2 dp
+ *   capacity_uph         — looked up from CAPACITY_BANDS using (Qty, the
  *                          lot's CURRENT machine's platform). Re-derives
  *                          live on every render — moving a lot to a
  *                          different machine/platform, or editing Qty,
@@ -78,7 +78,7 @@
  *   not listed in PACKAGE_GROUPS falls back to being its own group (so
  *   existing ungrouped packages keep behaving exactly as before).
  *
- *   The machine timeline (timeStart/timeEnd) is computed ONCE per machine,
+ *   The machine timeline (time_start/time_end) is computed ONCE per machine,
  *   in true row order, completely independent of Package_Name/groups — a
  *   single machine can only run one lot at a time, regardless of which
  *   package/tab that lot belongs to. Package tabs are a pure VIEW FILTER
@@ -92,16 +92,16 @@
  *   whether any lot currently sits in them:
  *
  *     - Unassigned (machine === null) — a holding pen. NO timeline: order
- *       is purely cosmetic, never recomputed, no Capacity_UPH. Ignores the
+ *       is purely cosmetic, never recomputed, no capacity_uph. Ignores the
  *       active package-group filter entirely (always shows ALL unassigned
  *       lots, regardless of which tab is selected) — there's no "view" to
  *       filter against until a lot has a machine.
  *     - MANUAL (machine === "MANUAL") — work done by a person, not a
  *       machine. HAS its own independent timeline, exactly like a real
  *       machine (same recomputeMachine() path) — it's just not backed by a
- *       platform, so Capacity_UPH is always null there.
+ *       platform, so capacity_uph is always null there.
  *     - Real machines — from the MACHINES config (mocked for now; will be
- *       DB-backed). Each has a `platform`, used only for Capacity_UPH
+ *       DB-backed). Each has a `platform`, used only for capacity_uph
  *       lookups against CAPACITY_BANDS (also mocked).
  *
  *   Lots can be dragged/transferred freely between any of the three at any
@@ -180,10 +180,10 @@ import { DragGhostRow } from "../Components/LoadingPlan/DragGhostRow";
 //
 // A lot's `machine` field is one of:
 //   - a real machine name listed in MACHINES (has a platform, has a
-//     timeline, has a Capacity_UPH derived from its platform's bands)
+//     timeline, has a capacity_uph derived from its platform's bands)
 //   - MACHINE_MANUAL  ("MANUAL" pseudo-machine — processed by a person.
-//     Has its OWN independent timeline (timeStart/timeEnd), just like a
-//     real machine, but no platform, so no Capacity_UPH.)
+//     Has its OWN independent timeline (time_start/time_end), just like a
+//     real machine, but no platform, so no capacity_uph.)
 //   - null            (truly unassigned — no timeline at all, order is
 //     purely cosmetic, never recomputed.)
 //
@@ -201,7 +201,7 @@ const PLATFORM_ORDER = ["G6L", "Vitrox", "HSI"];
  *  firing N independent calls per changed row, which could partially
  *  succeed/fail and leave local state and the DB disagreeing about which
  *  of the undo's changes actually landed. */
-function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
+function syncToServer(prevRows, nextRows, date, mutate, update, toast) {
     const prevById = new Map(prevRows.map((r) => [r._dndId, r]));
     const nextById = new Map(nextRows.map((r) => [r._dndId, r]));
 
@@ -238,9 +238,9 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
         return (
             p.machine !== r.machine ||
             p.status !== r.status ||
-            p.Remarks !== r.Remarks ||
+            p.remarks !== r.remarks ||
             p.tag !== r.tag ||
-            p.accuTime !== r.accuTime ||
+            p.accu_time !== r.accu_time ||
             positionChanged
         );
     });
@@ -259,10 +259,10 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 
     // --- Undo of an add → delete it again ---
     removed.forEach((r) => {
-        if (r.splitInfo?.isChild && r.splitInfo?.splitId) {
+        if (r.split_info?.isChild && r.split_info?.splitId) {
             operations.push({
                 type: "revert_split",
-                split_id: r.splitInfo.splitId,
+                split_id: r.split_info.splitId,
             });
             opOwners.push({
                 dndId: r._dndId,
@@ -272,10 +272,10 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
             return;
         }
 
-        if (!r.entryId) return;
+        if (!r.entry_id) return;
         operations.push({
             type: "delete",
-            entry_id: r.entryId,
+            entry_id: r.entry_id,
             machine: r.machine,
         });
         opOwners.push({ dndId: r._dndId, kind: "delete", snapshot: r });
@@ -283,10 +283,10 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 
     // --- Undo of a delete → recreate it ---
     added.forEach((r) => {
-        if (r.splitInfo?.isChild && r.splitInfo?.splitId) {
+        if (r.split_info?.isChild && r.split_info?.splitId) {
             operations.push({
                 type: "unrevert_split",
-                split_id: r.splitInfo.splitId,
+                split_id: r.split_info.splitId,
             });
             opOwners.push({ dndId: r._dndId, kind: "unrevert_split" });
             return;
@@ -303,21 +303,21 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
             operations.push({
                 type: "create_block",
                 machine: r.machine,
-                label: r.blockLabel,
-                duration: r.accuTime,
+                label: r.block_label,
+                duration: r.accu_time,
                 before_entry_id: beforeEntryId,
                 after_entry_id: afterEntryId,
             });
         } else {
             operations.push({
                 type: "create_lot",
-                lot_id: r.Lot_Id,
+                lot_id: r.lot_id,
                 fields: {
                     status: r.status,
-                    remarks: r.Remarks,
+                    remarks: r.remarks,
                     tag: r.tag,
-                    accu_time: r.accuTime,
-                    doable: r.Doable,
+                    accu_time: r.accu_time,
+                    doable: r.doable,
                 },
                 machine: r.machine,
                 before_entry_id: beforeEntryId,
@@ -345,8 +345,8 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
             operations.push({
                 type: machineChanged ? "transfer" : "move",
                 entry_type: isBlock ? "block" : "lot",
-                lot_id: isBlock ? null : r.Lot_Id,
-                entry_id: isBlock ? r.entryId : null,
+                lot_id: isBlock ? null : r.lot_id,
+                entry_id: r.entry_id ?? null,
                 target_machine: machineChanged ? r.machine : undefined,
                 machine: r.machine,
                 before_entry_id: beforeEntryId,
@@ -357,21 +357,21 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 
         const fields = {};
         if (p.status !== r.status) fields.status = r.status;
-        if (p.Remarks !== r.Remarks) fields.remarks = r.Remarks;
+        if (p.remarks !== r.remarks) fields.remarks = r.remarks;
         if (p.tag !== r.tag) fields.tag = r.tag;
-        if (p.accuTime !== r.accuTime) fields.accu_time = r.accuTime;
+        if (p.accu_time !== r.accu_time) fields.accu_time = r.accu_time;
 
         if (Object.keys(fields).length > 0) {
             operations.push({
                 type: "update_field",
                 entry_type: isBlock ? "block" : "lot",
-                lot_id: isBlock ? null : r.Lot_Id,
-                entry_id: isBlock ? r.entryId : null,
+                lot_id: isBlock ? null : r.lot_id,
+                entry_id: isBlock ? r.entry_id : null,
                 fields,
                 // get the lock_version of the previousRows, which is the live data.
                 // This is the one we are undoing/redoing into
                 // lock_version of the nextRows would be wrong here.
-                lock_version: p.lockVersion ?? null,
+                lock_version: p.lock_version ?? null,
             });
             opOwners.push({ dndId: r._dndId, kind: "field", snapshot: p });
         }
@@ -396,19 +396,20 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
 
                         return {
                             ...row,
-                            entryId: result.id ?? row.entryId,
-                            lockVersion: result.lock_version ?? row.lockVersion,
-                            sequenceOrder:
-                                result.sequence_order ?? row.sequenceOrder,
-                            splitInfo: result.splitInfo ?? row.splitInfo,
-                            Doable: result.doable ?? row.Doable,
-                            doableStatus:
-                                result.doableStatus ?? row.doableStatus,
-                            doableRecipeSource:
-                                result.doableRecipeSource ??
-                                row.doableRecipeSource,
-                            Capacity_UPH:
-                                result.capacityUph ?? row.Capacity_UPH,
+                            entry_id: result.id ?? row.entry_id,
+                            lock_version:
+                                result.lock_version ?? row.lock_version,
+                            sequence_order:
+                                result.sequence_order ?? row.sequence_order,
+                            split_info: result.split_info ?? row.split_info,
+                            doable: result.doable ?? row.doable,
+                            doable_status:
+                                result.doable_status ?? row.doable_status,
+                            doable_recipe_source:
+                                result.doable_recipe_source ??
+                                row.doable_recipe_source,
+                            capacity_uph:
+                                result.capacity_uph ?? row.capacity_uph,
                         };
                     })
                     .filter(Boolean);
@@ -418,25 +419,26 @@ function syncUndoRedoToServer(prevRows, nextRows, date, mutate, update, toast) {
                 results.forEach((result) => {
                     if (result?.parent) {
                         next = next.map((r) =>
-                            r.Lot_Id === result.parent.lot_id
+                            r.lot_id === result.parent.lot_id
                                 ? {
                                       ...r,
-                                      Qty: result.parentQty ?? r.Qty,
-                                      Doable: result.parentDoable ?? r.Doable,
-                                      doableStatus:
+                                      qty: result.parentQty ?? r.Qty,
+                                      doable: result.parentDoable ?? r.doable,
+                                      doable_status:
                                           result.parentDoableStatus ??
-                                          r.doableStatus,
-                                      doableRecipeSource:
-                                          result.doableRecipeSource ??
-                                          r.doableStatus,
-                                      Capacity_UPH:
+                                          r.doable_status,
+                                      doable_recipe_source:
+                                          result.doable_recipe_source ??
+                                          r.doable_status,
+                                      capacity_uph:
                                           result.parentCapacityUph ??
-                                          r.Capacity_UPH,
-                                      lockVersion:
+                                          r.capacity_uph,
+                                      lock_version:
                                           result.parent.lock_version ??
-                                          r.lockVersion,
-                                      splitInfo:
-                                          result.parentSplitInfo ?? r.splitInfo,
+                                          r.lock_version,
+                                      split_info:
+                                          result.parentSplitInfo ??
+                                          r.split_info,
                                   }
                                 : r,
                         );
@@ -466,6 +468,7 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
+
     machineDayStarts,
     disseminationSummary,
     machineCapacity,
@@ -480,10 +483,16 @@ export default function LoadingPlanTable({
     onLotTransfer,
     onReorder,
 }) {
-    console.log("🚀 ~ LoadingPlanTable ~ serverMachines:", serverMachines);
-    console.log("🚀 ~ LoadingPlanTable ~ machineCapacity:", machineCapacity);
-    console.log("🚀 ~ packageGroups ~ packageGroups:", packageGroups);
-    console.log("🚀 ~ LoadingPlanTable ~ packages:", packageGroupNames);
+    console.log(
+        "LOG ~ LoadingPlanTable.jsx:487 ~ LoadingPlanTable ~ baseTimes:",
+        baseTimes,
+    );
+    console.log(
+        "LOG ~ LoadingPlanTable.jsx:486 ~ LoadingPlanTable ~ serverMachines:",
+        serverMachines,
+    );
+    console.log("111111 ~ packageGroups:", packageGroups);
+
     const {
         present: data,
         update,
@@ -492,7 +501,6 @@ export default function LoadingPlanTable({
         canUndo,
         canRedo,
     } = useLoadingPlanStore();
-    console.log("🚀 ~ LoadingPlanTable ~ data:", data);
 
     const toast = useToast();
     const { mutate } = useMutation();
@@ -500,6 +508,11 @@ export default function LoadingPlanTable({
     const packageGroupReverseMap = useMemo(
         () => toReverseMap(packageGroups),
         [packageGroups],
+    );
+
+    console.log(
+        "LOG ~ LoadingPlanTable.jsx:508 ~ LoadingPlanTable ~ packageGroupReverseMap:",
+        packageGroupReverseMap,
     );
 
     const resolvedData = initialData ?? _initialData;
@@ -622,11 +635,9 @@ export default function LoadingPlanTable({
                 mutate(route("loading-plan.bulk-update"), {
                     body: {
                         updates: targets.map((r) => ({
-                            id: r.entryId ?? null,
-                            lot_id: r.Lot_Id,
-                            scheduled_date: date,
+                            entry_id: r.entry_id ?? null,
                             fields: { tag },
-                            lock_version: r.lockVersion ?? 0,
+                            lock_version: r.lock_version ?? 0,
                         })),
                     },
                 }),
@@ -637,14 +648,14 @@ export default function LoadingPlanTable({
                             prev.map((r) => {
                                 const match = entries?.find(
                                     (e) =>
-                                        e.id === r.entryId ||
-                                        e.lot_id === r.Lot_Id,
+                                        e.id === r.entry_id ||
+                                        e.lot_id === r.lot_id,
                                 );
                                 return match
                                     ? {
                                           ...r,
-                                          entryId: match.id,
-                                          lockVersion: match.lock_version,
+                                          entry_id: match.id,
+                                          lock_version: match.lock_version,
                                       }
                                     : r;
                             }),
@@ -683,11 +694,9 @@ export default function LoadingPlanTable({
             mutate(route("loading-plan.bulk-update"), {
                 body: {
                     updates: targets.map((r) => ({
-                        id: r.entryId ?? null,
-                        lot_id: r.Lot_Id,
-                        scheduled_date: date,
+                        entry_id: r.entry_id ?? null,
                         fields: { tag: null },
-                        lock_version: r.lockVersion ?? 0,
+                        lock_version: r.lock_version ?? 0,
                     })),
                 },
             }),
@@ -698,13 +707,14 @@ export default function LoadingPlanTable({
                         prev.map((r) => {
                             const match = entries?.find(
                                 (e) =>
-                                    e.id === r.entryId || e.lot_id === r.Lot_Id,
+                                    e.id === r.entry_id ||
+                                    e.lot_id === r.lot_id,
                             );
                             return match
                                 ? {
                                       ...r,
-                                      entryId: match.id,
-                                      lockVersion: match.lock_version,
+                                      entry_id: match.id,
+                                      lock_version: match.lock_version,
                                   }
                                 : r;
                         }),
@@ -747,11 +757,9 @@ export default function LoadingPlanTable({
                 mutate(route("loading-plan.bulk-update"), {
                     body: {
                         updates: targets.map((r) => ({
-                            id: r.entryId ?? null,
-                            lot_id: r.Lot_Id,
-                            scheduled_date: date,
+                            entry_id: r.entry_id ?? null,
                             fields: { status: normalizedStatus },
-                            lock_version: r.lockVersion ?? 0,
+                            lock_version: r.lock_version ?? 0,
                         })),
                     },
                 }),
@@ -761,13 +769,13 @@ export default function LoadingPlanTable({
                         (prev) =>
                             prev.map((r) => {
                                 const match = entries?.find(
-                                    (e) => e.lot_id === r.Lot_Id,
+                                    (e) => e.lot_id === r.lot_id,
                                 );
                                 return match
                                     ? {
                                           ...r,
-                                          entryId: match.id,
-                                          lockVersion: match.lock_version,
+                                          entry_id: match.id,
+                                          lock_version: match.lock_version,
                                       }
                                     : r;
                             }),
@@ -798,11 +806,11 @@ export default function LoadingPlanTable({
             console.log("🚀 ~ LoadingPlanTable ~ selectedRows:", selectedRows);
             console.log("🚀 ~ LoadingPlanTable ~ selectedRows:", selectedRows);
             const lotIds = selectedRows
-                .filter((r) => !isBlockRow(r) && r.Lot_Id)
-                .map((r) => r.Lot_Id);
+                .filter((r) => !isBlockRow(r) && r.lot_id)
+                .map((r) => r.lot_id);
             const blockEntryIds = selectedRows
-                .filter((r) => isBlockRow(r) && r.entryId)
-                .map((r) => r.entryId);
+                .filter((r) => isBlockRow(r) && r.entry_id)
+                .map((r) => r.entry_id);
 
             const affectedMachines = new Set();
             update((prev) => {
@@ -813,7 +821,7 @@ export default function LoadingPlanTable({
                     return { ...r, machine: targetMachine };
                 });
                 affectedMachines.forEach((m) =>
-                    recomputeMachine(next, m, baseTimes),
+                    recomputeMachine(next, m, baseTimes, date),
                 );
                 return next;
             });
@@ -835,26 +843,16 @@ export default function LoadingPlanTable({
                         update(
                             (prev) =>
                                 prev.map((r) => {
+                                    // batchApply is a bit inefficient
                                     const match = updatedEntries?.find((e) =>
                                         isBlockRow(r)
-                                            ? e.id === r.entryId
-                                            : e.lot_id === r.Lot_Id,
-                                    );
-                                    console.log(
-                                        "🚀 ~ AD AS AS AS ~ match:",
-                                        match,
+                                            ? e.id === r.entry_id
+                                            : e.lot_id === r.lot_id,
                                     );
                                     return match
                                         ? {
                                               ...r,
-                                              entryId: match.id,
-                                              sequenceOrder:
-                                                  match.sequence_order,
-                                              lockVersion: match.lock_version,
-                                              accuTime: match.accu_time,
-                                              machine: targetMachine,
-                                              timeStart: match.time_start,
-                                              timeEnd: match.time_end,
+                                              ...match,
                                           }
                                         : r;
                                 }),
@@ -863,7 +861,7 @@ export default function LoadingPlanTable({
                     })
                     .catch((err) => {
                         console.error("Bulk transfer failed:", err);
-                        toast?.error?.(error);
+                        toast?.error?.(err?.message);
                     });
             }
         },
@@ -872,9 +870,9 @@ export default function LoadingPlanTable({
 
     const handleBulkDelete = useCallback(() => {
         const targets = data.filter(
-            (r) => selectedIds.has(r._dndId) && r.entryId,
+            (r) => selectedIds.has(r._dndId) && r.entry_id,
         );
-        const entryIds = targets.map((r) => r.entryId);
+        const entryIds = targets.map((r) => r.entry_id);
 
         update((prev) => {
             const affectedMachines = new Set();
@@ -883,12 +881,12 @@ export default function LoadingPlanTable({
                     if (!selectedIds.has(r._dndId)) return r;
                     if (isBlockRow(r)) return r; // blocks get removed below
                     affectedMachines.add(r.machine);
-                    return { ...r, machine: null, sequenceOrder: null };
+                    return { ...r, machine: null, sequence_order: null };
                 })
                 .filter((r) => !(selectedIds.has(r._dndId) && isBlockRow(r)));
 
             affectedMachines.forEach((m) =>
-                recomputeMachine(next, m, baseTimes),
+                recomputeMachine(next, m, baseTimes, date),
             );
             return next;
         });
@@ -907,10 +905,10 @@ export default function LoadingPlanTable({
                         (prev) =>
                             prev.map((r) => {
                                 const match = unassigned?.find(
-                                    (e) => e.id === r.entryId,
+                                    (e) => e.id === r.entry_id,
                                 );
                                 return match
-                                    ? { ...r, lockVersion: match.lock_version }
+                                    ? { ...r, lock_version: match.lock_version }
                                     : r;
                             }),
                         true,
@@ -941,7 +939,7 @@ export default function LoadingPlanTable({
             undo();
             const nextSnapshot = useLoadingPlanStore.getState().present;
             // console.log("🚀 ~ LoadingPlanTable ~ nextSnapshot:", nextSnapshot);
-            await syncUndoRedoToServer(
+            await syncToServer(
                 prevSnapshot,
                 nextSnapshot,
                 date,
@@ -962,7 +960,7 @@ export default function LoadingPlanTable({
             const prevSnapshot = dataRef.current;
             redo();
             const nextSnapshot = useLoadingPlanStore.getState().present;
-            await syncUndoRedoToServer(
+            await syncToServer(
                 prevSnapshot,
                 nextSnapshot,
                 date,
@@ -1028,10 +1026,12 @@ export default function LoadingPlanTable({
                 // is NOT a one-way reset on every reload.
                 machine: row.machine ?? null,
                 tag: row.tag ?? null,
-                Doable: row.Doable ?? 0,
-                accuTime: row.accuTime ?? row.duration ?? 0,
-                Remarks: row.Remarks ?? "",
-                _dndId: row.entryId ? `entry-${row.entryId}` : `wip-${row.id}`,
+                doable: row.doable ?? 0,
+                accu_time: row.accu_time ?? row.duration ?? 0,
+                remarks: row.remarks ?? "",
+                _dndId: row.entry_id
+                    ? `entry-${row.entry_id}`
+                    : `wip-${row.id}`,
             };
         });
 
@@ -1040,7 +1040,7 @@ export default function LoadingPlanTable({
         // recomputeMachine (hasTimeline() returns false for it).
         const machineBuckets = new Set(seeded.map((r) => r.machine));
         machineBuckets.forEach((machine) => {
-            recomputeMachine(seeded, machine, baseTimes);
+            recomputeMachine(seeded, machine, baseTimes, date);
         });
         console.log("🚀 ~ LoadingPlanTable ~ seeded:", seeded);
         console.log("🚀 ~ LoadingPlanTable ~ machineBuckets:", machineBuckets);
@@ -1052,7 +1052,7 @@ export default function LoadingPlanTable({
         seeded.forEach((r) => {
             if (!machinePkgPairs.has(r.machine))
                 machinePkgPairs.set(r.machine, new Set());
-            machinePkgPairs.get(r.machine).add(r.Package_Name);
+            machinePkgPairs.get(r.machine).add(r.package_name);
         });
 
         useLoadingPlanStore.getState().reset(seeded);
@@ -1095,16 +1095,16 @@ export default function LoadingPlanTable({
             withUpdating(
                 mutate(
                     route("loading-plan.entries.update", {
-                        id: row.entryId ?? 0,
+                        id: row.entry_id ?? 0,
                     }),
                     {
                         method: "PATCH",
                         body: {
                             entry_type: isBlockRow(row) ? "block" : "lot",
-                            lot_id: row.Lot_Id,
+                            lot_id: row.lot_id,
                             scheduled_date: date,
                             fields: { status: normalizedStatus },
-                            lock_version: row.lockVersion ?? null,
+                            lock_version: row.lock_version ?? null,
                         },
                     },
                 ),
@@ -1117,8 +1117,8 @@ export default function LoadingPlanTable({
                             r._dndId === dndId
                                 ? {
                                       ...r,
-                                      entryId: entry.id,
-                                      lockVersion: entry.lock_version,
+                                      entry_id: entry.id,
+                                      lock_version: entry.lock_version,
                                   }
                                 : r,
                         );
@@ -1157,6 +1157,11 @@ export default function LoadingPlanTable({
         return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
     }, [serverMachines]); // fixed: was `[]`, now correctly depends on serverMachines
 
+    console.log(
+        "LOG ~ LoadingPlanTable.jsx:1181 ~ LoadingPlanTable ~ machines:",
+        machines,
+    );
+
     const groupedRows = useMemo(() => {
         const map = {};
         data.forEach((r) => {
@@ -1165,7 +1170,7 @@ export default function LoadingPlanTable({
             if (
                 r.machine !== null &&
                 !isBlockRow(r) &&
-                groupOf(r.Package_Name, packageGroupReverseMap) !==
+                groupOf(r.package_name, packageGroupReverseMap) !==
                     activePackage
             )
                 return;
@@ -1199,7 +1204,7 @@ export default function LoadingPlanTable({
             // Skip block rows (non-lot downtime/blocks)
             if (typeof isBlockRow === "function" && isBlockRow(r)) return;
 
-            const doable = Number(r.Doable ?? r.doable) || 0;
+            const doable = Number(r.doable ?? r.doable) || 0;
 
             // Accumulate total per machine
             result[r.machine] = (result[r.machine] || 0) + doable;
@@ -1228,29 +1233,29 @@ export default function LoadingPlanTable({
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
                 if (isBlockRow(row)) continue; // anchor only on real lots
-                const group = groupOf(row.Package_Name, packageGroupReverseMap);
+                const group = groupOf(row.package_name, packageGroupReverseMap);
 
                 const startIdx = (lastIndexOfGroup[group] ?? -1) + 1;
 
                 const segments = [];
                 for (let j = startIdx; j < i; j++) {
                     const r = rows[j];
-                    const minutes = Number(r.accuTime) || 0;
+                    const minutes = Number(r.accu_time) || 0;
                     const last = segments[segments.length - 1];
 
                     if (isBlockRow(r)) {
                         // (blocks intentionally excluded, matching existing behavior)
                     } else {
                         const otherGroup = groupOf(
-                            r.Package_Name,
+                            r.package_name,
                             packageGroupReverseMap,
                         );
                         const lotDetail = {
-                            Lot_Id: r.Lot_Id,
-                            timeStart: r.timeStart,
-                            timeEnd: r.timeEnd,
-                            timeStartDayOffset: r.timeStartDayOffset,
-                            timeEndDayOffset: r.timeEndDayOffset,
+                            lot_id: r.lot_id,
+                            time_start: r.time_start,
+                            time_end: r.time_end,
+                            time_start_day_offset: r.time_start_day_offset,
+                            time_end_day_offset: r.time_end_day_offset,
                             minutes,
                         };
 
@@ -1279,15 +1284,15 @@ export default function LoadingPlanTable({
 
                     const gapStart = boundaryBeforeRow
                         ? {
-                              time: boundaryBeforeRow.timeEnd,
-                              timeStartDayOffset:
-                                  boundaryBeforeRow.timeEndDayOffset,
+                              time: boundaryBeforeRow.time_end,
+                              time_start_day_offset:
+                                  boundaryBeforeRow.time_end_day_offset,
                           }
                         : null;
 
                     const gapEnd = {
-                        time: row.timeStart,
-                        timeEndDayOffset: row.timeStartDayOffset,
+                        time: row.time_start,
+                        time_end_day_offset: row.time_start_day_offset,
                     };
 
                     result[machine][row._dndId] = {
@@ -1309,7 +1314,7 @@ export default function LoadingPlanTable({
         data.forEach((r) => {
             if (r.machine === null) return; // Unassigned ignores the package filter
             if (
-                groupOf(r.Package_Name, packageGroupReverseMap) ===
+                groupOf(r.package_name, packageGroupReverseMap) ===
                 activePackage
             )
                 return;
@@ -1417,7 +1422,7 @@ export default function LoadingPlanTable({
                     toMachine = fallbackMachine;
                     isTransfer = fromMachine !== toMachine;
                     if (isTransfer) moved.machine = toMachine;
-                    addSeenPair(toMachine, moved.Package_Name);
+                    addSeenPair(toMachine, moved.package_name);
 
                     let insertAt = next.length;
                     for (let i = next.length - 1; i >= 0; i--) {
@@ -1435,7 +1440,7 @@ export default function LoadingPlanTable({
 
                     [moved] = next.splice(fromIdx, 1);
                     if (isTransfer) moved.machine = toMachine;
-                    addSeenPair(toMachine, moved.Package_Name);
+                    addSeenPair(toMachine, moved.package_name);
 
                     let insertAt = next.findIndex((r) => r._dndId === over.id);
                     if (insertAt === -1) insertAt = next.length;
@@ -1444,8 +1449,9 @@ export default function LoadingPlanTable({
                 }
 
                 // Recompute in the SAME pass — one update(), one undo entry
-                recomputeMachine(next, toMachine, baseTimes);
-                if (isTransfer) recomputeMachine(next, fromMachine, baseTimes);
+                recomputeMachine(next, toMachine, baseTimes, date);
+                if (isTransfer)
+                    recomputeMachine(next, fromMachine, baseTimes, date);
 
                 onReorder?.(
                     toMachine,
@@ -1456,7 +1462,7 @@ export default function LoadingPlanTable({
                         fromMachine,
                         next.filter((r) => r.machine === fromMachine),
                     );
-                    onLotTransfer?.(moved.Lot_Id, fromMachine, toMachine);
+                    onLotTransfer?.(moved.lot_id, fromMachine, toMachine);
                 }
 
                 pendingRecompute = {
@@ -1481,7 +1487,7 @@ export default function LoadingPlanTable({
             // reorder is purely cosmetic, per the JSDoc contract).
             if (toMachine === null && !isTransfer) return;
             const isBlock = isBlockRow(moved);
-            if (isBlock && !moved.entryId) return; // block was never persisted (shouldn't happen — addBlock always creates it)
+            if (isBlock && !moved.entry_id) return; // block was never persisted (shouldn't happen — addBlock always creates it)
 
             const { beforeEntryId, afterEntryId } = findMachineNeighbors(
                 finalRows,
@@ -1494,23 +1500,19 @@ export default function LoadingPlanTable({
                     ? mutate(route("loading-plan.transfer"), {
                           body: {
                               entry_type: isBlock ? "block" : "lot",
-                              lot_id: isBlock ? null : moved.Lot_Id,
-                              entry_id: isBlock ? moved.entryId : null,
+                              entry_id: moved.entry_id,
                               target_machine: toMachine,
                               before_entry_id: beforeEntryId,
                               after_entry_id: afterEntryId,
-                              scheduled_date: date,
                           },
                       })
                     : mutate(route("loading-plan.move"), {
                           body: {
                               entry_type: isBlock ? "block" : "lot",
-                              lot_id: isBlock ? null : moved.Lot_Id,
-                              entry_id: isBlock ? moved.entryId : null,
+                              entry_id: moved.entry_id,
                               before_entry_id: beforeEntryId,
                               after_entry_id: afterEntryId,
                               machine: toMachine,
-                              scheduled_date: date,
                           },
                       }),
             );
@@ -1526,9 +1528,9 @@ export default function LoadingPlanTable({
                                 r._dndId === moved._dndId
                                     ? {
                                           ...r,
-                                          sequenceOrder: entry.sequence_order,
-                                          lockVersion: entry.lock_version,
-                                          entryId: entry.id,
+                                          sequence_order: entry.sequence_order,
+                                          lock_version: entry.lock_version,
+                                          entry_id: entry.id,
                                       }
                                     : r,
                             ),
@@ -1536,7 +1538,11 @@ export default function LoadingPlanTable({
                     );
                 })
                 .catch((err) => {
-                    console.error("Failed to persist move/transfer:", err);
+                    console.error(
+                        "Failed to persist move/transfer:",
+                        err?.message,
+                    );
+                    toast?.error(err?.message);
                     // Consider: revert local state or show a toast here.
                 });
         },
@@ -1556,8 +1562,8 @@ export default function LoadingPlanTable({
             const type = EDITABLE_COLUMNS[field];
             if (!type) return;
             const row = data.find((r) => r._dndId === dndId);
-            // Block rows can only edit accuTime
-            if (isBlockRow(row) && field !== "accuTime") return;
+            // Block rows can only edit accu_time
+            if (isBlockRow(row) && field !== "accu_time") return;
             const rect = e.currentTarget.getBoundingClientRect();
             setEditCell({
                 dndId,
@@ -1640,13 +1646,14 @@ export default function LoadingPlanTable({
             const row = data.find((r) => r._dndId === dndId);
             if (!row) return;
 
-            if (field === "timeStart") {
+            if (field === "time_start") {
                 const { rows: withGap, error } = applyTimeStartEdit(
                     data,
                     dndId,
                     row.machine,
                     value,
                     baseTimes,
+                    date,
                 );
 
                 if (error) {
@@ -1655,7 +1662,7 @@ export default function LoadingPlanTable({
                     return;
                 }
 
-                recomputeMachine(withGap, row.machine, baseTimes);
+                recomputeMachine(withGap, row.machine, baseTimes, date);
 
                 const prevSnapshot = data;
                 update(() => withGap);
@@ -1666,7 +1673,7 @@ export default function LoadingPlanTable({
                 console.log("🚀 ~ LoadingPlanTable ~ withGap:", withGap);
 
                 withUpdating(
-                    syncUndoRedoToServer(
+                    syncToServer(
                         prevSnapshot,
                         withGap,
                         date,
@@ -1683,9 +1690,10 @@ export default function LoadingPlanTable({
                 const next = prev.map((r) =>
                     r._dndId !== dndId ? { ...r } : { ...r, [field]: value },
                 );
-                if (field === "accuTime") {
+                if (field === "accu_time") {
                     const row = next.find((r) => r._dndId === dndId);
-                    if (row) recomputeMachine(next, row.machine, baseTimes);
+                    if (row)
+                        recomputeMachine(next, row.machine, baseTimes, date);
                 }
                 return next;
             });
@@ -1693,22 +1701,20 @@ export default function LoadingPlanTable({
             setIsDirty(true);
             setEditCell(null);
 
-            // Backend field name for accuTime is snake_case (accu_time)
+            // Backend field name for accu_time is snake_case (accu_time)
             const backendField = toSnakeCase(field);
 
             withUpdating(
                 mutate(
                     route("loading-plan.entries.update", {
-                        id: row.entryId ?? 0,
+                        id: row.entry_id ?? 0,
                     }),
                     {
                         method: "PATCH",
                         body: {
                             entry_type: isBlockRow(row) ? "block" : "lot",
-                            lot_id: row.Lot_Id,
-                            scheduled_date: date,
                             fields: { [backendField]: value },
-                            lock_version: row.lockVersion ?? null,
+                            lock_version: row.lock_version ?? null,
                         },
                     },
                 ),
@@ -1720,8 +1726,8 @@ export default function LoadingPlanTable({
                                 r._dndId === dndId
                                     ? {
                                           ...r,
-                                          entryId: entry.id,
-                                          lockVersion: entry.lock_version,
+                                          entry_id: entry.id,
+                                          lock_version: entry.lock_version,
                                       }
                                     : r,
                             ),
@@ -1740,9 +1746,9 @@ export default function LoadingPlanTable({
                                               [field]:
                                                   current?.[backendField] ??
                                                   r[field],
-                                              lockVersion:
+                                              lock_version:
                                                   current?.lock_version ??
-                                                  r.lockVersion,
+                                                  r.lock_version,
                                           }
                                         : r,
                                 ),
@@ -1776,7 +1782,7 @@ export default function LoadingPlanTable({
 
     const handleMergeRevert = useCallback(
         ({ targetLotId, sourceLotId }) => {
-            const targetRow = data.find((r) => r.Lot_Id === targetLotId);
+            const targetRow = data.find((r) => r.lot_id === targetLotId);
 
             if (!targetRow) {
                 toast?.error?.(
@@ -1785,7 +1791,7 @@ export default function LoadingPlanTable({
                 return;
             }
 
-            const sourceRow = data.find((r) => r.Lot_Id === sourceLotId);
+            const sourceRow = data.find((r) => r.lot_id === sourceLotId);
 
             if (!sourceRow) {
                 toast?.error?.(
@@ -1794,7 +1800,7 @@ export default function LoadingPlanTable({
                 return;
             }
 
-            const mergeId = targetRow.mergeInfo?.mergeId;
+            const mergeId = targetRow.merge_info?.mergeId;
 
             if (!mergeId) {
                 toast?.error?.(
@@ -1817,30 +1823,30 @@ export default function LoadingPlanTable({
 
                     update((prev) => {
                         const next = prev.map((row) => {
-                            if (row.Lot_Id === target.lot_id) {
+                            if (row.lot_id === target.lot_id) {
                                 return {
                                     ...row,
-                                    Qty: target.qty,
-                                    lockVersion: target.lock_version,
-                                    mergeInfo: null,
-                                    Doable: target.doable,
-                                    doableStatus: target.doableStatus,
-                                    doableRecipeSource:
-                                        target.doableRecipeSource,
-                                    Capacity_UPH: target.capacityUph,
+                                    qty: target.qty,
+                                    lock_version: target.lock_version,
+                                    merge_info: null,
+                                    doable: target.doable,
+                                    doable_status: target.doable_status,
+                                    doable_recipe_source:
+                                        target.doable_recipe_source,
+                                    capacity_uph: target.capacity_uph,
                                 };
                             }
-                            if (row.Lot_Id === source.lot_id) {
+                            if (row.lot_id === source.lot_id) {
                                 return {
                                     ...row,
-                                    Qty: source.qty,
-                                    lockVersion: source.lock_version,
-                                    mergeInfo: null,
-                                    Doable: source.doable,
-                                    doableStatus: source.doableStatus,
-                                    doableRecipeSource:
-                                        source.doableRecipeSource,
-                                    Capacity_UPH: source.capacityUph,
+                                    qty: source.qty,
+                                    lock_version: source.lock_version,
+                                    merge_info: null,
+                                    doable: source.doable,
+                                    doable_status: source.doable_status,
+                                    doable_recipe_source:
+                                        source.doable_recipe_source,
+                                    capacity_uph: source.capacity_uph,
                                 };
                             }
                             return row;
@@ -1851,6 +1857,7 @@ export default function LoadingPlanTable({
                                 next,
                                 affectedMachineOfTargetRow,
                                 baseTimes,
+                                date,
                             );
                         }
                         if (affectedMachineOfSourceRow) {
@@ -1858,6 +1865,7 @@ export default function LoadingPlanTable({
                                 next,
                                 affectedMachineOfSourceRow,
                                 baseTimes,
+                                date,
                             );
                         }
 
@@ -1882,7 +1890,7 @@ export default function LoadingPlanTable({
 
     const handleSplitRevert = useCallback(
         ({ splitId, revertedBy, childLotId }) => {
-            const childRow = data.find((r) => r.Lot_Id === childLotId);
+            const childRow = data.find((r) => r.lot_id === childLotId);
             console.log("🚀 ~ LoadingPlanTable ~ childLotId:", childLotId);
             console.log("🚀 ~ LoadingPlanTable ~ data:", data);
             if (!childRow) {
@@ -1901,30 +1909,35 @@ export default function LoadingPlanTable({
                 .then((result) => {
                     update((prev) => {
                         const next = prev
-                            .filter((r) => r.Lot_Id !== result.deleted)
+                            .filter((r) => r.lot_id !== result.deleted)
                             .map((r) =>
                                 result.parent &&
-                                r.Lot_Id === result.parent.lot_id
+                                r.lot_id === result.parent.lot_id
                                     ? {
                                           ...r,
-                                          Qty: result.parentQty ?? r.Qty,
-                                          Doable:
-                                              result.parentDoable ?? r.Doable,
-                                          doableStatus:
+                                          qty: result.parentQty ?? r.qty,
+                                          doable:
+                                              result.parentDoable ?? r.doable,
+                                          doable_status:
                                               result.parentDoableStatus ??
-                                              r.doableStatus,
-                                          Capacity_UPH:
+                                              r.doable_status,
+                                          capacity_uph:
                                               result.parentCapacityUph ??
-                                              r.Capacity_UPH,
-                                          lockVersion:
+                                              r.capacity_uph,
+                                          lock_version:
                                               result.parent.lock_version,
-                                          splitInfo: result.parentSplitInfo,
+                                          split_info: result.parentSplitInfo,
                                       }
                                     : r,
                             );
 
                         if (affectedMachine) {
-                            recomputeMachine(next, affectedMachine, baseTimes);
+                            recomputeMachine(
+                                next,
+                                affectedMachine,
+                                baseTimes,
+                                date,
+                            );
                         }
 
                         return next;
@@ -1946,21 +1959,21 @@ export default function LoadingPlanTable({
     );
 
     const handleMergeRows = useCallback(
-        ({ targetLotId, sourceLotId }) => {
-            const targetRow = data.find((r) => r.Lot_Id === targetLotId);
+        ({ targetLotEntryId, sourceLotEntryId }) => {
+            const targetRow = data.find((r) => r.entry_id === targetLotEntryId);
 
             if (!targetRow) {
                 toast?.error?.(
-                    `Couldn't find target lot ${targetLotId} to merge — please refresh.`,
+                    `Couldn't find target lot ${targetLotEntryId} to merge — please refresh.`,
                 );
                 return;
             }
 
-            const sourceRow = data.find((r) => r.Lot_Id === sourceLotId);
+            const sourceRow = data.find((r) => r.entry_id === sourceLotEntryId);
 
             if (!sourceRow) {
                 toast?.error?.(
-                    `Couldn't find source lot ${sourceLotId} to merge — please refresh.`,
+                    `Couldn't find source lot ${sourceLotEntryId} to merge — please refresh.`,
                 );
                 return;
             }
@@ -1971,8 +1984,8 @@ export default function LoadingPlanTable({
             withUpdating(
                 mutate(route("loading-plan.merges.store"), {
                     body: {
-                        lot_id_a: targetRow.Lot_Id,
-                        lot_id_b: sourceRow.Lot_Id,
+                        entry_id_a: targetRow.entry_id,
+                        entry_id_b: sourceRow.entry_id,
                         scheduled_date: date,
                     },
                 }),
@@ -1982,30 +1995,16 @@ export default function LoadingPlanTable({
 
                     update((prev) => {
                         const next = prev.map((row) => {
-                            if (row.Lot_Id === target.lot_id) {
+                            if (row.entry_id === target.entry_id) {
                                 return {
                                     ...row,
-                                    Qty: target.qty,
-                                    lockVersion: target.lock_version,
-                                    mergeInfo: target.mergeInfo,
-                                    Doable: target.doable,
-                                    doableStatus: target.doableStatus,
-                                    doableRecipeSource:
-                                        target.doableRecipeSource,
-                                    Capacity_UPH: target.capacityUph,
+                                    ...target,
                                 };
                             }
-                            if (row.Lot_Id === source.lot_id) {
+                            if (row.entry_id === source.entry_id) {
                                 return {
                                     ...row,
-                                    Qty: source.qty,
-                                    lockVersion: source.lock_version,
-                                    mergeInfo: source.mergeInfo,
-                                    Doable: source.doable,
-                                    doableStatus: source.doableStatus,
-                                    doableRecipeSource:
-                                        source.doableRecipeSource,
-                                    Capacity_UPH: source.capacityUph,
+                                    ...source,
                                 };
                             }
                             return row;
@@ -2016,6 +2015,7 @@ export default function LoadingPlanTable({
                                 next,
                                 affectedMachineOfTargetRow,
                                 baseTimes,
+                                date,
                             );
                         }
                         if (affectedMachineOfSourceRow) {
@@ -2023,6 +2023,7 @@ export default function LoadingPlanTable({
                                 next,
                                 affectedMachineOfSourceRow,
                                 baseTimes,
+                                date,
                             );
                         }
 
@@ -2044,7 +2045,7 @@ export default function LoadingPlanTable({
 
     const handleSplitRow = useCallback(
         ({
-            parentLotId,
+            parentEntryLotId,
             childLotId,
             childQty,
             parentQty,
@@ -2052,7 +2053,7 @@ export default function LoadingPlanTable({
             beforeEntryId,
             afterEntryId,
         }) => {
-            const parentRow = data.find((r) => r.Lot_Id === parentLotId);
+            const parentRow = data.find((r) => r.entry_id === parentEntryLotId);
             if (!parentRow) {
                 toast?.error?.(
                     "Couldn't find the lot to split — please refresh.",
@@ -2065,8 +2066,7 @@ export default function LoadingPlanTable({
             withUpdating(
                 mutate(route("loading-plan.splits.store"), {
                     body: {
-                        parent_lot_id: parentLotId,
-                        scheduled_date: date,
+                        parent_entry_lot_id: parentEntryLotId,
                         child_qty: childQty,
                         target_machine: targetMachine,
                         before_entry_id: beforeEntryId ?? null,
@@ -2080,69 +2080,43 @@ export default function LoadingPlanTable({
 
                     update((prev) => {
                         const next = prev.map((row) =>
-                            row.Lot_Id === parentLotId
+                            row.entry_id === parentEntryLotId
                                 ? {
                                       ...row,
-                                      Qty: parentQty,
-                                      lockVersion: parent.lock_version,
-                                      splitInfo: parent.splitInfo,
-                                      Doable: parent.doable,
-                                      doableStatus: parent.doableStatus,
-                                      doableRecipeSource:
-                                          parent.doableRecipeSource,
-                                      Capacity_UPH: parent.capacityUph,
+                                      ...parent,
                                   }
                                 : row,
                         );
 
                         next.push({
-                            machine: targetMachine,
+                            ...child,
                             item: 0,
-                            Part_Name: parentRow.Part_Name,
-                            Lead_Count: child.Lead_Count,
-                            Package_Name: parentRow.Package_Name,
-                            Lot_Id: child.lot_id,
                             status: child.status ?? parentRow.status ?? "NONE",
-                            Station: child.Station,
-                            Qty: childQty,
-                            Doable: child.doable,
-                            doableStatus: child.doableStatus,
-                            doableRecipeSource: child.doableRecipeSource,
-                            Capacity_UPH: child.capacityUph,
-                            accuTime: child.accu_time,
-                            Lot_Type: child.Lot_Type,
-                            Lot_Status: child.Lot_Status,
-                            Focus_Group: child.Focus_Group,
-                            Stage: child.Stage,
-                            Lot_Entry_Time_Days: child.Lot_Entry_Time_Days,
-                            CR3: child.CR3,
-                            BE_OSL_Days: child.BE_OSL_Days,
-                            Body_Size: child.Body_Size,
-                            Ramp_Time: child.Ramp_Time,
-                            Remarks: "",
-                            Date_Loaded: null,
-                            BE_Starttime: null,
-                            Backend_Leadtime: null,
-                            tag: null,
-                            splitInfo: child.splitInfo,
-                            entryId: child.id,
-                            sequenceOrder: child.sequence_order,
-                            lockVersion: child.lock_version,
-                            _dndId: `entry-${child.id}`,
+                            _dndId: `entry-${child.entry_id}`,
                         });
 
                         if (parentMachine) {
-                            recomputeMachine(next, parentMachine, baseTimes);
+                            recomputeMachine(
+                                next,
+                                parentMachine,
+                                baseTimes,
+                                date,
+                            );
                         }
                         if (targetMachine !== parentMachine) {
-                            recomputeMachine(next, targetMachine, baseTimes);
+                            recomputeMachine(
+                                next,
+                                targetMachine,
+                                baseTimes,
+                                date,
+                            );
                         }
 
                         return next;
                     });
 
                     setIsDirty(true);
-                    addSeenPair(targetMachine, parentRow.Package_Name);
+                    addSeenPair(targetMachine, parentRow.package_name);
                     setJustAddedMachine(targetMachine);
                 })
                 .catch((err) => {
@@ -2168,7 +2142,12 @@ export default function LoadingPlanTable({
             if (qtyStr === null) return; // cancelled
             const qty = parseInt(qtyStr, 10) || 0;
 
-            const groupPkgs = packagesInGroup(activePackage);
+            console.log(
+                "LOG ~ LoadingPlanTable.jsx:2194 ~ LoadingPlanTable ~ activePackage:",
+                activePackage,
+            );
+            const groupPkgs = packagesInGroup(activePackage, packageGroups);
+
             const packageName = groupPkgs[0] ?? activePackage;
 
             withUpdating(
@@ -2177,9 +2156,9 @@ export default function LoadingPlanTable({
                         machine,
                         scheduled_date: date,
                         fields: {
-                            Part_Name: partName.trim(),
-                            Package_Name: packageName,
-                            Qty: qty,
+                            part_name: partName.trim(),
+                            package_name: packageName,
+                            qty: qty,
                         },
                         before_entry_id: null,
                         after_entry_id: null, // appends to end
@@ -2190,37 +2169,10 @@ export default function LoadingPlanTable({
                     update((prev) => {
                         const next = [...prev];
                         next.push({
-                            machine,
-                            item: 0,
-                            Part_Name: partName.trim(),
-                            Lead_Count: null,
-                            Package_Name: packageName,
-                            Lot_Id: entry.lot_id,
-                            status: entry.status ?? "NONE",
-                            Station: "",
-                            Qty: qty,
-                            Doable: 0,
-                            accuTime: 0,
-                            Lot_Type: "",
-                            Lot_Status: "",
-                            Focus_Group: "",
-                            Stage: "",
-                            Lot_Entry_Time_Days: null,
-                            CR3: null,
-                            BE_OSL_Days: null,
-                            Body_Size: "",
-                            Ramp_Time: null,
-                            Remarks: "",
-                            Date_Loaded: null,
-                            BE_Starttime: null,
-                            Backend_Leadtime: null,
-                            tag: null,
-                            entryId: entry.id,
-                            sequenceOrder: entry.sequence_order,
-                            lockVersion: entry.lock_version,
-                            _dndId: `entry-${entry.id}`,
+                            ...entry,
+                            _dndId: `entry-${entry.entry_id}`,
                         });
-                        recomputeMachine(next, machine, baseTimes);
+                        recomputeMachine(next, machine, baseTimes, date);
                         return next;
                     });
                     setIsDirty(true);
@@ -2274,27 +2226,10 @@ export default function LoadingPlanTable({
                     update((prev) => {
                         const next = [...prev];
                         next.push({
-                            machine,
-                            item: 0,
-                            Lot_Id: null,
-                            Part_Name: null,
-                            Package_Name: null,
-                            status: null,
-                            Station: null,
-                            Qty: null,
-                            Doable: null,
-                            accuTime: duration,
-                            Lot_Type: null,
-                            Lot_Status: null,
-                            Remarks: null,
-                            tag: null,
-                            isBlock: true,
-                            blockLabel: entry.block_label,
-                            entryId: entry.id,
-                            lockVersion: entry.lock_version,
-                            _dndId: `entry-${entry.id}`,
+                            ...entry,
+                            _dndId: `entry-${entry.entry_id}`,
                         });
-                        recomputeMachine(next, machine, baseTimes);
+                        recomputeMachine(next, machine, baseTimes, date);
                         return next;
                     });
                     setIsDirty(true);
@@ -2912,6 +2847,7 @@ export default function LoadingPlanTable({
                                     packageMenu.currentPackage,
                                     packageGroupReverseMap,
                                 ),
+                                packageGroupReverseMap,
                             ).map((pkg) => (
                                 <button
                                     key={pkg}

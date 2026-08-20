@@ -74,7 +74,7 @@ function DataIntegrityModal({
             : undefined;
 
     return (
-        <dialog id="data_integrity_modal" className="modal">
+        <dialog id={DATA_INTEGRITY_MODAL_ID} className="modal">
             <div className="modal-box max-w-5xl w-11/12">
                 <form method="dialog">
                     <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">
@@ -353,11 +353,11 @@ function MismatchesTable({ rows }) {
                     {rows.map((row) => {
                         const info = getReasonInfo(mismatchReason(row));
                         return (
-                            <tr key={row.customer_data_id ?? row.Lot_Id}>
+                            <tr key={row.customer_data_id ?? row.lot_id}>
                                 <td className="font-mono text-xs">
-                                    {row.Lot_Id}
+                                    {row.lot_id}
                                 </td>
-                                <td>{row.Part_Name}</td>
+                                <td>{row.part_name}</td>
                                 <td
                                     className={`bg-${info.tone} text-center p-0`}
                                 >
@@ -434,11 +434,11 @@ function RecipeIssuesTable({ rows }) {
                     {rows.map((row) => {
                         const info = getReasonInfo(row.reason);
                         return (
-                            <tr key={row.customer_data_id ?? row.Lot_Id}>
+                            <tr key={row.customer_data_id ?? row.lot_id}>
                                 <td className="font-mono text-xs">
-                                    {row.Lot_Id}
+                                    {row.lot_id}
                                 </td>
-                                <td>{row.Part_Name}</td>
+                                <td>{row.part_name}</td>
                                 <td
                                     className={`bg-${info.tone} text-center p-0`}
                                 >

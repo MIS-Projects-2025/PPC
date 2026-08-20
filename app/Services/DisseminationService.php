@@ -58,7 +58,7 @@ class DisseminationService
         $lotsCollection = collect($lots)->map(fn($item) => is_array($item) ? (object) $item : $item);
 
         // 2. Extract unique Package_Name values from the lots
-        $packageNames = $lotsCollection->pluck('Package_Name')->filter()->unique()->values()->all();
+        $packageNames = $lotsCollection->pluck('package_name')->filter()->unique()->values()->all();
 
         // 3. Batch load package IDs from ppc_package_master [package_name => id]
         $packageMap = PpcPackageMaster::whereIn('package', $packageNames)
@@ -66,16 +66,16 @@ class DisseminationService
             ->all();
 
         $lotsCollection->transform(function ($lot) use ($packageMap) {
-            $lot->package_id = $lot->package_id ?? ($packageMap[$lot->Package_Name] ?? null);
+            $lot->package_id = $lot->package_id ?? ($packageMap[$lot->package_name] ?? null);
             return $lot;
         });
 
         // 🚀 Extract unique part names
-        $partNames = $lotsCollection->pluck('Part_Name')->filter()->unique()->values()->all();
+        $partNames = $lotsCollection->pluck('part_name')->filter()->unique()->values()->all();
         $this->dedicatedPartsIndex = $this->loadDedicatedPartsForNames($partNames);
 
         // Now object property access works seamlessly
-        $lots = $lotsCollection->sortByDesc(fn($lot) => (int) ($lot->Qty ?? 0));
+        $lots = $lotsCollection->sortByDesc(fn($lot) => (int) ($lot->qty ?? 0));
 
         $assignments = [];
         $unassigned = [];
@@ -86,7 +86,7 @@ class DisseminationService
             if (empty($candidates)) {
                 $unassigned[] = [
                     // 'customer_data_id' => $lot->customer_data_id,
-                    'lot_id' => $lot->Lot_Id,
+                    'lot_id' => $lot->lot_id,
                     'reason' => "No machine matches this lot's constraints.",
                 ];
                 continue;
@@ -102,14 +102,14 @@ class DisseminationService
                 }
             }
 
-            $qty = (int) $lot->Qty;
+            $qty = (int) $lot->qty;
             $overCapacity = $bestRemaining !== null && $qty > $bestRemaining;
 
             $this->openCapacity[$bestMachineId] = ($this->openCapacity[$bestMachineId] ?? 0) - $qty;
 
             $assignments[] = [
                 // 'customer_data_id' => $lot->customer_data_id,
-                'lot_id' => $lot->Lot_Id,
+                'lot_id' => $lot->lot_id,
                 'machine_id' => $bestMachineId,
                 'machine_code' => $this->machines[$bestMachineId]->machine_num ?? (string) $bestMachineId,
                 'reason' => $overCapacity
@@ -139,8 +139,8 @@ class DisseminationService
     private function candidateMachinesForLot(object $lot): array
     {
         // Direct O(1) part lookup
-        if (isset($this->dedicatedPartsIndex[$lot->Part_Name])) {
-            return $this->dedicatedPartsIndex[$lot->Part_Name];
+        if (isset($this->dedicatedPartsIndex[$lot->part_name])) {
+            return $this->dedicatedPartsIndex[$lot->part_name];
         }
 
         $relevantEntries = $this->configsByPackageId[$lot->package_id] ?? [];
@@ -158,11 +158,11 @@ class DisseminationService
                 continue;
             }
 
-            if (! $this->leadcountMatches($config->leadcounts, $lot->Lead_Count)) {
+            if (! $this->leadcountMatches($config->leadcounts, $lot->lead_count)) {
                 continue;
             }
 
-            if (! $this->dimensionMatches($pkg->dimensions, $lot->Body_Size)) {
+            if (! $this->dimensionMatches($pkg->dimensions, $lot->body_size)) {
                 continue;
             }
 

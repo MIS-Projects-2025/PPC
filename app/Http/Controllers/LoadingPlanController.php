@@ -5,24 +5,19 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
-use App\Models\CustomerDataWip;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
 use App\Models\PpcPackageMaster;
 use App\Models\MachineCapacity;
-use App\Services\LotScheduleCalculator;
 use App\Services\LoadingPlanPackageCoverage;
 use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
-use App\Services\LotMergeService;
-use App\Services\LoadingPlanFormulas;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
 use App\Services\DisseminationService;
 use App\Services\LoadingPlanEntryService;
-use App\Services\LotSplitService;
+use App\Services\LoadingPlanService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\App;
 use Carbon\Carbon;
 
@@ -45,34 +40,35 @@ class LoadingPlanController extends Controller
             ->select('id', 'machine_num', 'machine_platform', 'location')
             ->get();
 
-        $machineDayStarts = DB::table('machine_day_starts')
-            ->whereIn('machine_id', $activeMachines->pluck('id'))
-            ->where('scheduled_date', $date)
-            ->get()
-            ->keyBy('machine_id');
-
-        $machinesNeedingFallback = $activeMachines
-            ->pluck('id')
-            ->diff($machineDayStarts->keys());
-
-        $leakedPredecessorEnds = LoadingPlanEntry::whereIn('machine_id', $machinesNeedingFallback)
-            ->where('scheduled_date', '<', $date)
-            ->whereNotNull('time_end')
-            ->orderBy('scheduled_date', 'desc')
-            ->orderBy('sequence_order', 'desc')
-            ->get()
-            ->unique('machine_id') // first row per machine after the above ordering = most recent
-            ->keyBy('machine_id');
-
         $baseTimes = $activeMachines
-            ->mapWithKeys(function ($machine) use ($machineDayStarts, $leakedPredecessorEnds) {
-                $anchor = $machineDayStarts->get($machine->id)?->day_start_time
-                    ?? $leakedPredecessorEnds->get($machine->id)?->time_end?->format('H:i:s');
+            ->mapWithKeys(function ($machine) use ($date) {
+                $targetDate = Carbon::parse($date)->toDateString();
 
-                return [$machine->machine_num => $anchor];
+                // 1. Check for a leaked predecessor from the previous day first
+                $leakedPredecessor = LoadingPlanEntry::where('machine_id', $machine->id)
+                    ->where('scheduled_date', Carbon::parse($targetDate)->subDay()->toDateString())
+                    ->where('time_end', '>=', $targetDate)
+                    ->whereNotNull('time_start')
+                    ->orderBy('sequence_order', 'asc')
+                    ->first();
+
+                if ($leakedPredecessor && $leakedPredecessor->time_start !== null) {
+                    return [$machine->machine_num => $leakedPredecessor->time_start->format('Y-m-d H:i:s')];
+                }
+
+                // 2. Fall back to the first remaining row of the current date
+                $firstRow = LoadingPlanEntryService::findFirstRemainingRow($machine->id, $targetDate);
+
+                if ($firstRow && $firstRow->time_start !== null) {
+                    return [$machine->machine_num => $firstRow->time_start->format('Y-m-d H:i:s')];
+                }
+
+                return [$machine->machine_num => null];
             })
-            ->filter() // still drop machines with genuinely nothing — brand new, no history at all
+            ->filter()
             ->all();
+
+        // dd(["baseTimes" => $baseTimes]);
 
         $activeMachines = $activeMachines
             ->map(fn($machine) => [
@@ -84,36 +80,27 @@ class LoadingPlanController extends Controller
                     default => $machine->machine_platform,
                 },
                 'location' => $machine->location,
-                'dayStartTime' => $machineDayStarts->get($machine->id)?->day_start_time,
+                // 'dayStartTime' => $machineDayStarts->get($machine->id)?->day_start_time,
             ])
             ->values();
 
-        $wipRows = $this->getWipRows($date, $selectedLocation);
-        // var_dump("🚀 ~ LoadingPlanController ~ index ~ wipRows:", $wipRows);
+        $loadingPlanService = new LoadingPlanService($date, $selectedLocation, $previousDate);
+        $loadingPlanService->initWipAndEntries();
+        $result = $loadingPlanService->initEntries();
 
-        $allEntries = $this->getEntriesIncludingLeaked($date, $previousDate);
-        // var_dump("🚀 ~ LoadingPlanController ~ index ~ allentries:", $allEntries);
+        // var_dump("LOG ~ LoadingPlanController.php:90 ~ LoadingPlanController ~ index ~ previousDate:", $previousDate);
 
-        $lotEntries = $allEntries->where('entry_type', 'lot')->keyBy('lot_id');
+        // var_dump("LOG ~ LoadingPlanController.php:90 ~ LoadingPlanController ~ index ~ selectedLocation:", $selectedLocation);
 
-        $relevantLotIds = $wipRows->pluck('Lot_Id')
-            ->merge($lotEntries->keys())
-            ->filter()
-            ->unique()
-            ->values()
-            ->all();
-
-        $calc = new LotScheduleCalculator([$date, $previousDate], $relevantLotIds);
-
-        $result = $this->buildPlanRows($date, $previousDate, $selectedLocation, $packageLineMap, $wipRows, $calc, $allEntries);
-        // var_dump("🚀 ~ LoadingPlanController ~ index ~ $result:", $result);
+        // var_dump("LOG ~ LoadingPlanController.php:90 ~ LoadingPlanController ~ index ~ date:", $date);
+        // var_dump("🚀 RE S U L T", $result);
 
         $unassignedRows = $result->filter(function ($row) {
-            if ($row['isBlock']) {
+            if ($row['is_block']) {
                 return false;
             }
 
-            return $row['entryId'] === null || $row['machine'] === null;
+            return $row['entry_id'] === null || $row['machine'] === null;
         })->values();
 
         $disseminationService = App::make(\App\Services\DisseminationService::class, ['location' => $selectedLocation]);
@@ -128,7 +115,20 @@ class LoadingPlanController extends Controller
 
         if (! empty($assignments)) {
             try {
-                (new LoadingPlanEntryService)->bulkTransferMulti($assignments, blockEntryIds: [], date: $date);
+                // 2. Perform transfer and get transformed updated payload array items
+                $updatedEntries = (new LoadingPlanEntryService)->bulkTransferMulti($assignments, date: $date);
+
+                if ($updatedEntries->isNotEmpty()) {
+                    // 3. Key both collections by lot_id
+                    $resultKeyed = $result->keyBy('lot_id');
+                    $updatedKeyed = $updatedEntries->keyBy('lot_id');
+
+                    // 4. Overwrite original entries with updated ones
+                    $merged = $resultKeyed->merge($updatedKeyed);
+
+                    // 5. Re-sort using your static helper method
+                    $result = LoadingPlanService::sortEntriesByMachineAndSequence($merged);
+                }
             } catch (\Throwable $e) {
                 report($e);
                 $saveFailed = true;
@@ -146,13 +146,15 @@ class LoadingPlanController extends Controller
         Log::info('Dissemination summary', $disseminationSummary);
 
         $packages = $result
-            ->filter(fn($row) => !$row['isBlock'])
-            ->pluck('Package_Name')
+            ->filter(fn($row) => !$row['is_block'])
+            ->pluck('package_name')
             ->filter()->unique()
             ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
             ->map(fn($pkg) => PackageGroups::groupOf($pkg))
             ->unique()->sort()->values();
 
+        $wipRows = $loadingPlanService->todayWipRows
+            ->concat($loadingPlanService->todayLeakedWipRows);
         $status = $wipRows->isEmpty() ? 'not_imported' : 'ok';
 
         $partnameIntegrity = new LoadingPlanPartnameIntegrity();
@@ -180,7 +182,7 @@ class LoadingPlanController extends Controller
             'unknownPackages' => Inertia::defer(function () use ($date) {
                 return (new LoadingPlanPackageCoverage())->findUnknownPackages($date);
             }),
-            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $calc, $date, $previousDate) {
+            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $date, $previousDate) {
                 // scoped the same way buildPlanRows() does, since this needs its own lookup independently
                 $entryLotIds = LoadingPlanEntry::whereIn('scheduled_date', [$date, $previousDate])
                     ->where('entry_type', 'lot')
@@ -208,40 +210,41 @@ class LoadingPlanController extends Controller
 
     public function byMachine(Request $request)
     {
-        // stale — unchanged
-        $data = $request->validate([
-            'date'       => 'required|date',
-            'machines'   => 'required|array|min:1',
-            'machines.*' => 'string',
-            'location'   => 'sometimes|array',
-            'location.*' => 'string',
-        ]);
+        // very very stale stale — unchanged
 
-        $selectedLocation = $request->get('location', 'PL1');
+        // $data = $request->validate([
+        //     'date'       => 'required|date',
+        //     'machines'   => 'required|array|min:1',
+        //     'machines.*' => 'string',
+        //     'location'   => 'sometimes|array',
+        //     'location.*' => 'string',
+        // ]);
 
-        $packageLineMap = PpcPackageMaster::query()
-            ->where('is_telford', 1)->where('is_active', 1)
-            ->pluck('default_pl', 'package');
+        // $selectedLocation = $request->get('location', 'PL1');
 
-        $wipRows = $this->getWipRows($data['date'], $selectedLocation);
-        $calc = new LotScheduleCalculator();
+        // $packageLineMap = PpcPackageMaster::query()
+        //     ->where('is_telford', 1)->where('is_active', 1)
+        //     ->pluck('default_pl', 'package');
 
-        $result = $this->buildPlanRows($data['date'], $data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc, collect());
+        // $wipRows = $this->getWipRows($data['date'], $selectedLocation);
+        // $calc = new LotScheduleCalculator();
 
-        $filtered = $result->whereIn('machine', $data['machines'])->values();
+        // $result = $this->buildPlanRows($data['date'], $data['date'], $selectedLocation, $packageLineMap, $wipRows, $calc, collect());
 
-        $status = match (true) {
-            $wipRows->isEmpty()  => 'not_imported',
-            $filtered->isEmpty() => 'no_match',
-            default              => 'ok',
-        };
+        // $filtered = $result->whereIn('machine', $data['machines'])->values();
 
-        return Inertia::render('LoadingPlanTableByMachine', [
-            'data'             => $filtered,
-            'date'             => $data['date'],
-            'status'           => $status,
-            'machines'         => $data['machines'],
-            'selectedLocation' => $selectedLocation,
-        ]);
+        // $status = match (true) {
+        //     $wipRows->isEmpty()  => 'not_imported',
+        //     $filtered->isEmpty() => 'no_match',
+        //     default              => 'ok',
+        // };
+
+        // return Inertia::render('LoadingPlanTableByMachine', [
+        //     'data'             => $filtered,
+        //     'date'             => $data['date'],
+        //     'status'           => $status,
+        //     'machines'         => $data['machines'],
+        //     'selectedLocation' => $selectedLocation,
+        // ]);
     }
 }

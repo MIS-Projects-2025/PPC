@@ -3,9 +3,12 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Awobaz\Compoships\Compoships;
 
 class LotQuantity extends Model
 {
+    use Compoships;
+
     protected $table = 'lot_quantities';
 
     protected $fillable = [

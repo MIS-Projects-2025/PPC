@@ -6,9 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 use App\Services\LotScheduleCalculator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Awobaz\Compoships\Compoships;
 
 class LoadingPlanEntry extends Model
 {
+    use Compoships;
     protected $table = 'loading_plan_entries';
 
     protected $fillable = [
@@ -47,12 +49,16 @@ class LoadingPlanEntry extends Model
         return $this->belongsTo(QdnMachine::class, 'machine_id');
     }
 
-    public function lotQuantity(): HasOne
+    public function lotQuantity()
     {
-        // TODO: This is fragile, it assumes that lot is unique per scheduled_date
-        return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id')
-            ->whereColumn('lot_quantities.scheduled_date', 'loading_plan_entries.scheduled_date');
+        return $this->hasOne(LotQuantity::class, ['lot_id', 'scheduled_date'], ['lot_id', 'scheduled_date']);
     }
+    // public function lotQuantity(): HasOne
+    // {
+    //     // TODO: This is fragile, it assumes that lot is unique per scheduled_date
+    //     return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id')
+    //         ->whereColumn('lot_quantities.scheduled_date', 'loading_plan_entries.scheduled_date');
+    // }
     // public function lotQuantity(): HasOne
     // {
     //     return $this->hasOne(LotQuantity::class, 'lot_id', 'lot_id')

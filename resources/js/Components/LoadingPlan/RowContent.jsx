@@ -18,38 +18,38 @@ import { TAGS, TagDot } from "./Tag";
 import interactiveCursorClasses from "./interactiveCursorClasses";
 /**
  * Editable columns and their input types.
- * accuTime replaces the old "duration" as the editable queue-time field.
- * Capacity_UPH is intentionally NOT here either — it's fully derived from
+ * accu_time replaces the old "duration" as the editable queue-time field.
+ * capacity_uph is intentionally NOT here either — it's fully derived from
  * (Qty, the lot's current machine's platform) via CAPACITY_BANDS, so it's
  * a display column now, recomputed live on every render (see its
  * columnHelper.display definition below).
  */
 export const EDITABLE_COLUMNS = {
-    accuTime: "integer",
-    Remarks: "string",
-    timeStart: "time",
+    accu_time: "integer",
+    remarks: "string",
+    time_start: "time",
 };
 
 const RED_RANGE = new Set([
-    "Part_Name",
-    "Lead_Count",
-    "Package_Name",
-    "Lot_Id",
-    "Station",
+    "part_name",
+    "lead_count",
+    "package_name",
+    "lot_id",
+    "station",
     "status",
-    "Qty",
-    "Capacity_UPH",
-    "Lot_Type",
-    "Lot_Status",
+    "qty",
+    "capacity_uph",
+    "lot_type",
+    "lot_status",
     "focusGroupStage",
-    "Lot_Entry_Time_Days",
-    "CR3",
-    "BE_OSL_Days",
-    "CT",
-    "OSL",
-    "Body_Size",
-    "Ramp_Time",
-    "Bake_Time_Temp", // Partname → Bake_Time_Temp
+    "lot_entry_time_days",
+    "cr3",
+    "be_osl_days",
+    "ct",
+    "osl",
+    "body_size",
+    "ramp_time",
+    "bake_time_temp", // Partname → Bake_Time_Temp
 ]);
 
 const YELLOW_FILL = new Set([
@@ -143,7 +143,7 @@ const RowContent = memo(
         );
 
         // ── Block row ────────────────────────────────────────────────────────
-        if (row.original?.isBlock === true) {
+        if (row.original?.is_block === true) {
             const r = row.original;
             return (
                 <tr
@@ -155,7 +155,7 @@ const RowContent = memo(
                         opacity: isDragging ? 0.3 : 1,
                         backgroundImage: isSelected
                             ? undefined
-                            : "url(\"data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23a6a6a6' fill-opacity='0.20' fill-rule='evenodd'%3E%3Cpath d='M0 40L40 0H20L0 20M40 40V20L20 40'/%3E%3C/g%3E%3C/svg%3E\")",
+                            : "url(\"data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23a6a6a6' fill-opacity='0.20' fill-rule='evenodd'%3E%3Cpath d='M0 80L80 0H40L0 40M80 80V40L40 80'/%3E%3C/g%3E%3C/svg%3E\")",
                         backgroundColor: isSelected
                             ? undefined
                             : "oklch(var(--bc) / 0.06)",
@@ -212,70 +212,70 @@ const RowContent = memo(
                         colSpan={4}
                         style={{
                             width:
-                                COL_WIDTHS.Part_Name +
-                                COL_WIDTHS.Lead_Count +
-                                COL_WIDTHS.Package_Name +
-                                COL_WIDTHS.Lot_Id,
+                                COL_WIDTHS.part_name +
+                                COL_WIDTHS.lead_count +
+                                COL_WIDTHS.package_name +
+                                COL_WIDTHS.lot_id,
                         }}
                         className="px-2.5 text-sm font-medium text-base-content whitespace-nowrap overflow-hidden text-ellipsis"
                     >
-                        - - - - - - {r.blockLabel || "Time block"} - - - - - -
+                        - - - - - - {r.block_label || "Time block"} - - - - - -
                     </td>
                     <td style={{ width: COL_WIDTHS.status }} />
-                    <td style={{ width: COL_WIDTHS.Remarks }} />
-                    <td style={{ width: COL_WIDTHS.Station }} />
-                    <td style={{ width: COL_WIDTHS.Qty }} />
-                    <td style={{ width: COL_WIDTHS.Doable }} />
-                    <td style={{ width: COL_WIDTHS.Capacity_UPH }} />
+                    <td style={{ width: COL_WIDTHS.remarks }} />
+                    <td style={{ width: COL_WIDTHS.station }} />
+                    <td style={{ width: COL_WIDTHS.qty }} />
+                    <td style={{ width: COL_WIDTHS.doable }} />
+                    <td style={{ width: COL_WIDTHS.capacity_uph }} />
                     <td
                         style={{
-                            width: COL_WIDTHS.accuTime,
-                            maxWidth: COL_WIDTHS.accuTime,
+                            width: COL_WIDTHS.accu_time,
+                            maxWidth: COL_WIDTHS.accu_time,
                         }}
                         className="px-2.5 text-sm cursor-text hover:bg-info/10 hover:ring-1 hover:ring-info/30"
                         onClick={(e) =>
-                            handleCellClick(e, r._dndId, "accuTime")
+                            handleCellClick(e, r._dndId, "accu_time")
                         }
                     >
                         {(() => {
-                            const v = Number(r.accuTime) || 0;
+                            const v = Number(r.accu_time) || 0;
                             const h = Math.floor(v / 60);
                             const m = v % 60;
                             return h > 0 ? `${h}h ${m}m` : `${m}m`;
                         })()}
                     </td>
                     <td
-                        style={{ width: COL_WIDTHS.timeStart }}
+                        style={{ width: COL_WIDTHS.time_start }}
                         className="px-2.5 text-sm text-base-content"
                     >
-                        {r.timeStartDayOffset > 0
-                            ? `${r.timeStart} +${r.timeStartDayOffset}d`
-                            : r.timeStart}
+                        {r.time_start_day_offset > 0
+                            ? `${r.time_start} +${r.time_start_day_offset}d`
+                            : r.time_start}
                     </td>
                     <td
-                        style={{ width: COL_WIDTHS.timeEnd }}
+                        style={{ width: COL_WIDTHS.time_end }}
                         className="px-2.5 text-sm text-base-content"
                     >
-                        {r.timeEndDayOffset > 0
-                            ? `${r.timeEnd} +${r.timeEndDayOffset}d`
-                            : r.timeEnd}
+                        {r.time_end_day_offset > 0
+                            ? `${r.time_end} +${r.time_end_day_offset}d`
+                            : r.time_end}
                     </td>
                     <td
                         style={{ width: COL_WIDTHS.expectedPT }}
                         className="px-2.5 text-sm text-base-content"
                     >
-                        {formatExpectedPT(r.accuTime)}
+                        {formatExpectedPT(r.accu_time)}
                     </td>
-                    <td style={{ width: COL_WIDTHS.Lot_Type }} />
-                    <td style={{ width: COL_WIDTHS.Lot_Status }} />
+                    <td style={{ width: COL_WIDTHS.lot_type }} />
+                    <td style={{ width: COL_WIDTHS.lot_status }} />
                     <td style={{ width: COL_WIDTHS.focusGroupStage }} />
-                    <td style={{ width: COL_WIDTHS.Lot_Entry_Time_Days }} />
-                    <td style={{ width: COL_WIDTHS.CR3 }} />
-                    <td style={{ width: COL_WIDTHS.BE_OSL_Days }} />
+                    <td style={{ width: COL_WIDTHS.lot_entry_time_days }} />
+                    <td style={{ width: COL_WIDTHS.cr3 }} />
+                    <td style={{ width: COL_WIDTHS.be_osl_days }} />
                     <td style={{ width: COL_WIDTHS.CT }} />
                     <td style={{ width: COL_WIDTHS.OSL }} />
-                    <td style={{ width: COL_WIDTHS.Body_Size }} />
-                    <td style={{ width: COL_WIDTHS.Ramp_Time }} />
+                    <td style={{ width: COL_WIDTHS.body_size }} />
+                    <td style={{ width: COL_WIDTHS.ramp_time }} />
                 </tr>
             );
         }
@@ -295,7 +295,7 @@ const RowContent = memo(
                         ? "bg-info/10 border-l-info"
                         : tagCfg
                           ? `${tagCfg.bg} ${tagCfg.border} hover:brightness-95`
-                          : !row.original.Lot_Id
+                          : !row.original.lot_id
                             ? "bg-warning/10 border-l-warning/60 hover:bg-base-200"
                             : "border-l-transparent hover:bg-base-200"
                 }`}

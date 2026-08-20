@@ -86,10 +86,10 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                     colSpan={7}
                     style={{
                         width:
-                            COL_WIDTHS.Part_Name +
-                            COL_WIDTHS.Lead_Count +
-                            COL_WIDTHS.Package_Name +
-                            COL_WIDTHS.Lot_Id,
+                            COL_WIDTHS.part_name +
+                            COL_WIDTHS.lead_count +
+                            COL_WIDTHS.package_name +
+                            COL_WIDTHS.lot_id,
                     }}
                     className="px-2.5 text-[11px] italic text-base-content/40"
                 >
@@ -97,16 +97,16 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                 </td>
 
                 {/* <td style={{ width: COL_WIDTHS.status }} /> */}
-                {/* <td style={{ width: COL_WIDTHS.Remarks }} /> */}
-                {/* <td style={{ width: COL_WIDTHS.Station }} /> */}
-                <td style={{ width: COL_WIDTHS.Qty }} />
-                <td style={{ width: COL_WIDTHS.Doable }} />
-                <td style={{ width: COL_WIDTHS.Capacity_UPH }} />
+                {/* <td style={{ width: COL_WIDTHS.remarks }} /> */}
+                {/* <td style={{ width: COL_WIDTHS.station }} /> */}
+                <td style={{ width: COL_WIDTHS.qty }} />
+                <td style={{ width: COL_WIDTHS.doable }} />
+                <td style={{ width: COL_WIDTHS.capacity_uph }} />
 
                 <td
                     style={{
-                        width: COL_WIDTHS.accuTime,
-                        maxWidth: COL_WIDTHS.accuTime,
+                        width: COL_WIDTHS.accu_time,
+                        maxWidth: COL_WIDTHS.accu_time,
                     }}
                     className="px-2.5 text-sm text-base-content/50"
                 >
@@ -114,35 +114,35 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                 </td>
 
                 <td
-                    style={{ width: COL_WIDTHS.timeStart }}
+                    style={{ width: COL_WIDTHS.time_start }}
                     className="px-2.5 text-sm text-base-content/50"
                 >
                     {gapStart
-                        ? gapStart.timeStartDayOffset > 0
-                            ? `${gapStart.time} +${gapStart.timeStartDayOffset}d`
+                        ? gapStart.time_start_day_offset > 0
+                            ? `${gapStart.time} +${gapStart.time_start_day_offset}d`
                             : gapStart.time
                         : "—"}
                 </td>
                 <td
-                    style={{ width: COL_WIDTHS.timeEnd }}
+                    style={{ width: COL_WIDTHS.time_end }}
                     className="px-2.5 text-sm text-base-content/50"
                 >
-                    {gapEnd.timeEndDayOffset > 0
-                        ? `${gapEnd.time} +${gapEnd.timeEndDayOffset}d`
+                    {gapEnd.time_end_day_offset > 0
+                        ? `${gapEnd.time} +${gapEnd.time_end_day_offset}d`
                         : gapEnd.time}
                 </td>
 
                 <td style={{ width: COL_WIDTHS.expectedPT }} />
-                <td style={{ width: COL_WIDTHS.Lot_Type }} />
-                <td style={{ width: COL_WIDTHS.Lot_Status }} />
+                <td style={{ width: COL_WIDTHS.lot_type }} />
+                <td style={{ width: COL_WIDTHS.lot_status }} />
                 <td style={{ width: COL_WIDTHS.focusGroupStage }} />
-                <td style={{ width: COL_WIDTHS.Lot_Entry_Time_Days }} />
-                <td style={{ width: COL_WIDTHS.CR3 }} />
-                <td style={{ width: COL_WIDTHS.BE_OSL_Days }} />
-                <td style={{ width: COL_WIDTHS.CT }} />
-                <td style={{ width: COL_WIDTHS.OSL }} />
-                <td style={{ width: COL_WIDTHS.Body_Size }} />
-                <td style={{ width: COL_WIDTHS.Ramp_Time }} />
+                <td style={{ width: COL_WIDTHS.lot_entry_time_days }} />
+                <td style={{ width: COL_WIDTHS.cr3 }} />
+                <td style={{ width: COL_WIDTHS.be_osl_days }} />
+                <td style={{ width: COL_WIDTHS.ct }} />
+                <td style={{ width: COL_WIDTHS.osl }} />
+                <td style={{ width: COL_WIDTHS.body_size }} />
+                <td style={{ width: COL_WIDTHS.ramp_time }} />
             </tr>
 
             {open && (
@@ -187,23 +187,23 @@ function GapHintRow({ segments, gapStart, gapEnd }) {
                                             <div className="pl-2 border-l border-base-300 flex flex-col gap-0.5">
                                                 {seg.lots.map((lot, li) => (
                                                     <div
-                                                        key={`${lot.Lot_Id}-${li}`}
+                                                        key={`${lot.lot_id}-${li}`}
                                                         className="flex items-center justify-between gap-3 text-[10px] text-base-100/50"
                                                     >
                                                         <span className="font-mono">
-                                                            {lot.Lot_Id}
+                                                            {lot.lot_id}
                                                         </span>
                                                         <span className="font-mono">
-                                                            {lot.timeStart}
-                                                            {lot.timeStartDayOffset >
+                                                            {lot.time_start}
+                                                            {lot.time_start_day_offset >
                                                             0
-                                                                ? ` +${lot.timeStartDayOffset}d`
+                                                                ? ` +${lot.time_start_day_offset}d`
                                                                 : ""}
                                                             {" – "}
-                                                            {lot.timeEnd}
-                                                            {lot.timeEndDayOffset >
+                                                            {lot.time_end}
+                                                            {lot.time_end_day_offset >
                                                             0
-                                                                ? ` +${lot.timeEndDayOffset}d`
+                                                                ? ` +${lot.time_end_day_offset}d`
                                                                 : ""}
                                                         </span>
                                                     </div>

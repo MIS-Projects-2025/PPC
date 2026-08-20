@@ -107,10 +107,12 @@ export default function LoadingPlanTableByMachine({
                 // is NOT a one-way reset on every reload.
                 machine: row.machine ?? null,
                 tag: row.tag ?? null,
-                Doable: row.Doable ?? 0,
-                accuTime: row.accuTime ?? row.duration ?? 0,
-                Remarks: row.Remarks ?? "",
-                _dndId: row.entryId ? `entry-${row.entryId}` : `wip-${row.id}`,
+                doable: row.doable ?? 0,
+                accu_time: row.accu_time ?? row.duration ?? 0,
+                remarks: row.remarks ?? "",
+                _dndId: row.entry_id
+                    ? `entry-${row.entry_id}`
+                    : `wip-${row.id}`,
             };
         });
 
@@ -129,7 +131,7 @@ export default function LoadingPlanTableByMachine({
         seeded.forEach((r) => {
             if (!machinePkgPairs.has(r.machine))
                 machinePkgPairs.set(r.machine, new Set());
-            machinePkgPairs.get(r.machine).add(r.Package_Name);
+            machinePkgPairs.get(r.machine).add(r.package_name);
         });
 
         useLoadingPlanStore.getState().reset(seeded);

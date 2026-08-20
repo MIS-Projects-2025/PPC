@@ -18,12 +18,12 @@ return new class extends Migration
             $table->decimal('sequence_order', 14, 4)->change();
 
             // Optimistic locking for direct field edits (status, Remarks,
-            // accuTime, tag) — see LoadingPlanEntryService::editField.
+            // accu_time, tag) — see LoadingPlanEntryService::editField.
             $table->unsignedBigInteger('lock_version')->default(1)->after('updated_at');
 
             // Block duration (minutes) — blocks have no WIP row, so this
-            // is the only source of their accuTime. Also usable as a
-            // manual accuTime override for real lots if ever needed.
+            // is the only source of their accu_time. Also usable as a
+            // manual accu_time override for real lots if ever needed.
             $table->integer('accu_time')->nullable()->after('block_label');
         });
 

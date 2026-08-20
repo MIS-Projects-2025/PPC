@@ -75,7 +75,6 @@ const MachineSectionBody = memo(function MachineSectionBody({
     });
 
     const allGapInfo = useContext(GapInfoContext);
-    console.log("🚀 ~ MachineSectionBody ~ allGapInfo:", allGapInfo);
     const machineGapInfo = allGapInfo[machine] ?? {};
 
     const tableRows = table.getRowModel().rows;

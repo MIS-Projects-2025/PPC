@@ -38,7 +38,7 @@ class PackageGroups
         ],
         // 'QFN/DFN' => ['DFN', 'GQFN', 'QFN', 'UTQFN'],
         'PLCC' => ['PLCC'],
-        'T0' => ['TO', 'TO220', 'TO-220', 'TO-46', 'TO46', 'TO92', 'TO-92'],
+        'TO' => ['TO', 'TO220', 'TO-220', 'TO-46', 'TO46', 'TO92', 'TO-92'],
         'RU' => ['TSSOP', 'TSSOP_4.4', 'TSSOP_4.4_EP', 'TSSOP_6.1', 'TSSOP-W'],
         'RM' => ['MINI_SO', 'MINI_SO_EP'],
         'SSOP' => ['SSOP', 'SSOP-W'],

@@ -81,10 +81,10 @@ class LotSplitService
                 ['part_name' => $parentAttrs['part_name'], 'qty_base' => $childQty, 'split_adjustment' => 0, 'merge_adjustment' => 0]
             );
 
+            $childEntryId = $childEntry->getKey();
             $childEntry = $this->entryService->transferEntry(
                 'lot',
-                $childLotId,
-                null,
+                $childEntryId,
                 $targetMachine,
                 $beforeEntryId,
                 $afterEntryId,
@@ -102,21 +102,24 @@ class LotSplitService
                 'created_by'       => $createdBy,
             ]);
 
-            $this->entryService->enrichEntryForResponse($childEntry, $rootLotId);
+            $loadingPlanService = new LoadingPlanService($date);
+
+            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry, $rootLotId);
 
             $this->recalculateParentQty($parentEntry);
 
-            $freshParent = $parentEntry->fresh();
-            $this->entryService->enrichEntryForResponse($freshParent, $rootLotId);
+            $freshParent = $loadingPlanService->enrichEntryForResponse($parentEntry->fresh(), $rootLotId);
 
-            $freshParent->splitInfo = [
+            // createPlannedLot's splitInfo reflects the pre-split cache (built at
+            // service construction) — override with the split we just created.
+            $freshParent->split_info = [
                 'isParent'  => true,
                 'isChild'   => false,
                 'rootLotId' => $rootLotId,
                 'splitId'   => null, // ambiguous when a parent has multiple splits — matches buildSplitMeta()'s convention
             ];
 
-            $childEntry->splitInfo = [
+            $childEntry->split_info = [
                 'isParent'  => false,
                 'isChild'   => true,
                 'rootLotId' => $rootLotId,
@@ -135,6 +138,7 @@ class LotSplitService
     {
         return DB::transaction(function () use ($splitId, $revertedBy) {
             $split = LotSplit::active()->lockForUpdate()->findOrFail($splitId);
+            $date = $split->scheduled_date;
 
             $this->assertDateNotFinalized($split->scheduled_date->toDateString());
             $this->assertNotInvolvedInMerge($split->child_lot_id, $split->scheduled_date->toDateString());
@@ -162,11 +166,11 @@ class LotSplitService
             $parentQuantity = null;
             $parentSplitInfo = null;
 
+            $loadingPlanService = new LoadingPlanService($date);
+
             if ($parentEntry) {
                 $this->recalculateParentQty($parentEntry);
-                $parentEntry = $parentEntry->fresh();
-
-                $this->entryService->enrichEntryForResponse($parentEntry, $split->root_lot_id);
+                $parentEntry = $loadingPlanService->enrichEntryForResponse($parentEntry, $split->root_lot_id);
 
                 $parentQuantity = LotQuantity::where('lot_id', $parentEntry->lot_id)
                     ->where('scheduled_date', $split->scheduled_date)
@@ -214,6 +218,7 @@ class LotSplitService
     {
         return DB::transaction(function () use ($splitId, $unrevertedBy) {
             $split = LotSplit::whereNotNull('reverted_at')->lockForUpdate()->findOrFail($splitId);
+            $date = $split->scheduled_date;
 
             $this->assertDateNotFinalized($split->scheduled_date->toDateString());
 
@@ -260,14 +265,14 @@ class LotSplitService
             $childEntry = $this->entryService->transferEntry(
                 'lot',
                 $split->child_lot_id,
-                null,
                 $split->target_machine,
                 $beforeEntryId,
                 $afterEntryId,
-                $split->scheduled_date->toDateString(),
             );
 
-            $this->entryService->enrichEntryForResponse($childEntry, $split->root_lot_id);
+            $loadingPlanService = new LoadingPlanService($date);
+
+            $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
 
             $childQuantity = LotQuantity::where('lot_id', $childEntry->lot_id)
                 ->where('scheduled_date', $split->scheduled_date)
@@ -426,10 +431,10 @@ class LotSplitService
             'split_adjustment' => -$activeChildQty,
         ]);
 
-        app(LotScheduleCalculator::class, [
-            'dates' => [$date],
-            'lotIds' => [$parentEntry->lot_id],
-        ])->recalculateAndRetime($parentEntry->lot_id, $date, $parentEntry->machine_id);
+        $calculator = new LotScheduleCalculator([$date], [$parentEntry->lot_id]);
+        $calculator->loadPackageList();
+
+        $calculator->recalculateAndRetime($parentEntry->getKey(), $parentEntry->machine_id);
     }
 
     private function resolveParentAttributes(LoadingPlanEntry $entry): array
@@ -531,13 +536,32 @@ class LotSplitService
     public static function buildSplitMeta(
         ?string $lotId,
         ?Collection $splitsByParent = null,
-        ?Collection $splitsByChild = null
+        ?Collection $splitsByChild = null,
+        string|array|null $scheduledDate = null
     ): ?array {
-        if (! $lotId || ! $splitsByParent || ! $splitsByChild) {
+        if (! $lotId) {
             return null;
         }
 
-        $isParent = $splitsByParent->has($lotId);
+        // Fetch from DB if collections are not provided
+        if ($splitsByParent === null || $splitsByChild === null) {
+            $query = LotSplit::active()
+                ->where(function ($q) use ($lotId) {
+                    $q->where('parent_lot_id', $lotId)
+                        ->orWhere('child_lot_id', $lotId);
+                });
+
+            if ($scheduledDate !== null) {
+                $dates = (array) $scheduledDate;
+                $query->whereIn('scheduled_date', $dates);
+            }
+
+            $splits = $query->get();
+            $splitsByParent = $splits->groupBy('parent_lot_id');
+            $splitsByChild  = $splits->keyBy('child_lot_id');
+        }
+
+        $isParent   = $splitsByParent->has($lotId);
         $childSplit = $splitsByChild->get($lotId);
 
         if (! $isParent && ! $childSplit) {

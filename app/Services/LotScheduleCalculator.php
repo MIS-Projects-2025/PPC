@@ -16,23 +16,40 @@ class LotScheduleCalculator
     private Collection $machinePlatforms; // machine_num => machine_platform
     private Collection $machineNumById;
     private Collection $capacityBands;    // platform => [ {qty_min, qty_max, capacity_uph}, ... ]
-    private Collection $packageListByDeviceName;
+    private ?Collection $packageListByDeviceName = null;
+    private array $dates;
+    private array $lotIds;
 
-    public function __construct(array $dates = [], array $lotIds = [])
+    public function __construct(array|Collection $dates = [], array|Collection $lotIds = [])
     {
-        // \Log::info('LotScheduleCalculator constructed', ['mb_start' => memory_get_usage(true) / 1048576]);
-
         $this->machinePlatforms = QdnMachine::pluck('machine_platform', 'machine_num');
-        $this->machineNumById = QdnMachine::pluck('machine_num', 'id'); // new — id => name
+        $this->machineNumById = QdnMachine::pluck('machine_num', 'id');
 
         $this->capacityBands = MachinePlatformCapacityBand::orderByDesc('qty_min')
             ->get()
             ->groupBy('platform');
 
-        // Log::info('After capacityBands', ['mb' => memory_get_usage(true) / 1048576]);
+        // Converts Collection or array into a plain array
+        $this->dates = collect($dates)->all();
+        $this->lotIds = collect($lotIds)->all();
+    }
 
-        $partNames = LotQuantity::whereIn('lot_id', $lotIds)
-            ->whereIn('scheduled_date', $dates)
+    /**
+     * Explicitly loads the devicename => package_list row map. Must be called
+     * before recalculate()/recalculateAndRetime() — those throw otherwise.
+     * Scoped to the $lotIds/$dates passed to the constructor when both were
+     * non-empty; loads the full package_list table (~20k rows) unfiltered
+     * otherwise. Callers that never touch recalculate() should skip calling
+     * this entirely — it's the expensive part of this class.
+     */
+    public function loadPackageList(): static
+    {
+        if ($this->packageListByDeviceName !== null) {
+            return $this; // already loaded, no-op
+        }
+
+        $partNames = LotQuantity::whereIn('lot_id', $this->lotIds)
+            ->whereIn('scheduled_date', $this->dates)
             ->pluck('part_name')
             ->filter()
             ->unique()
@@ -46,7 +63,7 @@ class LotScheduleCalculator
 
         $this->packageListByDeviceName = $query->get()->keyBy('devicename');
 
-        // Log::info('After packageListByDeviceName', ['mb' => memory_get_usage(true) / 1048576]);
+        return $this;
     }
 
     /**
@@ -57,23 +74,23 @@ class LotScheduleCalculator
      * computes wrong timing.
      */
     public function recalculateAndRetime(
-        int $lotEntryId,
-        string $scheduledDate,
+        LoadingPlanEntry|int $lotEntryId,
         ?int $machineId,
         ?string $newPartName = null,
     ): void {
+        $entry = $lotEntryId instanceof LoadingPlanEntry
+            ? $lotEntryId
+            : LoadingPlanEntry::findOrFail($lotEntryId);
+
         $machineName = $machineId !== null ? $this->machineNumById->get($machineId) : null;
 
-        $entry = LoadingPlanEntry::where('id', $lotEntryId)->first();
-        $this->recalculate($entry->lot_id, $entry->scheduled_date, $machineName, $newPartName);
+        $this->recalculate($entry, $machineName, $newPartName);
 
         if ($machineId === null) {
-            return; // unplaced lot — quantity/recipe recalculated, nothing to retime
+            return;
         }
 
-        if ($entry) {
-            $this->recomputeTimeStartAndEnd($entry, $machineId);
-        }
+        $this->recomputeTimeStartAndEnd($entry, $machineId);
     }
 
     /**
@@ -199,42 +216,46 @@ class LotScheduleCalculator
         return $anchor;
     }
 
-    private function recalculate(string $lotId, string $scheduledDate, ?string $machineName, ?string $newPartName = null): void
+    private function recalculate(LoadingPlanEntry $entry, ?string $machineName, ?string $newPartName = null): void
     {
-        $row = LotQuantity::where('lot_id', $lotId)
-            ->where('scheduled_date', $scheduledDate)
-            ->first();
-
-        if (!$row) return;
-
-        if ($newPartName !== null) {
-            $row->part_name = $newPartName;
+        if ($this->packageListByDeviceName === null) {
+            throw new \LogicException(
+                'LotScheduleCalculator::recalculate() called without loadPackageList() first. '
+                    . 'Call $calculator->loadPackageList() after construction if this instance needs recalculation.'
+            );
         }
 
-        $effectiveQty = $row->effectiveQty();
-        $packageListRow = $this->packageListByDeviceName->get($row->part_name);
+        $lotQuantity = $entry->getQuantityRow();
+        if (!$lotQuantity) return;
+
+        if ($newPartName !== null) {
+            $lotQuantity->part_name = $newPartName;
+        }
+
+        $effectiveQty = $lotQuantity->effectiveQty();
+        $packageListRow = $this->packageListByDeviceName->get($lotQuantity->part_name);
 
         $recipe = $packageListRow?->recipe;
         $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
 
-        $row->recipe_used = $recipe;
-        $row->recipe_source_id = $packageListRow?->id;
-        $row->commit = $commit;
-        $row->recipe_status = match (true) {
+        $lotQuantity->recipe_used = $recipe;
+        $lotQuantity->recipe_source_id = $packageListRow?->id;
+        $lotQuantity->commit = $commit;
+        $lotQuantity->recipe_status = match (true) {
             $recipe && $recipe > 0 && $commit === 0 => 'qty_below_recipe',
             $recipe && $recipe > 0                  => 'ok',
-            default                                  => 'no_recipe',
+            default                                 => 'no_recipe',
         };
 
         $capacityUph = $this->capacityUph($machineName, $effectiveQty);
-        $row->capacity_uph_snapshot = $capacityUph;
+        $lotQuantity->capacity_uph_snapshot = $capacityUph;
 
-        $row->save();
+        $lotQuantity->save();
 
-        // accu_time stays on loading_plan_entries — lot rows only, blocks untouched
-        LoadingPlanEntry::where('lot_id', $lotId)
-            ->where('scheduled_date', $scheduledDate)
-            ->update(['accu_time' => $this->accuTime($commit, $capacityUph)]);
+        // write directly onto the caller's instance, not a separate query —
+        // keeps $entry->accu_time correct in-memory for whatever runs next
+        $entry->accu_time = $this->accuTime($commit, $capacityUph);
+        $entry->save();
     }
 
     public function capacityUph(?string $machine, int $qty): ?int
