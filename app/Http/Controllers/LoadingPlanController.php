@@ -23,6 +23,11 @@ use Carbon\Carbon;
 
 class LoadingPlanController extends Controller
 {
+    public function deemo()
+    {
+        return Inertia::render('Deemo', []);
+    }
+
     public function index(Request $request)
     {
         $date = $request->get('date', ShiftDay::current());

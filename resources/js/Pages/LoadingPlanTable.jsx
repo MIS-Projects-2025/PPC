@@ -130,6 +130,7 @@ import {
 } from "@/Components/LoadingPlan/MachineSectionBody";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import PackageTabs from "@/Components/LoadingPlan/PackageTabs";
+import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import {
     EDITABLE_COLUMNS,
     TableActionsContext,
@@ -530,6 +531,7 @@ export default function LoadingPlanTable({
     const [historyLoading, setHistoryLoading] = useState(false);
     const splitHistoryModalRef = useRef(null);
     const mergeHistoryModalRef = useRef(null);
+    const pickupInsertModalRef = useRef(null);
 
     const isUpdating = inFlightCount > 0;
 
@@ -2365,6 +2367,16 @@ export default function LoadingPlanTable({
     // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="relative h-full">
+            <PickupInsertModal
+                ref={pickupInsertModalRef}
+                // lotA={selectedRows[0]}
+                // lotB={selectedRows[1]}
+                // onConfirm={({ targetLotEntryId, sourceLotEntryId }) =>
+                //     onMergeRows({ targetLotEntryId, sourceLotEntryId })
+                // }
+                onClose={() => pickupInsertModalRef.current?.close()}
+            />
+
             <DataIntegrityModal
                 partnameMismatches={partnameMismatches}
                 unknownPackages={unknownPackages}
@@ -2431,7 +2443,18 @@ export default function LoadingPlanTable({
                             </button>
                         </div>
                     )}
-
+                    <button
+                        // className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
+                        //     count !== 2 ? "cursor-not-allowed opacity-50" : ""
+                        // }`}
+                        // disabled={count !== 2}
+                        className="btn btn-md z-50"
+                        onClick={() => {
+                            pickupInsertModalRef.current?.showModal();
+                        }}
+                    >
+                        pickup
+                    </button>
                     <div className="flex-none px-4 pt-4">
                         <div className="flex flex-col">
                             {/* Row 1: date/status (left) — selection info, undo/redo, integrity (right) */}

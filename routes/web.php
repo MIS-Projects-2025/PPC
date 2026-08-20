@@ -51,6 +51,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::post('batch-apply', [LoadingPlanEntryController::class, 'batchApply'])->name('batch-apply');
     Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
+    Route::get('deemo', [LoadingPlanController::class, 'deemo'])->name('deemo');
     Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine');
 
     Route::prefix('splits')->name('splits.')->group(function () {
