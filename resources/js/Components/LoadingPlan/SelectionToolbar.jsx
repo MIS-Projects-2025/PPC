@@ -31,12 +31,12 @@ export default function SelectionToolbar({
     onDelete,
     onClearSelection,
 }) {
-    console.log("🚀 ~ SelectionToolbar ~ allData:", allData);
-    console.log("🚀 ~ SelectionToolbar ~ selectedIds:", selectedIds);
-    console.log(
-        "🚀 ~ SelectionToolbar ~ selectedIds:",
-        allData.filter((r) => selectedIds.has(r._dndId)),
-    );
+    // console.log("🚀 ~ SelectionToolbar ~ allData:", allData);
+    // console.log("🚀 ~ SelectionToolbar ~ selectedIds:", selectedIds);
+    // console.log(
+    //     "🚀 ~ SelectionToolbar ~ selectedIds:",
+    //     allData.filter((r) => selectedIds.has(r._dndId)),
+    // );
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
@@ -60,13 +60,17 @@ export default function SelectionToolbar({
         }
     }, [count]);
 
+
     const selectedRow = useMemo(
-        () => allData.find((r) => selectedIds.has(r._dndId)),
+        () => allData.find((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
     );
+    
+    console.log("LOG ~ SelectionToolbar.jsx:64 ~ SelectionToolbar ~ selectedIds:", selectedIds);
+    console.log("LOG ~ SelectionToolbar.jsx:68 ~ SelectionToolbar ~ selectedRow:", selectedRow);
 
     const selectedRows = useMemo(
-        () => allData.filter((r) => selectedIds.has(r._dndId)),
+        () => allData.filter((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
     );
 

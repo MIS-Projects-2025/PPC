@@ -169,7 +169,7 @@ class LoadingPlanController extends Controller
         };
 
         Log::info('Request memory peak', ['mb' => memory_get_peak_usage(true) / 1048576]);
-        return Inertia::render('LoadingPlanTable', [
+        return Inertia::render('Deemo', [
             'data'             => $result,
             'date'             => $date,
             'machines'         => $activeMachines,

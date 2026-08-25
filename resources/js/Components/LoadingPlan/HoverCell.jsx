@@ -70,7 +70,7 @@ export default function HoverCell({ trigger, children, placement = "right" }) {
                     setIsHovering(false);
                     getReferenceProps().onMouseLeave?.(e);
                 }}
-                className={`flex items-center w-full h-full py-2 box-border transition-colors duration-100 ${
+                className={`flex items-center w-full h-full box-border transition-colors duration-100 ${
                     isHovering ? "bg-base-100" : "bg-transparent"
                 }`}
             >

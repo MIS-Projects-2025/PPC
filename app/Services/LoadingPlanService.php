@@ -393,7 +393,7 @@ class LoadingPlanService
         // LoadingPlanFormulas handles null $wipRow safely internally
         $formulas = LoadingPlanFormulas::make($wipRow); // TODO: refactor other places that uses this
 
-        $lotId = $wipRow?->Lot_Id ?? $entry?->lot_id ?? null;
+        $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
         $startTime = $entry?->time_start ? Carbon::parse($entry->time_start) : null;
         $endTime   = $entry?->time_end   ? Carbon::parse($entry->time_end)   : null;
@@ -412,7 +412,8 @@ class LoadingPlanService
             'scheduled_date'             => $scheduledDate,
 
             // Lot & WIP Identifiers/Specs
-            'id'                         => $wipRow?->customer_data_id ?? $entry?->id,
+            // 'id'                         => $entry?->id ?? $wipRow?->customer_data_id,
+            'id' => $entry ? 'entry-' . $entry->id : 'wip-' . $wipRow->customer_data_id,
             'part_name'                  => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',
             'lead_count'                 => $wipRow?->Lead_Count ?? null,
             'package_name'               => $wipRow?->Package_Name ?? $entry?->package_name ?? null,
@@ -493,7 +494,6 @@ class LoadingPlanService
         $data = $this->createPlannedLot($rootWip, $entry, $quantity);
 
         foreach ($data as $key => $value) {
-            // TODO: now that the shape of the entry has changed
             $entry->setAttribute($key, $value);
         }
 

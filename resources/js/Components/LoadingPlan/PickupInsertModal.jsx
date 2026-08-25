@@ -159,14 +159,14 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
         ),
     );
 
-    console.log(
-        "LOG ~ PickupInsertModal.jsx:164 ~ PickupInsertModal ~ rows:",
-        rows,
-    );
-    console.log(
-        "LOG ~ PickupInsertModal.jsx:156 ~ PickupInsertModal ~ columns:",
-        columns,
-    );
+    // console.log(
+    //     "LOG ~ PickupInsertModal.jsx:164 ~ PickupInsertModal ~ rows:",
+    //     rows,
+    // );
+    // console.log(
+    //     "LOG ~ PickupInsertModal.jsx:156 ~ PickupInsertModal ~ columns:",
+    //     columns,
+    // );
 
     const [mapping, setMapping] = useState({}); // colKey -> REQUIRED_FIELDS key
     const [showMapping, setShowMapping] = useState(false);

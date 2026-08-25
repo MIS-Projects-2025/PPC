@@ -186,11 +186,9 @@ class LoadingPlanEntryService
                 );
             }
 
-            $entry->fresh();
-
             return (new LoadingPlanService($date))->createPlannedLot(
                 null,
-                $entry,
+                $entry->fresh(),
                 $entry->lotQuantity
             );
         });
@@ -323,12 +321,17 @@ class LoadingPlanEntryService
                     'lock_version'   => 1,
                 ]);
 
-                LotQuantity::create([
+                $lot = LotQuantity::firstOrNew([
                     'lot_id'         => $lotId,
                     'scheduled_date' => $date,
-                    'part_name'      => $wipItem?->Part_Name ?? '',
-                    'qty_base'       => $wipItem?->Qty ?? 0,
                 ]);
+
+                $lot->part_name = $wipItem?->Part_Name ?? '';
+                $lot->qty_base  = $wipItem?->Qty ?? 0;
+
+                if ($lot->isDirty()) {
+                    $lot->save();
+                }
 
                 $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId);
 
@@ -587,12 +590,17 @@ class LoadingPlanEntryService
                 ...$entryFields,
             ]);
 
-            LotQuantity::create([
+            $lot = LotQuantity::firstOrNew([
                 'lot_id'         => $lotId,
                 'scheduled_date' => $date,
-                'part_name'      => $fields['part_name'] ?? '',
-                'qty_base'       => $fields['qty'] ?? 0,
             ]);
+
+            $lot->part_name = $fields['part_name'] ?? '';
+            $lot->qty_base  = $fields['qty'] ?? 0;
+
+            if ($lot->isDirty()) {
+                $lot->save();
+            }
 
             // unplaced lot when $machineId is null — recalculate() still runs
             // (sets commit/recipe_status off qty/recipe), recalculateAndRetime
@@ -857,8 +865,9 @@ class LoadingPlanEntryService
 
     private function resolveSequenceOrder(Collection $machineRows, ?int $beforeEntryId, ?int $afterEntryId, string $machine, string $date): float
     {
-        $before = $beforeEntryId ? $machineRows->firstWhere('id', $beforeEntryId)?->sequence_order : null;
-        $after  = $afterEntryId ? $machineRows->firstWhere('id', $afterEntryId)?->sequence_order : null;
+        $sorted = $machineRows->sortBy('sequence_order')->values();
+
+        [$before, $after] = $this->resolveNeighborOrders($sorted, $beforeEntryId, $afterEntryId);
 
         if ($before === null && $after === null) {
             $currentMax = $machineRows->max('sequence_order');
@@ -889,6 +898,26 @@ class LoadingPlanEntryService
 
             return $this->computeSequenceOrder($before, $after, $machine, $date);
         }
+    }
+
+    private function resolveNeighborOrders(Collection $sortedRows, ?int $beforeEntryId, ?int $afterEntryId): array
+    {
+        $before = $beforeEntryId ? $sortedRows->firstWhere('id', $beforeEntryId)?->sequence_order : null;
+        $after  = $afterEntryId ? $sortedRows->firstWhere('id', $afterEntryId)?->sequence_order : null;
+
+        if ($before !== null && $after === null) {
+            $anchorIndex = $sortedRows->search(fn($row) => $row->id === $beforeEntryId);
+            if ($anchorIndex !== false && $anchorIndex < $sortedRows->count() - 1) {
+                $after = $sortedRows[$anchorIndex + 1]->sequence_order;
+            }
+        } elseif ($after !== null && $before === null) {
+            $anchorIndex = $sortedRows->search(fn($row) => $row->id === $afterEntryId);
+            if ($anchorIndex !== false && $anchorIndex > 0) {
+                $before = $sortedRows[$anchorIndex - 1]->sequence_order;
+            }
+        }
+
+        return [$before, $after];
     }
 
     private function computeSequenceOrder(?float $before, ?float $after, string $machine, string $date): float

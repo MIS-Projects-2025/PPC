@@ -104,7 +104,7 @@ class LotSplitService
 
             $loadingPlanService = new LoadingPlanService($date);
 
-            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry, $rootLotId);
+            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry->fresh(), $rootLotId);
 
             $this->recalculateParentQty($parentEntry);
 
@@ -170,7 +170,7 @@ class LotSplitService
 
             if ($parentEntry) {
                 $this->recalculateParentQty($parentEntry);
-                $parentEntry = $loadingPlanService->enrichEntryForResponse($parentEntry, $split->root_lot_id);
+                $parentEntry = $loadingPlanService->enrichEntryForResponse($parentEntry->fresh(), $split->root_lot_id);
 
                 $parentQuantity = LotQuantity::where('lot_id', $parentEntry->lot_id)
                     ->where('scheduled_date', $split->scheduled_date)
@@ -272,7 +272,7 @@ class LotSplitService
 
             $loadingPlanService = new LoadingPlanService($date);
 
-            $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
+            $loadingPlanService->enrichEntryForResponse($childEntry->fresh(), $split->root_lot_id);
 
             $childQuantity = LotQuantity::where('lot_id', $childEntry->lot_id)
                 ->where('scheduled_date', $split->scheduled_date)

@@ -27,7 +27,7 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
 ) {
     const { isUpdating = null } = useContext(TableActionsContext);
 
-    console.log("🚀 ~ SplitHistoryModal ~ history:", history);
+    // console.log("🚀 ~ SplitHistoryModal ~ history:", history);
     return (
         <dialog ref={ref} id="split_history_modal" className="modal">
             <div className="modal-box bg-base-300 w-11/12 max-w-2xl max-h-[80vh] flex flex-col">
