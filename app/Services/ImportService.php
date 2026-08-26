@@ -676,7 +676,11 @@ class ImportService
   public function importF3($importedBy = null, $file, $importDate = null)
   {
     try {
-      $spreadsheet = IOFactory::load($file->getPathname(), $this->flags);
+      $reader = IOFactory::createReaderForFile($file->getPathname());
+      $reader->setReadDataOnly(true);
+      $reader->setReadEmptyCells(false);
+
+      $spreadsheet = $reader->load($file->getPathname());
       $this->excelValidator->errorOnMultipleSheet($spreadsheet);
       $sheet = $spreadsheet->getActiveSheet();
 
