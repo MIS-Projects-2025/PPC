@@ -27,9 +27,17 @@ class LoadingPlanEntryService
     /** @var array<string,int> machine_num => id */
     private array $machineIdByNum;
 
-    public function __construct()
+    public function __construct(int|string|null $machine = null)
     {
-        $this->machineIdByNum = QdnMachine::pluck('id', 'machine_num')->all();
+        $this->machineIdByNum = QdnMachine::query()
+            ->when($machine, function ($query, $machine) {
+                $query->where(function ($q) use ($machine) {
+                    $q->where('id', $machine)
+                        ->orWhere('machine_num', $machine);
+                });
+            })
+            ->pluck('id', 'machine_num')
+            ->all();
     }
 
     public function resolveEntry(int $entryId): LoadingPlanEntry
@@ -155,7 +163,7 @@ class LoadingPlanEntryService
             ->first();
     }
 
-    public function addBlock(string $machine, string $date, string $label, int $durationMinutes, ?int $beforeEntryId, ?int $afterEntryId): array
+    public function addBlock(int|string $machine, string $date, string $label, int $durationMinutes, ?int $beforeEntryId, ?int $afterEntryId): array
     {
         return DB::transaction(function () use ($machine, $date, $label, $durationMinutes, $beforeEntryId, $afterEntryId) {
             $this->assertDateNotFinalized($date);
@@ -559,7 +567,7 @@ class LoadingPlanEntryService
         });
     }
 
-    public function createManualLot(?string $machine, string $date, array $fields, ?int $beforeEntryId, ?int $afterEntryId): array
+    public function createManualLot(int|string|null $machine, string $date, array $fields, ?int $beforeEntryId, ?int $afterEntryId): array
     {
         return DB::transaction(function () use ($machine, $date, $fields, $beforeEntryId, $afterEntryId) {
             $this->assertDateNotFinalized($date);
@@ -799,13 +807,22 @@ class LoadingPlanEntryService
     // ------------------------------------------------------------------
 
     /** Resolve a machine name (from frontend/legacy callers) to its id in qdn_db. */
-    private function resolveMachineId(?string $machineName): ?int
+    private function resolveMachineId(int|string|null $machine): ?int
     {
-        if ($machineName === null || $machineName === '') {
+        if ($machine === null || $machine === '') {
             return null;
         }
 
-        return $this->machineIdByNum[$machineName] ?? null;
+        if (is_int($machine)) {
+            return $machine;
+        }
+
+        // Handles string values (e.g. numeric strings "12" or machine names)
+        if (is_numeric($machine)) {
+            return (int) $machine;
+        }
+
+        return $this->machineIdByNum[$machine] ?? null;
     }
 
     /** Batch version — returns just the ids, order not guaranteed to match input. */
@@ -863,8 +880,13 @@ class LoadingPlanEntryService
             ->get();
     }
 
-    private function resolveSequenceOrder(Collection $machineRows, ?int $beforeEntryId, ?int $afterEntryId, string $machine, string $date): float
-    {
+    private function resolveSequenceOrder(
+        Collection $machineRows,
+        ?int $beforeEntryId,
+        ?int $afterEntryId,
+        int|string $machine,
+        string $date
+    ): float {
         $sorted = $machineRows->sortBy('sequence_order')->values();
 
         [$before, $after] = $this->resolveNeighborOrders($sorted, $beforeEntryId, $afterEntryId);
@@ -920,7 +942,7 @@ class LoadingPlanEntryService
         return [$before, $after];
     }
 
-    private function computeSequenceOrder(?float $before, ?float $after, string $machine, string $date): float
+    private function computeSequenceOrder(?float $before, ?float $after, int|string $machine, string $date): float
     {
         if ($before === null && $after === null) {
             return self::GAP_SEED;
@@ -940,7 +962,7 @@ class LoadingPlanEntryService
                 'after'   => $after,
                 'gap'     => $after - $before,
             ]);
-            throw new SequenceExhaustedException($machine, $date);
+            throw new SequenceExhaustedException((string) $machine, $date);
         }
 
         return ($before + $after) / 2;

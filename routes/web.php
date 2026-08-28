@@ -129,6 +129,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     Route::prefix('partname')->name('api.partname.')->group(function () {
         Route::patch('/create-many', [PartNameController::class, 'bulkUpdate'])->name('bulkUpdate');
         Route::post('/',             [PartNameController::class, 'store'])->name('store');
+        Route::post('/lookup', [PartNameController::class, 'lookup'])->name('lookup');
         Route::middleware(ApiPermissionMiddleware::class . ':partname_mutate')->group(function () {
             Route::patch('/{id}',  [PartNameController::class, 'update'])->name('update');
             Route::delete('/{id}', [PartNameController::class, 'destroy'])->name('delete');

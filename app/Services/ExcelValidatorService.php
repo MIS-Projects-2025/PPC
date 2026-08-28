@@ -8,6 +8,7 @@ use Box\Spout\Reader\Common\Creator\ReaderEntityFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\CellIterator;
 use App\Traits\Sanitize;
 use Illuminate\Validation\ValidationException;
+use PhpOffice\PhpSpreadsheet\Calculation\Information\ErrorValue;
 
 class ExcelValidatorService
 {
@@ -382,17 +383,19 @@ class ExcelValidatorService
       if ($cell->isFormula()) {
         try {
           $value = $cell->getCalculatedValue();
-
-          // Fall back if PhpSpreadsheet produced a formula error string (e.g., #VALUE!, #REF!)
-          if (is_string($value) && str_starts_with($value, '#')) {
-            $value = $cell->getOldCalculatedValue();
-          }
         } catch (\Throwable $e) {
-          // Fall back if PhpSpreadsheet threw an unhandled Exception during calculation
           $value = $cell->getOldCalculatedValue();
         }
       } else {
         $value = $cell->getValue();
+      }
+
+      if (is_string($value) && ErrorValue::isError($value)) {
+        Log::warning('Excel formula error encountered', [
+          'cell' => $cell->getCoordinate(),
+          'error' => $value,
+        ]);
+        $value = null;
       }
 
       $sanitized = $this->sanitizeExcelCell($value);

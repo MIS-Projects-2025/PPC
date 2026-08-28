@@ -25,6 +25,7 @@ export default function SelectionToolbar({
     disabled,
     onClearTag,
     onStatusChange,
+    onBulkFieldUpdate,
     onTransfer,
     onSplitRow,
     onMergeRows,
@@ -88,37 +89,100 @@ export default function SelectionToolbar({
             )}
 
             <div className="flex-none flex items-center justify-center px-4 py-2 border-t border-base-300 bg-base-200">
-                <div className="relative flex items-center gap-2 px-4 py-2 bg-base-100 text-base-content rounded-2xl shadow-lg border border-base-content/10 select-none">
+                <div className="relative flex items-center gap-2 px-4 py-2 bg-base-100 text-base-content rounded-md shadow-lg border border-base-content/10 select-none">
                     <span className="text-xs font-semibold bg-info text-info-content px-2 py-0.5 rounded-full mr-1">
                         {count} selected
                     </span>
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    <span className="text-[11px] text-base-content/50 ml-1">
-                        Mark:
-                    </span>
-                    {Object.entries(TAGS).map(([key, cfg]) => (
-                        <button
-                            key={key}
-                            onClick={() => onTag(key)}
-                            className={`btn btn-ghost flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ${cfg.toolbar}`}
-                            title={`Mark as ${cfg.label}`}
-                            disabled={disabled}
-                        >
-                            <span
-                                className={`w-2 h-2 rounded-full ${cfg.dot}`}
-                            />
-                            {cfg.label}
-                        </button>
-                    ))}
+                    {/* Popover Trigger Button */}
                     <button
-                        onClick={onClearTag}
-                        className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/60 hover:bg-base-content/20"
+                        className="btn btn-sm text-xs font-medium"
+                        popoverTarget="tag-expedite-popover"
+                        style={{ anchorName: "--tag-expedite-anchor" }}
                         disabled={disabled}
                     >
-                        Clear tag
+                        Bulk Actions ▾
                     </button>
+
+                    {/* Popover Dropdown Menu */}
+                    <ul
+                        className="dropdown menu w-64 rounded-box bg-base-100 p-2 shadow-lg border border-base-content/10 gap-1"
+                        popover="auto"
+                        id="tag-expedite-popover"
+                        style={{
+                            positionAnchor: "--tag-expedite-anchor",
+                            positionArea: "top span-all",     // place above the anchor, aligned to its width
+                            positionTryFallbacks: "flip-block", // flip to below if there's no room above
+                            marginBottom: "8px",              // gap between menu and button
+                        }}
+                    >
+                        {/* Category Label: Tags */}
+                        <li className="menu-title text-[10px] uppercase font-semibold text-base-content/50 px-2 py-1">
+                            Mark Tag
+                        </li>
+
+                        {/* Tag Items */}
+                        {Object.entries(TAGS).map(([key, cfg]) => (
+                            <li key={key}>
+                                <button
+                                    type="button"
+                                    onClick={() => onTag(key)}
+                                    className="flex items-center gap-2 text-xs font-medium py-1.5"
+                                    disabled={disabled}
+                                >
+                                    <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
+                                    {cfg.label}
+                                </button>
+                            </li>
+                        ))}
+
+                        {/* Clear Tag Action */}
+                        <li>
+                            <button
+                                type="button"
+                                onClick={onClearTag}
+                                className="flex items-center gap-2 text-xs font-medium py-1.5 text-base-content/60"
+                                disabled={disabled}
+                            >
+                                <span className="w-2 h-2 rounded-full border border-base-content/30" />
+                                Clear tag
+                            </button>
+                        </li>
+
+                        {/* Divider */}
+                        <div className="divider my-0.5" />
+
+                        {/* Category Label: Expedite */}
+                        <li className="menu-title text-[10px] uppercase font-semibold text-base-content/50 px-2 py-1">
+                            Expedite Status
+                        </li>
+
+                        {/* Expedite Items — same row style as tags */}
+                        <li>
+                            <button
+                                type="button"
+                                onClick={() => onBulkFieldUpdate('is_manual_expedite', true)}
+                                className="flex items-center gap-2 text-xs font-medium py-1.5"
+                                disabled={disabled}
+                            >
+                                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                Expedite
+                            </button>
+                        </li>
+                        <li>
+                            <button
+                                type="button"
+                                onClick={() => onBulkFieldUpdate('is_manual_expedite', false)}
+                                className="flex items-center gap-2 text-xs font-medium py-1.5 text-base-content/60"
+                                disabled={disabled}
+                            >
+                                <span className="w-2 h-2 rounded-full border border-base-content/30" />
+                                Remove expedite
+                            </button>
+                        </li>
+                    </ul>
 
                     <div className="w-px h-5 bg-base-content/20" />
 

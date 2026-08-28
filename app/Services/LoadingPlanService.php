@@ -391,7 +391,7 @@ class LoadingPlanService
         $machine = $entry?->finalized_at ? $entry->machine_snapshot : $entry?->getMachineName();
 
         // LoadingPlanFormulas handles null $wipRow safely internally
-        $formulas = LoadingPlanFormulas::make($wipRow); // TODO: refactor other places that uses this
+        $formulas = LoadingPlanFormulas::make($wipRow); // TODO: refactor other places that uses this, it might already be done ? ? ?
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
@@ -405,8 +405,13 @@ class LoadingPlanService
             // Entry Metadata
             'entry_id'                   => $entry?->id,
             'entry_type'                 => $entry?->entry_type,
+
             'is_block'                   => $isBlocked,
             'is_leaked'                  => $isLeaked,
+            'is_manual_expedite'         => $entry?->is_manual_expedite,
+            'is_for_bake'                => $formulas->isBakeHighlight,
+            // 'is_scm'
+
             'block_label'                => $entry?->block_label,
             'machine'                    => $machine,
             'scheduled_date'             => $scheduledDate,
@@ -429,10 +434,23 @@ class LoadingPlanService
             'be_osl_days'                => $wipRow?->BE_OSL_Days ?? null,
             'body_size'                  => $wipRow?->Body_Size ?? null,
             'ramp_time'                  => $wipRow?->Ramp_Time ?? null,
+            'end_customer'               => $wipRow?->End_Customer ?? null,
+            'bake'                       => $wipRow?->Bake ?? null,
+            'bake_count'                 => $wipRow?->Bake_Count ?? null,
+            'test_lot_id'                => $wipRow?->Test_Lot_Id ?? null,
             'backend_leadtime'           => $wipRow?->Backend_Leadtime ?? null,
             'date_loaded'                => transform($wipRow?->Date_Loaded, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
             'be_starttime'               => transform($wipRow?->BE_Starttime, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
-
+            'start_time'                 => transform($wipRow?->Start_Time, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
+            'part_type'                  => $wipRow?->Part_Type ?? null,
+            'part_class'                 => $wipRow?->Part_Class ?? null,
+            'date_code'                  => $wipRow?->Date_Code ?? null,
+            'process_group'              => $wipRow?->Process_Group ?? null,
+            'required_time'              => $wipRow?->Reqd_Time ?? null,
+            'lot_entry_time'             => $wipRow?->Lot_Entry_Time ?? null,
+            'stage_start_time'           => $wipRow?->Stage_Start_Time ?? null,
+            'assy_site'                  => $wipRow?->Assy_Site ?? null,
+            'bake_time_temp'             => $wipRow?->Bake_Time_Temp ?? null,
             // Execution & Timing
             'status'                     => $entry?->status ?? null,
             'sequence_order'             => $entry?->sequence_order,
@@ -461,7 +479,6 @@ class LoadingPlanService
             'osl'                        => $formulas->osl,
             'cycle_time_exceed'          => $formulas->cycleTimeExceed,
             'cycle_time_exceed_residual' => $formulas->cycleTimeExceedResidual,
-            'is_bake_highlight'          => $formulas->isBakeHighlight,
 
             // Split & Merge Metadata
             'split_info' => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent ?? null, $this->splitsByChild ?? null, $scheduledDate),

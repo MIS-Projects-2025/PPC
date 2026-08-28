@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CustomerDataWip extends Model
 {
@@ -116,5 +117,10 @@ class CustomerDataWip extends Model
     public function scopeSortByLotEntryDaysDesc(Builder $q): Builder
     {
         return $q->orderByRaw('Lot_Entry_Time_Days IS NULL, Lot_Entry_Time_Days DESC');
+    }
+
+    public function planEntries(): HasMany
+    {
+        return $this->hasMany(LoadingPlanEntry::class, 'lot_id', 'Lot_Id');
     }
 }

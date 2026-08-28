@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Collection;
 
 class Lot extends Model
 {
+    // This model only used in WIP Controller
     // protected $appends = ['slots', 'positions_map'];
     protected $appends = ['slots'];
     protected $with = [

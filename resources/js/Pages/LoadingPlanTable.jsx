@@ -129,12 +129,12 @@ import {
     TableInteractionContext,
 } from "@/Components/LoadingPlan/MachineSectionBody";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
-import PackageTabs from "@/Components/LoadingPlan/PackageTabs";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import {
     EDITABLE_COLUMNS,
     TableActionsContext,
 } from "@/Components/LoadingPlan/RowContent";
+import PackageTabs from "@/Components/LoadingPlan/ScrollableTabs";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
@@ -469,7 +469,6 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
-
     machineDayStarts,
     disseminationSummary,
     machineCapacity,

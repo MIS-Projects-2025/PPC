@@ -1,10 +1,26 @@
-import { forwardRef, useState } from "react";
+import { forwardRef, useContext, useState } from "react";
+import { TableInteractionContext } from "./MachineSectionBody";
 import MachineSelectionGrid from "./MachineSelectionGrid";
 
 const TransferModal = forwardRef(function TransferModal(
     { machines, machinePlatform, selectedMachines, onSelect, onClose },
     ref,
 ) {
+    const {
+        machineCapacity
+    } = useContext(TableInteractionContext);
+
+    // it needs new param, the lots to be transferred
+    // so that we can calculate the potential total doable if user decides to transfer them into the machines.
+    // we need to show a bar-looking where the current total cap of the machine and the added one are different.
+    // we need to sort the machine such that the machine that is still open-cap despite previewing that the added doable
+    // and the current total cap does not exceed the machine capacity yet,
+    // at the bottom of the list are those who will exceed it's capacity if the new doable is added to them.
+    
+    // 
+
+    console.log("LOG ~ TransferModal.jsx:13 ~ TransferModal ~ machineCapacity:", machineCapacity);
+
     const [pendingMachine, setPendingMachine] = useState(undefined);
 
     const isDisabled = (m) =>

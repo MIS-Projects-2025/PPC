@@ -14,6 +14,7 @@ use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
+use App\Services\BakeLotService;
 use App\Services\DisseminationService;
 use App\Services\LoadingPlanEntryService;
 use App\Services\LoadingPlanService;
@@ -168,17 +169,19 @@ class LoadingPlanController extends Controller
             return $packageListPromise ??= $partnameIntegrity->lookupPackageList($wipRows);
         };
 
+        $bakeLots = (new BakeLotService())->getActiveBake();
+
         Log::info('Request memory peak', ['mb' => memory_get_peak_usage(true) / 1048576]);
         return Inertia::render('Deemo', [
-            'data'             => $result,
-            'date'             => $date,
-            'machines'         => $activeMachines,
-            'baseTimes'        => $baseTimes,
+            'data'              => $result,
+            'date'              => $date,
+            'machines'          => $activeMachines,
+            'baseTimes'         => $baseTimes,
             'packageGroupNames' => $packages,
-            'packageGroups'    => PackageGroups::GROUPS,
-            'selectedLocation' => $selectedLocation,
-            'status'           => $status,
-
+            'packageGroups'     => PackageGroups::GROUPS,
+            'selectedLocation'  => $selectedLocation,
+            'status'            => $status,
+            'bakeLots'          => $bakeLots,
             'disseminationSummary' => $disseminationSummary,
 
             'partnameMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList) {

@@ -270,4 +270,44 @@ class PartNameController extends Controller
             'totalEntries' => $totalEntries,
         ]);
     }
+
+    /**
+     * Batch-lookup PartName records by devicename, for auto-filling the
+     * pickup-insert grid (LC, Package, Body Size) when a partname is
+     * pasted or typed in.
+     *
+     * Add this method inside your existing App\Http\Controllers\PartNameController.
+     * Make sure `use App\Models\PartName;` and `use Illuminate\Http\Request;`
+     * are already imported at the top of that file.
+     */
+    public function lookup(Request $request)
+    {
+        $validated = $request->validate([
+            'partNames' => 'required|array',
+            'partNames.*' => 'string',
+        ]);
+
+        $partNames = collect($validated['partNames'])
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($partNames->isEmpty()) {
+            return response()->json([]);
+        }
+
+        $records = PartName::query()
+            ->whereIn('devicename', $partNames)
+            ->get(['devicename', 'lead_count', 'package_type', 'dimensions']);
+
+        $result = $records->keyBy('devicename')->map(function (PartName $record) {
+            return [
+                'lc' => $record->lead_count,
+                'package' => $record->package_type,
+                'bodySize' => $record->dimensions,
+            ];
+        });
+
+        return response()->json($result);
+    }
 }

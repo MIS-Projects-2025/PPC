@@ -1,9 +1,9 @@
 import { MachineHeaderBar } from "@/Components/LoadingPlan/MachineHeaderBar";
 import { TableInteractionContext } from "@/Components/LoadingPlan/MachineSectionBody";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
-import PackageTabs from "@/Components/LoadingPlan/PackageTabs";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import { TableActionsContext } from "@/Components/LoadingPlan/RowContent";
+import ScrollableTabs from "@/Components/LoadingPlan/ScrollableTabs";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
@@ -52,6 +52,8 @@ import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { autoUpdate, offset, useFloating } from "@floating-ui/react";
 import { createPortal } from "react-dom";
+import { BsSearch } from "react-icons/bs";
+import { PiOvenDuotone } from "react-icons/pi";
 
 /**
  * DEMO: machine-grouped lot table (react-data-grid based)
@@ -265,6 +267,51 @@ function MachineHeaderCell({ row, rowCount, onToggleCollapse }) {
 // mapping backend entries -> grid rows needs no renaming.
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// Bake tab — column definitions (mirrors getActiveBake()'s select list)
+// ---------------------------------------------------------------------
+const BAKE_COLUMNS = [
+    { key: "id", editable: false, name: "id" },
+    { key: "lot_id", editable: false, name: "Lot ID", width: 160 },       // b.lotid
+    { key: "part_name", editable: false, name: "Part Name" },             // b.partname
+    { key: "package_name", editable: false, name: "Package Name" },       // b.package
+    { key: "qty", editable: false, name: "Qty" },                         // b.quantity
+    { key: "status", editable: false, name: "Bake Status" },              // b.bake_status
+    { key: "chamber", editable: false, name: "Chamber" },
+    { key: "input_type", editable: false, name: "Input Type" },
+    { key: "approved_status", editable: false, name: "Approved Status" },
+    { key: "temperature", editable: false, name: "Temperature" },
+    { key: "hours", editable: false, name: "Hours" },
+    { key: "date_time_in", editable: false, name: "Date/Time In", width: 150 },
+    { key: "operator_in", editable: false, name: "Operator In" },
+    { key: "date_time_out", editable: false, name: "Date/Time Out", width: 150 },
+    { key: "operator_out", editable: false, name: "Operator Out" },
+    { key: "approved_by", editable: false, name: "Approved By" },
+    { key: "added_by", editable: false, name: "Added By" },
+    { key: "cooldown_by", editable: false, name: "Cooldown By" },
+    { key: "cooldown_end", editable: false, name: "Cooldown End" },
+    { key: "factory", editable: false, name: "Factory" },
+    { key: "wip_id", editable: false, name: "WIP Id" },                   // wip.customer_data_id
+    { key: "plant", editable: false, name: "Plant" },
+    { key: "station", editable: false, name: "Station" },
+    { key: "lot_type", editable: false, name: "Lot Type" },
+    { key: "prod_area", editable: false, name: "Prod Area" },
+    { key: "lot_status", editable: false, name: "Lot Status" },
+    { key: "date_loaded", editable: false, name: "Date Loaded" },
+    { key: "start_time", editable: false, name: "Start Time" },
+    { key: "part_type", editable: false, name: "Part Type" },
+    { key: "part_class", editable: false, name: "Part Class" },
+    { key: "date_code", editable: false, name: "Date Code" },
+    { key: "focus_group", editable: false, name: "Focus Group" },
+    { key: "process_group", editable: false, name: "Process Group" },
+    { key: "end_customer", editable: false, name: "End Customer" },
+    { key: "bake", editable: false, name: "Bake" },
+    { key: "bake_count", editable: false, name: "Bake Count" },
+    { key: "test_lot_id", editable: false, name: "Test Lot Id" },
+    { key: "assy_site", editable: false, name: "Assy Site" },
+    { key: "bake_time_temp", editable: false, name: "Bake Time Temp" },
+];
+
 const DATA_COLUMNS = [
     { key: "id", editable: false, name: "id" },
     { key: "entry_id", editable: false, name: "Entry ID" },
@@ -273,6 +320,7 @@ const DATA_COLUMNS = [
     { key: "package_name", editable: false, name: "Package Name" },
     { key: "lot_id", editable: false, name: "Lot ID", width: 160 },
     { key: "status", editable: false, name: "Status" },
+    { key: "station", editable: false, name: "Station" },
     { key: "qty", editable: false, name: "Qty" },
     { key: "doable", editable: false, name: "Doable" },
     { key: "capacity_uph", editable: false, name: "Capacity Uph" },
@@ -282,9 +330,9 @@ const DATA_COLUMNS = [
     { key: "lot_type", editable: false, name: "Lot Type" },
     { key: "lot_status", editable: false, name: "Lot Status" },
     {
-        key: "lot_entry_time_days_in",
+        key: "lot_entry_time_days",
         editable: false,
-        name: "Lot Entry Time Days In",
+        name: "Lot Entry Time Days",
     },
     { key: "cr3", editable: false, name: "Cr3" },
     { key: "be_osl_days", editable: false, name: "Be Osl Days" },
@@ -292,6 +340,23 @@ const DATA_COLUMNS = [
     { key: "osl", editable: false, name: "Osl" },
     { key: "body_size", editable: false, name: "Body Size" },
     { key: "ramp_time", editable: false, name: "Ramp Time" },
+    { key: "end_customer", editable: false, name: "End Customer" },
+    { key: "bake", editable: false, name: "Bake" },
+    { key: "bake_count", editable: false, name: "Bake Count" },
+    { key: "test_lot_id", editable: false, name: "Test Lot Id" },
+    { key: "backend_leadtime", editable: false, name: "Backend Leadtime" },
+    { key: "date_loaded", editable: false, name: "Date Loaded" },
+    { key: "be_starttime", editable: false, name: "Be Starttime" },
+    { key: "start_time", editable: false, name: "Start Time" },
+    { key: "part_type", editable: false, name: "Part Type" },
+    { key: "part_class", editable: false, name: "Part Class" },
+    { key: "date_code", editable: false, name: "Date Code" },
+    { key: "process_group", editable: false, name: "Process Group" },
+    { key: "required_time", editable: false, name: "Required Time" },
+    { key: "lot_entry_time", editable: false, name: "Lot Entry Time" },
+    { key: "stage_start_time", editable: false, name: "Stage Start Time" },
+    { key: "assy_site", editable: false, name: "Assy Site" },
+    { key: "bake_time_temp", editable: false, name: "Bake Time Temp" },
     { key: "sequence_order", editable: false, name: "Seq" },
     { key: "doable_status", editable: false, name: "Doable Status" },
     { key: "remarks", editable: true, name: "Remarks" },
@@ -300,6 +365,19 @@ const DATA_COLUMNS = [
 // dragHandle + all data columns; used for the header row's colSpan so it
 // spans the whole grid width regardless of how many columns are defined.
 const NUM_COLUMNS = DATA_COLUMNS.length + 1;
+// oven-header column + all bake columns, for the header row's colSpan
+// (SelectColumn stays out of the span so checkboxes remain usable — same
+// contract as NUM_COLUMNS/dragHandle above)
+const NUM_BAKE_COLUMNS = BAKE_COLUMNS.length + 1;
+
+function OvenHeaderCell({ row }) {
+    return (
+        <div className="flex items-center gap-2 h-full px-2 font-semibold text-xs bg-base-200">
+            <span>Oven {row.ovenLabel}</span>
+            <span className="badge badge-ghost badge-sm">{row.__rowCount}</span>
+        </div>
+    );
+}
 
 function RowDropTargetCell({ rowId }) {
     const { attributes, listeners, setNodeRef } = useDraggable({ id: rowId });
@@ -399,6 +477,7 @@ function DroppableRow({ rowIdxByElement, props }) {
 }
 
 export const isBlockRow = (row) => row?.is_block === true;
+export const isForBake = (row) => row?.is_for_bake === true;
 
 // Range 1: Part Name (index 2) to Qty (index 7)
 const PARTNAME_TO_QTY_KEYS = new Set([
@@ -415,11 +494,47 @@ const PARTNAME_TO_BAKE_KEYS = new Set([
   "part_name", "lead_count", "package_name", "lot_id", 
   "status", "qty", "doable", "capacity_uph", "accu_time", 
   "time_start", "time_end", "lot_type", "lot_status", 
-  "lot_entry_time_days_in", "cr3", "be_osl_days", "ct", 
+  "lot_entry_time_days", "cr3", "be_osl_days", "ct", 
   "osl", "body_size", "ramp_time"
 ]);
 
-function makeColumns(hoveredRowId, isUpdating, onStatusClick, onToggleCollapse) {
+function makeBakeColumns(highlightedMatch) {
+    return [
+        SelectColumn,
+        {
+            key: "ovenHeader",
+            name: "",
+            width: 20,
+            resizable: false,
+            colSpan(args) {
+                if (args.type === "ROW" && args.row.__type === "header") {
+                    return NUM_BAKE_COLUMNS;
+                }
+                return undefined;
+            },
+            renderCell({ row }) {
+                if (row.__type === "header") return <OvenHeaderCell row={row} />;
+                return null;
+            },
+        },
+        ...BAKE_COLUMNS.map((col) => ({
+            ...col,
+            cellClass: (row) =>
+                highlightedMatch?.rowId === row.id && highlightedMatch?.columnKey === col.key
+                    ? "bg-warning/50 ring-2 ring-warning ring-inset"
+                    : undefined,
+            renderCell({ row }) {
+                if (row.__type === "header") return null;
+                if (col.key === "status") {
+                    return <StatusBadge status={row.status} />;
+                }
+                return row[col.key];
+            },
+        })),
+    ];
+}
+
+function makeColumns(hoveredRowId, isUpdating, onStatusClick, onToggleCollapse, highlightedMatch) {
     return [
         SelectColumn,
         {
@@ -454,18 +569,26 @@ function makeColumns(hoveredRowId, isUpdating, onStatusClick, onToggleCollapse) 
 
                 const classes = [];
 
+                // main grid — inside getDynamicCellClass, after the existing rules
+
+                console.log("LOG ~ Deemo.jsx:573 ~ getDynamicCellClass ~ highlightedMatch:", highlightedMatch);
+                
+                if (highlightedMatch?.rowId === row.id && highlightedMatch?.columnKey === col.key) {
+                    classes.push("ring-5 ring-primary ring-inset");
+                }
+
                 // Rule 8 & 12: Color range from Part Name to Qty
                 if (PARTNAME_TO_QTY_KEYS.has(col.key)) {
                     if (row.cycle_time_exceed) {
                         classes.push("bg-yellow-highlight");
                     }
-                    if (row.cycle_time_exceed_residual) {
+                    if (row.cycle_time_exceed_residual || row.is_manual_expedite) {
                         classes.push("bg-amber-highlight");
                     }
                 }
 
                 // Rule 11: Color range from Part Name to Bake Time/Temp (Red Font)
-                if (PARTNAME_TO_BAKE_KEYS.has(col.key) && row.is_bake_highlight) {
+                if (PARTNAME_TO_BAKE_KEYS.has(col.key) && row.is_for_bake) {
                     classes.push("text-red-highlight");
                 }
 
@@ -559,6 +682,43 @@ function makeColumns(hoveredRowId, isUpdating, onStatusClick, onToggleCollapse) 
             };
         }),
     ];
+}
+
+function BakeSelectionToolbar({
+    selectedIds,
+    onApprove,
+    onReprocess,
+    onExport,
+    onDelete,
+    onClearSelection,
+}) {
+    if (!selectedIds || selectedIds.size === 0) return null;
+
+    return (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-base-200 border border-base-300 shadow-lg rounded-box px-4 py-2">
+            <span className="text-xs text-base-content/70 whitespace-nowrap">
+                {selectedIds.size} lot{selectedIds.size !== 1 ? "s" : ""} selected
+            </span>
+            <div className="w-px h-4 bg-base-300" />
+            <div className="join">
+                <button className="btn btn-xs join-item btn-success" onClick={onApprove}>
+                    Approve
+                </button>
+                <button className="btn btn-xs join-item btn-warning" onClick={onReprocess}>
+                    Reprocess
+                </button>
+                <button className="btn btn-xs join-item" onClick={onExport}>
+                    Export
+                </button>
+                <button className="btn btn-xs join-item btn-error" onClick={onDelete}>
+                    Delete
+                </button>
+            </div>
+            <button className="btn btn-xs btn-ghost" onClick={onClearSelection}>
+                Clear
+            </button>
+        </div>
+    );
 }
 
 // "machine-null" / "machine-MANUAL" / "machine-<name>" -> null / "MANUAL" / "<name>".
@@ -826,12 +986,51 @@ function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toast) {
         });
 }
 
+function SearchBar({ query, onQueryChange, matchCount, matchIndex, onNext, onPrev, onClose, inputRef }) {
+    return (
+        <div className="absolute top-2 right-2 z-40 flex items-center gap-1 bg-base-100 border border-base-300 shadow-lg rounded-box px-2 py-1">
+            <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => onQueryChange(e.target.value)}
+                onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        if (e.shiftKey) onPrev();
+                        else onNext();
+                    }
+                    if (e.key === "Escape") {
+                        e.stopPropagation();
+                        onClose();
+                    }
+                }}
+                placeholder="Find in table…"
+                className="input input-xs input-bordered w-48"
+            />
+            <span className="text-[11px] text-base-content/60 whitespace-nowrap px-1 tabular-nums">
+                {matchCount > 0 ? `${matchIndex + 1}/${matchCount}` : query ? "0/0" : ""}
+            </span>
+            <button className="btn btn-ghost btn-xs" onClick={onPrev} disabled={matchCount === 0} aria-label="Find previous">
+                ↑
+            </button>
+            <button className="btn btn-ghost btn-xs" onClick={onNext} disabled={matchCount === 0} aria-label="Find next">
+                ↓
+            </button>
+            <button className="btn btn-ghost btn-xs" onClick={onClose} aria-label="Close search">
+                ✕
+            </button>
+        </div>
+    );
+}
+
 // ---------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------
 
 export default function Deemo({
     data,
+    bakeLots,
     machines: serverMachines,
     packageGroups,
     packageGroupNames,
@@ -847,7 +1046,9 @@ export default function Deemo({
     unknownPackages,
     recipeMismatches,
 }) {
-    // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
+
+    console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
+    console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
     // console.log(
     // "LOG ~ Deemo.jsx:666 ~ Deemo ~ serverMachines:",
     // serverMachines,
@@ -864,10 +1065,18 @@ export default function Deemo({
     const toast = useToast();
     const { mutate } = useMutation();
 
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchMatchIndex, setSearchMatchIndex] = useState(0);
+    const [highlightedMatch, setHighlightedMatch] = useState(null); // { rowId, columnKey }
+    const searchInputRef = useRef(null);
+    const pendingScrollRef = useRef(null); // { rowId, columnKey, machine }
+
     const [activePackage, setActivePackage] = useState("LGA");
     const [activeId, setActiveId] = useState(null);
     const [hoveredRowId, setHoveredRowId] = useState(null);
     const [selectedRows, setSelectedRows] = useState(() => new Set());
+    const [selectedBakeRows, setSelectedBakeRows] = useState(() => new Set());
     // console.log("🚀 ~ Deemo ~ selectedRows:", selectedRows)
     const [inFlightCount, setInFlightCount] = useState(0);
     const [, setIsDirty] = useState(false);
@@ -980,6 +1189,87 @@ export default function Deemo({
         [activePackage, packageGroups],
     );
 
+    console.log("LOG ~ Deemo.jsx:1001 ~ Deemo ~ activePackageGroup:", activePackageGroup);
+
+    const searchableColumns = useMemo(
+        () => (activePackage === "Bake" ? BAKE_COLUMNS : DATA_COLUMNS).map((c) => c.key),
+        [activePackage],
+    );
+
+    // Same visibility rule displayRows uses, applied to raw dataRows so
+    // search only surfaces rows that can actually be scrolled to right now.
+    const searchVisibleRows = useMemo(() => {
+        if (activePackage === "Bake") return bakeLots ?? [];
+        const activeList = activePackageGroup ?? [];
+        return dataRows.filter((r) => isBlockRow(r) || activeList.includes(r.package_name));
+    }, [activePackage, dataRows, bakeLots, activePackageGroup]);
+
+    const searchMatches = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return [];
+        const matches = [];
+        searchVisibleRows.forEach((row) => {
+            for (const key of searchableColumns) {
+                const val = row[key];
+                if (val !== null && val !== undefined && String(val).toLowerCase().includes(q)) {
+                    matches.push({ rowId: row.id, machine: row.machine, columnKey: key });
+                    break;
+                }
+            }
+        });
+        return matches;
+    }, [searchQuery, searchVisibleRows, searchableColumns]);
+
+    // Keep the index valid as the match list changes size.
+    useEffect(() => {
+        setSearchMatchIndex((i) => (searchMatches.length === 0 ? 0 : i % searchMatches.length));
+    }, [searchMatches.length]);
+
+    // State, not a ref — so the scroll effect below is guaranteed to run
+    // every time goToMatch fires, even if the target row is already visible.
+    const [scrollTarget, setScrollTarget] = useState(null); // { rowId, columnKey, nonce }
+    const scrollNonce = useRef(0);
+
+    const goToMatch = useCallback(
+        (idx) => {
+            if (searchMatches.length === 0) return;
+            const wrapped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
+            setSearchMatchIndex(wrapped);
+            const match = searchMatches[wrapped];
+
+            if (activePackage !== "Bake" && collapsedMachines.has(match.machine)) {
+                setCollapsedMachines((prev) => {
+                    const next = new Set(prev);
+                    next.delete(match.machine);
+                    return next;
+                });
+            }
+
+            scrollNonce.current += 1;
+            setScrollTarget({ ...match, nonce: scrollNonce.current });
+        },
+        [searchMatches, activePackage, collapsedMachines, setCollapsedMachines],
+    );
+
+    const findNext = useCallback(() => goToMatch(searchMatchIndex + 1), [goToMatch, searchMatchIndex]);
+    const findPrev = useCallback(() => goToMatch(searchMatchIndex - 1), [goToMatch, searchMatchIndex]);
+
+    const closeSearch = useCallback(() => {
+        setSearchOpen(false);
+        setSearchQuery("");
+        setHighlightedMatch(null);
+        setScrollTarget(null);
+    }, []);
+
+
+    // Trigger the first jump as soon as a query starts producing matches.
+    useEffect(() => {
+        if (searchQuery.trim() && searchMatches.length > 0) {
+            goToMatch(searchMatchIndex);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchQuery]);
+
     const toggleMachineCollapsed = useCallback((machine) => {
         setCollapsedMachines((prev) => {
             const next = new Set(prev);
@@ -999,6 +1289,8 @@ export default function Deemo({
     const clearSelection = useCallback(() => {
         setSelectedRows(new Set());
     }, []);
+
+    const clearBakeSelection = useCallback(() => setSelectedBakeRows(new Set()), []);
 
     // ── Status dropdown (ported from LoadingPlanTable.jsx) ──────────────────
     const handleStatusClick = useCallback(
@@ -1438,7 +1730,16 @@ export default function Deemo({
 
     useEffect(() => {
         const onKey = (e) => {
-            if (e.key === "Escape") clearSelection();
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+                e.preventDefault();
+                setSearchOpen(true);
+                requestAnimationFrame(() => searchInputRef.current?.focus());
+                return;
+            }
+            if (e.key === "Escape") {
+                if (searchOpen) closeSearch();
+                clearSelection();
+            }
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === "z" && !e.shiftKey) {
                     e.preventDefault();
@@ -1937,9 +2238,11 @@ export default function Deemo({
     }, [serverMachines]);
 
     const columns = useMemo(
-        () => makeColumns(hoveredRowId, isUpdating, handleStatusClick, toggleMachineCollapsed),
-        [hoveredRowId, isUpdating, handleStatusClick, toggleMachineCollapsed],
+        () => makeColumns(hoveredRowId, isUpdating, handleStatusClick, toggleMachineCollapsed, highlightedMatch),
+        [hoveredRowId, isUpdating, handleStatusClick, toggleMachineCollapsed, highlightedMatch],
     );
+
+    const bakeColumns = useMemo(() => makeBakeColumns(highlightedMatch), [highlightedMatch]);
 
     const machineTotalDoable = useMemo(() => {
         const result = {};
@@ -1978,6 +2281,52 @@ export default function Deemo({
         return result;
     }, [dataRows, activePackageGroup]);
 
+    const bakeOvens = useMemo(() => {
+        const set = new Set((bakeLots ?? []).map((r) => r.oven_num));
+            return Array.from(set).sort((a, b) => {
+                const an = Number(a), bn = Number(b);
+                if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn;
+                return String(a).localeCompare(String(b));
+            });
+    }, [bakeLots]);
+
+    const bakeDisplayRows = useMemo(() => {
+        return bakeOvens.flatMap((oven) => {
+            const rowsForOven = (bakeLots ?? [])
+                .filter((r) => r.oven_num === oven)
+                .map((r) => ({ ...r, __type: "data" }));
+
+            return [
+                {
+                    id: `bake-header-${oven}`,
+                    __type: "header",
+                    ovenLabel: oven,
+                    __rowCount: rowsForOven.length,
+                    isLocked: true,
+                },
+                ...rowsForOven,
+            ];
+        });
+    }, [bakeOvens, bakeLots]);
+
+    // stub handlers — wire these up once the real bulk actions are defined
+    const handleBakeApprove = useCallback(() => {
+        console.log("Approve bake lots (stub):", Array.from(selectedBakeRows));
+    }, [selectedBakeRows]);
+
+    const handleBakeReprocess = useCallback(() => {
+        console.log("Reprocess bake lots (stub):", Array.from(selectedBakeRows));
+    }, [selectedBakeRows]);
+
+    const handleBakeExport = useCallback(() => {
+        console.log("Export bake lots (stub):", Array.from(selectedBakeRows));
+    }, [selectedBakeRows]);
+
+    const handleBakeDelete = useCallback(() => {
+        console.log("Delete bake lots (stub):", Array.from(selectedBakeRows));
+        setSelectedBakeRows(new Set());
+    }, [selectedBakeRows]);
+
     // Standalone source of truth for which sections render. Unassigned +
     // MANUAL are always shown (pinned first), regardless of whether they
     // currently hold any rows — same contract as LoadingPlanTable.jsx.
@@ -1991,7 +2340,7 @@ export default function Deemo({
 
             const rowsForMachine = dataRows.filter((r) => {
                 if (r.machine !== m) return false;
-                if (isUnassigned) return true;
+                // if (isUnassigned) return true;
                 if (isBlockRow(r)) return true;
                 const activeList = activePackageGroup ?? [];
                 return activeList.includes(r.package_name);
@@ -2021,6 +2370,36 @@ export default function Deemo({
             return [headerRow, ...rowsForMachine.map((r) => ({ ...r, id: r.id, __type: "data" }))];
         });
     }, [machines, dataRows, activePackageGroup, machinePlatform, otherPackageCounts, collapsedMachines]);
+
+    // Scroll effect — now only handles scrolling + setting the highlight.
+    useEffect(() => {
+        if (!scrollTarget) return;
+
+        const rows = activePackage === "Bake" ? bakeDisplayRows : displayRows;
+        const rowIdx = rows.findIndex((r) => r.id === scrollTarget.rowId);
+        if (rowIdx === -1) return;
+
+        const cols = activePackage === "Bake" ? bakeColumns : columns;
+        const colIdx = cols.findIndex((c) => c.key === scrollTarget.columnKey);
+
+        gridRef.current?.scrollToCell?.({ rowIdx, idx: colIdx > -1 ? colIdx : 0 });
+        const el = gridRef.current?.element;
+        if (el) {
+            el.scrollTop = Math.max(0, rowIdx * ROW_HEIGHT - el.clientHeight / 2);
+        }
+
+        setHighlightedMatch({ rowId: scrollTarget.rowId, columnKey: scrollTarget.columnKey });
+        setScrollTarget(null);
+    }, [scrollTarget, displayRows, bakeDisplayRows, activePackage, columns, bakeColumns]);
+
+    // Separate effect, sole job: clear the highlight 1.5s after it's set.
+    // Depends ONLY on highlightedMatch — untouched by columns/displayRows
+    // recomputing, so nothing can cancel it early.
+    useEffect(() => {
+        if (!highlightedMatch) return;
+        const t = setTimeout(() => setHighlightedMatch(null), 1500);
+        return () => clearTimeout(t);
+    }, [highlightedMatch]);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -2120,6 +2499,77 @@ export default function Deemo({
         el.addEventListener("scroll", handleScroll);
         return () => el.removeEventListener("scroll", handleScroll);
     }, [groupHeaderOffsets]);
+
+    const handleBulkFieldUpdate = useCallback(
+        (field, value) => {
+            console.log("LOG ~ Deemo.jsx:2509 ~ Deemo ~ dataRows:", dataRows);
+            const targets = dataRows.filter(
+                (r) => selectedRows.has(r.id) && r[field] !== value,
+            );
+
+
+            // Nothing actually changes — skip the update entirely
+            if (targets.length === 0) return;
+
+            const targetIds = new Set(targets.map((r) => r.id));
+
+            update((prev) =>
+                prev.map((r) =>
+                    targetIds.has(r.id) ? { ...r, [field]: value } : r,
+                ),
+            );
+            setIsDirty(true);
+
+            withUpdating(
+                mutate(route("loading-plan.bulk-update"), {
+                    body: {
+                        updates: targets.map((r) => ({
+                            entry_id: r.entry_id ?? null,
+                            fields: { [field]: value },
+                            lock_version: r.lock_version ?? 0,
+                        })),
+                    },
+                }),
+            )
+                .then(({ entries }) => {
+                    update(
+                        (prev) =>
+                            prev.map((r) => {
+                                const match = entries?.find(
+                                    (e) =>
+                                        e.id === r.entry_id ||
+                                        e.lot_id === r.lot_id,
+                                );
+                                return match
+                                    ? {
+                                        ...r,
+                                        entry_id: match.id,
+                                        lock_version: match.lock_version,
+                                    }
+                                    : r;
+                            }),
+                        true,
+                    );
+
+                    clearSelection();
+                })
+                .catch((err) => {
+                    console.error(`Bulk ${field} update failed:`, err);
+                    undo();
+                    if (err.status === 409) {
+                        const conflicts = err.data?.conflicts ?? [];
+                        toast?.error?.(
+                            conflicts.length > 0
+                                ? `${conflicts.length} row(s) were changed by someone else — the change was cancelled.`
+                                : "Some rows were changed by someone else — the change was cancelled.",
+                        );
+                    } else {
+                        toast?.error?.(`Couldn't update ${field} — reverted.`);
+                    }
+                });
+        },
+        [selectedRows, update, dataRows, date, undo, withUpdating, mutate, toast, clearSelection],
+    );
 
     // ── Cell edits now persist (previously only touched local state) ───────
     const handleRowsChange = useCallback(
@@ -2671,13 +3121,18 @@ export default function Deemo({
 
                     {/* Row 2: package tabs (left) — dissemination / production line / idle machines (right) */}
                     <div className="flex flex-wrap items-end gap-2">
-                        <PackageTabs
-                            packages={packageGroupNames}
+                        <ScrollableTabs
+                            items={[
+                                ...packageGroupNames,
+                                { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> },
+                            ]}
                             active={activePackage}
                             onChange={(pkg) => {
                                 setActivePackage(pkg);
                                 clearSelection();
+                                clearBakeSelection();
                             }}
+                            storageKey="loadingPlan:packageTabs:active"
                         />
 
                         <button
@@ -2723,6 +3178,15 @@ export default function Deemo({
                             </fieldset>
 
                             <button
+                                className="btn btn-md z-50"
+                                onClick={() => {
+                                    setSearchOpen(true);
+                                }}
+                            >
+                                <BsSearch size={20}/>
+                            </button>
+                            
+                            <button
                                 // className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
                                 //     count !== 2 ? "cursor-not-allowed opacity-50" : ""
                                 // }`}
@@ -2734,6 +3198,10 @@ export default function Deemo({
                             >
                                 Schedule Pickups
                             </button>
+
+                            <div style={{ position: "relative" }}>
+                                
+                            </div>
 
                             {idleMachines.length > 0 && (
                                 <fieldset className="fieldset bg-base-100 border-base-300 rounded-box border py-1 px-2">
@@ -2764,7 +3232,7 @@ export default function Deemo({
                 bar to move that lot to that machine.
             </p> */}
 
-            {/* <PackageTabs
+            {/* <ScrollableTabs
                 packages={packageGroupNames}
                 active={activePackage}
                 onChange={(pkg) => {
@@ -2774,225 +3242,265 @@ export default function Deemo({
             /> */}
 
             <TableActionsContext.Provider value={tableActionsValue}>
-                <DndContext
-                    collisionDetection={pointerWithin}
-                    onDragOver={(event) => {
-                        const overId = event.over ? event.over.id : null;
-                        setHoveredRowId((prev) =>
-                            prev !== overId ? overId : prev,
-                        );
-                    }}
-                    sensors={sensors}
-                    onDragStart={handleDragStart}
-                    onDragEnd={(event) => {
-                        handleDragEnd(event);
-                        setHoveredRowId(null);
-                    }}
-                    onDragCancel={(event) => {
-                        handleDragCancel(event);
-                        setHoveredRowId(null);
-                    }}
+                <TableInteractionContext.Provider
+                    value={tableInteractionValue}
                 >
-                    <div ref={containerRef} className="border-none" style={{ position: "relative" }}>
-                        <TableInteractionContext.Provider
-                            value={tableInteractionValue}
-                        >
-                            <DataGrid
-                                ref={gridRef}
-                                columns={columns}
-                                rows={displayRows}
-                                // renderers={{ renderRow: makeRowRenderer(rowIdxByElement) }}
-                                renderers={{
-                                    renderRow: (key, props) => (
-                                        <DroppableRow key={key} rowIdxByElement={rowIdxByElement} props={props}/>
-                                    ),
-                                }}
-                                onRowsChange={handleRowsChange}
-                                rowKeyGetter={(row) => row.id}
-                                selectedRows={selectedRows}
-                                onSelectedRowsChange={setSelectedRows}
-                                rowClass={(row) => rowClass(row)}
-                                rowHeight={ROW_HEIGHT}
-                                headerRowHeight={HEADER_ROW_HEIGHT}
-                                defaultColumnOptions={{ resizable: true }}
-                                isRowSelectionDisabled={(row) =>
-                                    row.isLocked === true
-                                }
-                                onScroll={() => {
-                                    // virtualization can unmount the hovered row mid-scroll —
-                                    // bail out if the anchor got ripped out of the DOM
-                                    if (
-                                        hoveredRowRef.current &&
-                                        !hoveredRowRef.current.isConnected
-                                    ) {
-                                        hoveredRowRef.current = null;
-                                        setHoveredRow(null);
-                                    }
-                                }}
-                                className="bg-base-100"
-                                style={{ blockSize: "70vh" }}
+                    <div style={{ position: "relative" }}>
+                        {searchOpen && (
+                            <SearchBar
+                                query={searchQuery}
+                                onQueryChange={setSearchQuery}
+                                matchCount={searchMatches.length}
+                                matchIndex={searchMatchIndex}
+                                onNext={findNext}
+                                onPrev={findPrev}
+                                onClose={closeSearch}
+                                inputRef={searchInputRef}
                             />
-
-                            {hoveredRow && (
-                                <div onPointerLeave={handleButtonsPointerLeave}>
-                                    <RowInsertButtons
-                                        anchorElement={hoveredRow.element}
-                                        buttonsRef={buttonsRef}
-                                        onInsertAbove={() => {
-                                            setPlacementOfNewEntry("above");
-                                            setSelectedRows(
-                                                new Set(
-                                                    [dataRowsRef.current[hoveredRow.rowIdx]],
-                                                ),
-                                            );
-                                            addEntryModalRef.current?.showModal()
+                        )}
+                        {activePackage === "Bake" ? (
+                            <div className="border-none" style={{ position: "relative" }}>
+                                <DataGrid
+                                    ref={gridRef}
+                                    columns={bakeColumns}
+                                    rows={bakeDisplayRows}
+                                    rowKeyGetter={(row) => row.id}
+                                    selectedRows={selectedBakeRows}
+                                    onSelectedRowsChange={setSelectedBakeRows}
+                                    rowClass={(row) =>
+                                        row.__type === "header"
+                                            ? "text-xs border-t-4 border-yellow-500 flex machine-header-row"
+                                            : undefined
+                                    }
+                                    rowHeight={ROW_HEIGHT}
+                                    headerRowHeight={HEADER_ROW_HEIGHT}
+                                    defaultColumnOptions={{ resizable: true }}
+                                    isRowSelectionDisabled={(row) => row.isLocked}
+                                    className="bg-base-100"
+                                    style={{ blockSize: "70vh" }}
+                                />
+                            </div>
+                        ) : (
+                            <DndContext
+                                collisionDetection={pointerWithin}
+                                onDragOver={(event) => {
+                                    const overId = event.over ? event.over.id : null;
+                                    setHoveredRowId((prev) =>
+                                        prev !== overId ? overId : prev,
+                                    );
+                                }}
+                                sensors={sensors}
+                                onDragStart={handleDragStart}
+                                onDragEnd={(event) => {
+                                    handleDragEnd(event);
+                                    setHoveredRowId(null);
+                                }}
+                                onDragCancel={(event) => {
+                                    handleDragCancel(event);
+                                    setHoveredRowId(null);
+                                }}
+                            >
+                            <div ref={containerRef} className="border-none" style={{ position: "relative" }}>
+                                    <DataGrid
+                                        ref={gridRef}
+                                        columns={columns}
+                                        rows={displayRows}
+                                        renderers={{
+                                            renderRow: (key, props) => (
+                                                <DroppableRow key={key} rowIdxByElement={rowIdxByElement} props={props}/>
+                                            ),
                                         }}
-                                        onInsertBelow={() => {
-                                            setPlacementOfNewEntry("below");
-                                            setSelectedRows(
-                                                new Set(
-                                                    [dataRowsRef.current[hoveredRow.rowIdx]],
-                                                ),
-                                            );
-                                            addEntryModalRef.current?.showModal()
+                                        onRowsChange={handleRowsChange}
+                                        rowKeyGetter={(row) => row.id}
+                                        selectedRows={selectedRows}
+                                        onSelectedRowsChange={setSelectedRows}
+                                        rowClass={(row) => rowClass(row)}
+                                        rowHeight={ROW_HEIGHT}
+                                        headerRowHeight={HEADER_ROW_HEIGHT}
+                                        defaultColumnOptions={{ resizable: true }}
+                                        isRowSelectionDisabled={(row) =>
+                                            row.isLocked || isBlockRow(row)
+                                        }
+                                        onScroll={() => {
+                                            // virtualization can unmount the hovered row mid-scroll —
+                                            // bail out if the anchor got ripped out of the DOM
+                                            if (
+                                                hoveredRowRef.current &&
+                                                !hoveredRowRef.current.isConnected
+                                            ) {
+                                                hoveredRowRef.current = null;
+                                                setHoveredRow(null);
+                                            }
                                         }}
+                                        className="bg-base-100"
+                                        style={{ blockSize: "70vh" }}
                                     />
-                                </div>
-                            )}
 
-                            {/* Sticky stand-in for whichever machine group's real header
-                                row has scrolled out of view. Also carries the Add
-                                Lot/Add Block buttons for that machine, since I don't
-                                have MachineHeaderBar's source to add them there
-                                directly — feel free to move these into that
-                                component and drop them from here. */}
-                            {stickyMachine && (
-                                <div
-                                    className="bg-base-200 shadow-[0_15px_15px_-10px_rgba(0,0,0,0.3)]"
-                                    style={{
-                                        position: "absolute",
-                                        top: HEADER_ROW_HEIGHT,
-                                        left: 0,
-                                        right: 0,
-                                        height: ROW_HEIGHT,
-                                    }}
-                                >
-                                    <div className="absolute left-0 right-0 pl-9 h-full w-full flex items-center justify-between">
-                                        <div className="flex items-center h-full gap-2 min-w-0">
-                                            <MachineHeaderBar
-                                                row={{
-                                                    machine:
-                                                        stickyMachine.machineLabel ??
-                                                        stickyMachine.machine,
-                                                    otherPackageCount:
-                                                        stickyMachine.otherPackageCount,
+                                    {hoveredRow && (
+                                        <div onPointerLeave={handleButtonsPointerLeave}>
+                                            <RowInsertButtons
+                                                anchorElement={hoveredRow.element}
+                                                buttonsRef={buttonsRef}
+                                                onInsertAbove={() => {
+                                                    setPlacementOfNewEntry("above");
+                                                    setSelectedRows(
+                                                        new Set(
+                                                            [dataRowsRef.current[hoveredRow.rowIdx]],
+                                                        ),
+                                                    );
+                                                    addEntryModalRef.current?.showModal()
                                                 }}
-                                                machineKey={stickyMachine.machine}
-                                                rowCount={stickyMachine.rowCount}
-                                                isCollapsed={stickyMachine.isCollapsed}
-                                                onToggleCollapse={toggleMachineCollapsed}
+                                                onInsertBelow={() => {
+                                                    setPlacementOfNewEntry("below");
+                                                    setSelectedRows(
+                                                        new Set(
+                                                            [dataRowsRef.current[hoveredRow.rowIdx]],
+                                                        ),
+                                                    );
+                                                    addEntryModalRef.current?.showModal()
+                                                }}
                                             />
                                         </div>
-                                        <div className="flex gap-1 pr-2">
-                                            <button
-                                                className="btn btn-2xs"
-                                                onClick={() =>
-                                                    handleAddRow(stickyMachine.machine)
-                                                }
-                                                disabled={isUpdating}
-                                            >
-                                                + Lot
-                                            </button>
-                                            <button
-                                                className="btn btn-2xs"
-                                                onClick={() =>
-                                                    handleAddBlock(stickyMachine.machine)
-                                                }
-                                                disabled={isUpdating}
-                                            >
-                                                + Block
-                                            </button>
+                                    )}
+
+                                    {/* Sticky stand-in for whichever machine group's real header
+                                        row has scrolled out of view. Also carries the Add
+                                        Lot/Add Block buttons for that machine, since I don't
+                                        have MachineHeaderBar's source to add them there
+                                        directly — feel free to move these into that
+                                        component and drop them from here. */}
+                                
+                                    {stickyMachine && (
+                                        <div
+                                            className="bg-base-200 shadow-[0_15px_15px_-10px_rgba(0,0,0,0.3)]"
+                                            style={{
+                                                position: "absolute",
+                                                top: HEADER_ROW_HEIGHT,
+                                                left: 0,
+                                                right: 0,
+                                                height: ROW_HEIGHT,
+                                            }}
+                                        >
+                                            <div className="absolute left-0 right-0 pl-9 h-full w-full flex items-center justify-between">
+                                                <div className="flex items-center h-full gap-2 min-w-0">
+                                                    <MachineHeaderBar
+                                                        row={{
+                                                            machine:
+                                                                stickyMachine.machineLabel ??
+                                                                stickyMachine.machine,
+                                                            otherPackageCount:
+                                                                stickyMachine.otherPackageCount,
+                                                        }}
+                                                        machineKey={stickyMachine.machine}
+                                                        rowCount={stickyMachine.rowCount}
+                                                        isCollapsed={stickyMachine.isCollapsed}
+                                                        onToggleCollapse={toggleMachineCollapsed}
+                                                    />
+                                                </div>
+                                                {/* <div className="flex gap-1 pr-2">
+                                                    <button
+                                                        className="btn btn-2xs"
+                                                        onClick={() =>
+                                                            handleAddRow(stickyMachine.machine)
+                                                        }
+                                                        disabled={isUpdating}
+                                                    >
+                                                        + Lot
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-2xs"
+                                                        onClick={() =>
+                                                            handleAddBlock(stickyMachine.machine)
+                                                        }
+                                                        disabled={isUpdating}
+                                                    >
+                                                        + Block
+                                                    </button>
+                                                </div> */}
+                                            </div>
                                         </div>
+                                    )}
+                            </div>
+
+                            <DragOverlay>
+                                {draggedRow ? (
+                                    <div className="bg-base-200 w-[300px] p-2 rounded shadow-lg text-sm font-semibold">
+                                        {draggedRow.part_name || "Lot"} -{" "}
+                                        {draggedRow.lot_id} - {draggedRow.package_name}
                                     </div>
-                                </div>
-                            )}
-                        </TableInteractionContext.Provider>
+                                ) : null}
+                            </DragOverlay>
+                            </DndContext>
+                        )}
                     </div>
 
-                    <DragOverlay>
-                        {draggedRow ? (
-                            <div className="bg-base-200 w-[300px] p-2 rounded shadow-lg text-sm font-semibold">
-                                {draggedRow.part_name || "Lot"} -{" "}
-                                {draggedRow.lot_id} - {draggedRow.package_name}
-                            </div>
-                        ) : null}
-                    </DragOverlay>
-                </DndContext>
-
-                <SelectionToolbar
-                    selectedIds={selectedRows}
-                    machinePlatform={machinePlatform}
-                    allData={dataRows}
-                    machines={machines}
-                    disabled={isUpdating}
-                    onTag={handleBulkTag}
-                    onClearTag={handleBulkClearTag}
-                    onStatusChange={handleBulkStatus}
-                    onTransfer={handleBulkTransfer}
-                    onSplitRow={handleSplitRow}
-                    onMergeRows={handleMergeRows}
-                    onDelete={handleBulkDelete}
-                    onClearSelection={clearSelection}
-                />
-
-                <SplitHistoryModal
-                    ref={splitHistoryModalRef}
-                    loading={historyLoading}
-                    history={splitHistoryData}
-                    onRevert={handleSplitRevert}
-                    onClose={() => splitHistoryModalRef.current?.close()}
-                    isParent={currentLotRole.isParent}
-                    isChild={currentLotRole.isChild}
-                />
-
-                <AddEntryModal
-                    // loading={historyLoading}
-                    // onRevert={handleSplitRevert}
-                    // onClose={() => splitHistoryModalRef.current?.close()}
-                    // isParent={currentLotRole.isParent}
-                    // isChild={currentLotRole.isChild}
+                    <BakeSelectionToolbar
+                        selectedIds={selectedBakeRows}
+                        onApprove={handleBakeApprove}
+                        onReprocess={handleBakeReprocess}
+                        onExport={handleBakeExport}
+                        onDelete={handleBakeDelete}
+                        onClearSelection={clearBakeSelection}
                     />
 
-                <AddEntryModal
-                    ref={addEntryModalRef}
-                    placement={placementOfNewEntry}
-                    anchorRow={lastHoveredRow}
-                    // onClose={handleCloseAddEntry}
-                    // machine={machine}
-                    date={date}
-                    packageGroups={packageGroups}
-                    activePackage={activePackage}
-                    handleAddRow={handleAddRow}
-                    saveBlock={saveBlock}
-                />
+                    <SelectionToolbar
+                        selectedIds={selectedRows}
+                        machinePlatform={machinePlatform}
+                        allData={dataRows}
+                        machines={machines}
+                        disabled={isUpdating}
+                        onTag={handleBulkTag}
+                        onClearTag={handleBulkClearTag}
+                        onStatusChange={handleBulkStatus}
+                        onBulkFieldUpdate={handleBulkFieldUpdate}
+                        onTransfer={handleBulkTransfer}
+                        onSplitRow={handleSplitRow}
+                        onMergeRows={handleMergeRows}
+                        onDelete={handleBulkDelete}
+                        onClearSelection={clearSelection}
+                    />
 
-                <MergeHistoryModal
-                    ref={mergeHistoryModalRef}
-                    loading={historyLoading}
-                    history={mergeHistoryData}
-                    onRevert={handleMergeRevert}
-                    onClose={() => mergeHistoryModalRef.current?.close()}
-                    isTarget={currentLotRole.isParent}
-                    isSource={currentLotRole.isChild}
-                />
+                    <SplitHistoryModal
+                        ref={splitHistoryModalRef}
+                        loading={historyLoading}
+                        history={splitHistoryData}
+                        onRevert={handleSplitRevert}
+                        onClose={() => splitHistoryModalRef.current?.close()}
+                        isParent={currentLotRole.isParent}
+                        isChild={currentLotRole.isChild}
+                    />
 
-                <DataIntegrityModal
-                    partnameMismatches={partnameMismatches}
-                    unknownPackages={unknownPackages}
-                    recipeMismatches={recipeMismatches}
-                />
+                    <AddEntryModal
+                        ref={addEntryModalRef}
+                        placement={placementOfNewEntry}
+                        anchorRow={lastHoveredRow}
+                        // onClose={handleCloseAddEntry}
+                        // machine={machine}
+                        date={date}
+                        packageGroups={packageGroups}
+                        activePackage={activePackage}
+                        handleAddRow={handleAddRow}
+                        saveBlock={saveBlock}
+                    />
 
-                <DisseminationSummaryModal summary={disseminationSummary} />
+                    <MergeHistoryModal
+                        ref={mergeHistoryModalRef}
+                        loading={historyLoading}
+                        history={mergeHistoryData}
+                        onRevert={handleMergeRevert}
+                        onClose={() => mergeHistoryModalRef.current?.close()}
+                        isTarget={currentLotRole.isParent}
+                        isSource={currentLotRole.isChild}
+                    />
+
+                    <DataIntegrityModal
+                        partnameMismatches={partnameMismatches}
+                        unknownPackages={unknownPackages}
+                        recipeMismatches={recipeMismatches}
+                    />
+
+                    <DisseminationSummaryModal summary={disseminationSummary} />
+                </TableInteractionContext.Provider>
             </TableActionsContext.Provider>
 
             {/* ── Single-row status dropdown (portal-style, fixed) ── */}

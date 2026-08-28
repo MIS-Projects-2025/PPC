@@ -2,116 +2,266 @@
 
 namespace App\Services\Scheduling;
 
-use App\Models\Lot;
+use App\Models\CustomerDataWip;
 use App\Models\LoadingPlanEntry;
+use App\Models\MachineCapacity;
 use App\Models\MachineSetupState;
 use App\Models\MachineCapabilityPartRule;
-use App\Models\MachineDedicatedPart;
-use App\Models\FocusGroupFactoryMap;
+use App\Models\MachineTransitionRule;
+use App\Models\MachineDedicatedParts;
+use App\Services\LoadingPlanFormulas;
+use App\Models\PartName;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 /**
- * Assumes the following Eloquent models already exist, mapped to the
- * tables designed earlier in this conversation:
- *
- *   Lot                        -> lots (daily CSV import)
- *   Machine                    -> machines
- *   MachineCapacity            -> machine_capacity
- *   MachineSetupState          -> machine_setup_states
- *   MachineSetupGroup          -> machine_setup_groups
- *   MachineTransitionRule      -> machine_transition_rules
- *   MachineCapabilityPartRule  -> machine_capability_part_rules
- *   MachineDedicatedPart       -> machine_dedicated_parts
- *   FocusGroupFactoryMap       -> focus_group_factory_map
- *   LoadingPlanEntry           -> loading_plan_entries
- *   ReoptimizationRun          -> reoptimization_runs
+ * NOTE ON $this->ref: reference data is now an instance property, set
+ * fresh at the top of every public entry point (handlePickup,
+ * rebuildForPickupArrival). This is only safe if this service is
+ * resolved FRESH per request/job — if it's ever bound as a singleton
+ * in a long-running worker, $this->ref could leak stale data across
+ * unrelated batches processed by the same instance. Confirm the
+ * container binding is not singleton before relying on this.
  */
 class SchedulerService
 {
     /**
-     * Entry point. Call this with the newly-arrived group of lots
-     * ("pickup"). Resolves candidate machines, then loads every
-     * not-yet-started plan entry on those machines (the "open window")
-     * so a rebuild pass has everything it needs to work with.
-     *
-     * NOTE: this method stops at data-gathering. The actual
-     * rebuild/reassignment algorithm (clustering + insert) is a
-     * separate piece we haven't built yet — see return shape below.
-     *
-     * @param  Collection<Lot>|array<int|string>  $pickup  Lot models, or lot_ids to look up
-     * @return array{
-     *     pickup_lots: Collection<Lot>,
-     *     candidate_machine_ids: Collection<int>,
-     *     open_entries_by_machine: Collection<int, Collection<LoadingPlanEntry>>,
-     *     anchor_state_by_machine: Collection<int, int|null>,
-     * }
+     * Focus_Group -> Factory. NULL means non-TSPI (excluded from scheduling).
+     * NOTE: DLT here maps to 'F1' — every prior confirmation had it as
+     * null ("Removed, not TSPI"). Flagging in case this is a typo.
      */
-    public function handlePickup($pickup): array
+    private const FOCUS_GROUP_FACTORY_MAP = [
+        'AER' => 'F1',
+        'COM' => 'F1',
+        'HPC' => 'F1',
+        'HPCA' => 'F1',
+        'HPCC' => 'F1',
+        'HPCS' => 'F1',
+        'INT' => 'F1',
+        'MIC' => 'F1',
+        'MIC_WL' => 'F1',
+        'MPD' => 'F1',
+        'RFC' => 'F1',
+        'STR' => 'F1',
+        'CV' => 'F2',
+        'LT' => 'F2',
+        'LTCL' => 'F2',
+        'LTI' => 'F2',
+        'CV1' => null,
+        'SOF' => null,
+        'WLT' => null,
+        'DLT' => 'F1', // <-- was null in every earlier confirmation, verify this is intentional
+    ];
+
+    /** Preloaded reference data for the batch currently being processed. */
+    private array $ref = [];
+
+    /**
+     * Loads reference data scoped to what THIS batch could possibly
+     * need. setup_states filtered first (factory + package_name in the
+     * batch, always including NULL-package/RES-type states); part_rules
+     * and transition_rules filtered FROM that result.
+     */
+    protected function preloadReferenceData(Collection $pickupLots): array
     {
-        $pickupLots = $this->resolvePickupLots($pickup);
+        $factories = $pickupLots
+            ->map(fn($lot) => $this->resolveFactory($lot->Focus_Group))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $packageNames = $pickupLots->pluck('Package_Name')->filter()->unique()->values();
+        $partNames = $pickupLots->pluck('Part_Name')->filter()->unique()->values();
+
+        $setupStates = MachineSetupState::query()
+            ->select([
+                'setup_state_id',
+                'machine_id',
+                'group_id',
+                'factory',
+                'package_name',
+                'body_size',
+                'thickness',
+                'leadcount_min',
+                'leadcount_max',
+                'leadcount_exclude',
+                'process_type',
+            ])
+            ->whereIn('factory', $factories)
+            ->where(function ($q) use ($packageNames) {
+                $q->whereNull('package_name')->orWhereIn('package_name', $packageNames);
+            })
+            ->get();
+
+        $relevantStateIds = $setupStates->pluck('setup_state_id');
+        $relevantMachineIds = $setupStates->pluck('machine_id')->unique();
+
+        $this->ref = [
+            'setup_states' => $setupStates,
+            'part_rules_by_state' => MachineCapabilityPartRule::query()
+                ->whereIn('setup_state_id', $relevantStateIds)
+                ->get()
+                ->groupBy('setup_state_id'),
+            'dedicated_parts' => MachineDedicatedParts::query()
+                ->whereIn('part_name', $partNames)
+                ->get()
+                ->mapWithKeys(fn($d) => ["{$d->machine_id}|{$d->part_name}" => true]),
+            'transition_rules_by_machine' => MachineTransitionRule::query()
+                ->whereIn('machine_id', $relevantMachineIds)
+                ->get()
+                ->groupBy('machine_id'),
+        ];
+
+        return $this->ref;
+    }
+
+    /** In-memory equivalent of the old SQL WHERE chain against machine_setup_states. */
+    protected function matchesLotCapability(
+        MachineSetupState $state,
+        string $factory,
+        ?string $packageName,
+        ?string $bodySize2d,
+        ?float $thickness,
+        ?int $leadCount,
+        string $rampProcessType
+    ): bool {
+        if ($state->factory !== $factory) {
+            return false;
+        }
+        if ($state->package_name !== null && $state->package_name !== $packageName) {
+            return false;
+        }
+        if ($state->body_size !== null && $state->body_size !== $bodySize2d) {
+            return false;
+        }
+        if ($state->thickness !== null) {
+            if ($thickness === null || round((float) $state->thickness, 2) !== round($thickness, 2)) {
+                return false;
+            }
+        }
+        if ($state->leadcount_min !== null) {
+            if ($leadCount === null || $leadCount < $state->leadcount_min) {
+                return false;
+            }
+        }
+        if ($state->leadcount_max !== null) {
+            if ($leadCount === null || $leadCount > $state->leadcount_max) {
+                return false;
+            }
+        }
+        if ($state->leadcount_exclude !== null) {
+            if ($leadCount === null) {
+                return false;
+            }
+            $excluded = array_map('trim', explode(',', $state->leadcount_exclude));
+            if (in_array((string) $leadCount, $excluded, true)) {
+                return false;
+            }
+        }
+        if ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Entry point. Resolves candidate machines, loads every not-yet-
+     * started plan entry on those machines, plus capability/capacity
+     * context needed to rank placements.
+     *
+     * @param  Collection|array<int|string>  $pickup  raw pickup payloads
+     * @param  Carbon  $targetDate  production-day (6am–4am) window
+     */
+    public function handlePickup($pickup, Carbon $targetDate): array
+    {
+        [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
 
         if ($pickupLots->isEmpty()) {
             return [
                 'pickup_lots' => $pickupLots,
+                'unmatched_part_names' => $unmatchedPartNames,
                 'candidate_machine_ids' => collect(),
                 'open_entries_by_machine' => collect(),
                 'anchor_state_by_machine' => collect(),
+                'remaining_capacity_by_machine' => collect(),
+                'reference_data' => [],
             ];
         }
 
-        // Which machines could conceivably run ANY of the pickup lots.
-        // Scoping to these (rather than literally every machine in the
-        // plant) is what keeps each rebuild pass bounded in size.
+        $ref = $this->preloadReferenceData($pickupLots);
         $candidateMachineIds = $this->getCandidateMachineIds($pickupLots);
-
-        // The open window: every not-yet-started entry on those machines,
-        // grouped per machine. This is the pool a rebuild pass is allowed
-        // to touch — frozen (already-started) entries are excluded here
-        // by definition.
         $openEntriesByMachine = $this->getUnprocessedPlannedEntries($candidateMachineIds);
-
-        // Each machine's fixed starting point: the resulting state of its
-        // most recently STARTED entry. A rebuild must plan forward from
-        // this, it cannot rewrite it.
         $anchorStateByMachine = $this->getAnchorStates($candidateMachineIds);
+        $remainingCapacityByMachine = $this->getRemainingCapacityByMachine($candidateMachineIds, $targetDate);
 
         return [
             'pickup_lots' => $pickupLots,
+            'unmatched_part_names' => $unmatchedPartNames,
             'candidate_machine_ids' => $candidateMachineIds,
             'open_entries_by_machine' => $openEntriesByMachine,
             'anchor_state_by_machine' => $anchorStateByMachine,
+            'remaining_capacity_by_machine' => $remainingCapacityByMachine,
+            'reference_data' => $ref,
         ];
     }
 
     /**
-     * Normalize the `pickup` param into a Collection of Lot models.
-     * Accepts either Lot models/collections or raw lot_id values.
+     * Normalize `pickup` into Collection<object>, enriched via PartName
+     * lookup by part_name. CR3 is intentionally omitted — pickup lots
+     * are assumed never RES (confirmed: safe to assume, since pickups
+     * can't be verified as residual either way).
+     *
+     * @return array{0: Collection<object>, 1: Collection<string>}
      */
-    protected function resolvePickupLots($pickup): Collection
+    protected function resolvePickupLots($pickup): array
     {
         $pickup = $pickup instanceof Collection ? $pickup : collect($pickup);
 
         if ($pickup->isEmpty()) {
-            return collect();
+            return [collect(), collect()];
         }
 
-        if ($pickup->first() instanceof Lot) {
-            return $pickup->values();
+        $resolved = collect();
+        $unmatched = collect();
+
+        foreach ($pickup as $item) {
+            $item = (array) $item;
+            $partName = $item['part_name'] ?? null;
+
+            // ASSUMPTION: PartName::findByPartName() is a static helper
+            // by analogy to the earlier PackageList model — confirm this
+            // actually exists on the real PartName model, or replace with:
+            // PartName::where('devicename', $partName)->first()
+            $packageInfo = PartName::findByPartName($partName);
+
+            if (!$packageInfo) {
+                $unmatched->push($partName ?? '(missing part_name)');
+                continue;
+            }
+
+            $resolved->push((object) [
+                'Part_Name'    => $partName,
+                'Package_Name' => $item['package_name'] ?? null,
+                'Qty'          => $item['qty'] ?? null,
+                'Lead_Count'   => $item['lead_count'] ?? null,
+                'Body_Size'    => $item['body_size'] ?? null,
+                // real PartName columns are devicename/focus_grp/allocation —
+                // fixed from focus_group/ramp_time, which don't exist on that model
+                'Focus_Group'  => $packageInfo->focus_grp,
+                'Ramp_Time'    => $packageInfo->allocation,
+                'CR3'          => null, // pickups assumed never RES
+                'isExpedite'   => $item['is_expedite'] ?? false,
+                'aboveCT'      => false, // pickups have no CT history to compute this from
+                'CT'           => null,  // no sortable CT value for pickups either
+            ]);
         }
 
-        // treat as lot_id list
-        return Lot::whereIn('lot_id', $pickup->all())->get();
+        return [$resolved, $unmatched];
     }
 
     /**
-     * For the given lots, return every machine_id capable of running
-     * AT LEAST ONE of them — a pure capability lookup, independent of
-     * anything currently scheduled. Mirrors the candidate_states logic
-     * from the per-lot decision query.
-     *
-     * @param  Collection<Lot>  $lots
      * @return Collection<int>  distinct machine_ids
      */
     public function getCandidateMachineIds(Collection $lots): Collection
@@ -122,43 +272,27 @@ class SchedulerService
             $factory = $this->resolveFactory($lot->Focus_Group);
 
             if ($factory === null) {
-                // non-TSPI focus group, or unmapped — not schedulable
                 continue;
             }
 
             [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
             $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
 
-            $query = MachineSetupState::query()
-                ->where('factory', $factory)
-                ->where('package_name', $lot->Package_Name)
-                ->where(function ($q) use ($bodySize2d) {
-                    $q->whereNull('body_size')->orWhere('body_size', $bodySize2d);
-                })
-                ->where(function ($q) use ($thickness) {
-                    $q->whereNull('thickness')->orWhere('thickness', $thickness);
-                })
-                ->where(function ($q) use ($lot) {
-                    $q->whereNull('leadcount_min')->orWhere('leadcount_min', '<=', $lot->Lead_Count);
-                })
-                ->where(function ($q) use ($lot) {
-                    $q->whereNull('leadcount_max')->orWhere('leadcount_max', '>=', $lot->Lead_Count);
-                })
-                ->where(function ($q) use ($lot) {
-                    $q->whereNull('leadcount_exclude')
-                      ->orWhereRaw('FIND_IN_SET(?, leadcount_exclude) = 0', [$lot->Lead_Count]);
-                })
-                ->where(function ($q) use ($rampProcessType) {
-                    $q->where('process_type', 'both')->orWhere('process_type', $rampProcessType);
-                });
-
-            $states = $query->get(['setup_state_id', 'machine_id']);
-
-            // apply part-name gating: state is eligible if it has no part
-            // rules at all, OR the lot's part_name satisfies one of them
-            $eligible = $states->filter(function ($state) use ($lot) {
-                return $this->lotSatisfiesPartRules($state->setup_state_id, $state->machine_id, $lot->Part_Name);
-            });
+            $eligible = $this->ref['setup_states']
+                ->filter(fn($state) => $this->matchesLotCapability(
+                    $state,
+                    $factory,
+                    $lot->Package_Name,
+                    $bodySize2d,
+                    $thickness,
+                    $lot->Lead_Count,
+                    $rampProcessType
+                ))
+                ->filter(fn($state) => $this->lotSatisfiesPartRules(
+                    $state->setup_state_id,
+                    $state->machine_id,
+                    $lot->Part_Name
+                ));
 
             $machineIds = $machineIds->merge($eligible->pluck('machine_id'));
         }
@@ -166,88 +300,102 @@ class SchedulerService
         return $machineIds->unique()->values();
     }
 
-    /**
-     * Every not-yet-started entry (lot or block) on the given machines.
-     * "Not yet started" = frozen boundary: time_start is null, or in
-     * the future relative to now.
-     *
-     * @param  Collection<int>  $machineIds
-     * @return Collection<int, Collection<LoadingPlanEntry>>  keyed by machine_id
-     */
     public function getUnprocessedPlannedEntries(Collection $machineIds): Collection
     {
         if ($machineIds->isEmpty()) {
             return collect();
         }
 
-        $now = Carbon::now();
-
         return LoadingPlanEntry::query()
             ->whereIn('machine_id', $machineIds)
-            ->whereNotIn('status', ['cancelled', 'rejected'])
-            ->where(function ($q) use ($now) {
-                $q->whereNull('time_start')->orWhere('time_start', '>', $now);
-            })
+            ->open()
             ->orderBy('machine_id')
             ->orderBy('sequence_order')
             ->get()
             ->groupBy('machine_id');
     }
 
-    /**
-     * Each machine's anchor state: the resulting_setup_state_id of its
-     * most recent entry that HAS started (time_start <= now). Null if
-     * the machine has no started history yet.
-     *
-     * @param  Collection<int>  $machineIds
-     * @return Collection<int, int|null>  machine_id => resulting_setup_state_id
-     */
     public function getAnchorStates(Collection $machineIds): Collection
     {
         if ($machineIds->isEmpty()) {
             return collect();
         }
 
-        $now = Carbon::now();
-
         $latestStarted = LoadingPlanEntry::query()
             ->whereIn('machine_id', $machineIds)
-            ->whereNotIn('status', ['cancelled', 'rejected'])
-            ->whereNotNull('time_start')
-            ->where('time_start', '<=', $now)
+            ->frozen()
             ->orderBy('machine_id')
             ->orderByDesc('time_start')
             ->get(['machine_id', 'resulting_setup_state_id'])
             ->groupBy('machine_id')
-            ->map(fn ($rows) => $rows->first()->resulting_setup_state_id);
+            ->map(fn($rows) => $rows->first()->resulting_setup_state_id);
 
-        return $machineIds->mapWithKeys(fn ($id) => [$id => $latestStarted->get($id)]);
+        return $machineIds->mapWithKeys(fn($id) => [$id => $latestStarted->get($id)]);
     }
 
-    /**
-     * Resolve Factory from a lot's Focus_Group via the mapping table.
-     * Returns null for unmapped or non-TSPI focus groups.
-     */
     protected function resolveFactory(?string $focusGroup): ?string
     {
         if (!$focusGroup) {
             return null;
         }
 
-        $map = FocusGroupFactoryMap::query()->find($focusGroup);
-
-        if (!$map || !$map->is_tspi) {
-            return null;
-        }
-
-        return $map->factory;
+        return self::FOCUS_GROUP_FACTORY_MAP[$focusGroup] ?? null;
     }
 
     /**
-     * Split "4X4X0.75" -> ['4X4', 0.75]; "7X11" -> ['7X11', null].
-     *
-     * @return array{0: string, 1: float|null}
+     * Remaining capacity per candidate machine for the target production
+     * day: 06:00 targetDate through 04:00 next day (04:00–06:00 gap
+     * deliberately excluded).
      */
+    public function getRemainingCapacityByMachine(Collection $machineIds, Carbon $targetDate): Collection
+    {
+        if ($machineIds->isEmpty()) {
+            return collect();
+        }
+
+        $windowStart = $targetDate->copy()->setTime(6, 0, 0);
+        $windowEnd = $targetDate->copy()->addDay()->setTime(4, 0, 0);
+
+        $committedByMachine = LoadingPlanEntry::query()
+            ->whereIn('machine_id', $machineIds)
+            ->where('entry_type', 'lot')
+            ->whereBetween('time_start', [$windowStart, $windowEnd])
+            ->join('lot_quantities', function ($join) {
+                $join->on('lot_quantities.lot_id', '=', 'loading_plan_entries.lot_id')
+                    ->on('lot_quantities.scheduled_date', '=', 'loading_plan_entries.scheduled_date');
+            })
+            ->groupBy('loading_plan_entries.machine_id')
+            ->pluck(DB::raw('SUM(lot_quantities.commit) as total_commit'), 'loading_plan_entries.machine_id');
+
+        return $machineIds->mapWithKeys(function ($machineId) use ($committedByMachine, $targetDate) {
+            $capacityRow = MachineCapacity::effectiveFor($machineId, $targetDate);
+
+            if (!$capacityRow) {
+                return [$machineId => null];
+            }
+
+            $committed = (int) ($committedByMachine[$machineId] ?? 0);
+
+            return [$machineId => $capacityRow->capacity - $committed];
+        });
+    }
+
+    /**
+     * commit = intdiv(qty, recipe). NOTE: 'recipe' column name on
+     * PartName unconfirmed under the devicename/focus_grp/allocation
+     * naming convention — verify before trusting this.
+     */
+    public function estimateCommit(object $lot): ?int
+    {
+        $packageInfo = PartName::findByPartName($lot->Part_Name);
+
+        if (!$packageInfo || !$packageInfo->recipe || !$lot->Qty) {
+            return null;
+        }
+
+        return intdiv((int) $lot->Qty, (int) $packageInfo->recipe);
+    }
+
     protected function parseBodySize(?string $bodySize): array
     {
         if (!$bodySize) {
@@ -263,18 +411,14 @@ class SchedulerService
         return [$bodySize, null];
     }
 
-    /**
-     * Map Ramp_Time to taping/tubing. ASSUMPTION — confirm/correct:
-     * REEL*/PCKTTAPE* => taping, TUBE => tubing, anything else => 'both'
-     * (treated as matching either process_type).
-     */
+    /** Any value containing "TAPE" -> taping. "TUBE" -> tubing. REEL/other -> 'both' (unmodeled, no setup list yet). */
     protected function resolveRampProcessType(?string $rampTime): string
     {
         if (!$rampTime) {
             return 'both';
         }
 
-        if (str_starts_with($rampTime, 'REEL') || str_starts_with($rampTime, 'PCKTTAPE')) {
+        if (stripos($rampTime, 'TAPE') !== false) {
             return 'taping';
         }
 
@@ -285,32 +429,23 @@ class SchedulerService
         return 'both';
     }
 
-    /**
-     * True if this setup_state has no part-name gating at all, or if
-     * the given part_name satisfies at least one of its gating rules.
-     */
     protected function lotSatisfiesPartRules(int $setupStateId, int $machineId, ?string $partName): bool
     {
-        $rules = MachineCapabilityPartRule::query()
-            ->where('setup_state_id', $setupStateId)
-            ->get();
+        $rules = $this->ref['part_rules_by_state']->get($setupStateId, collect());
 
         if ($rules->isEmpty()) {
-            return true; // open to any part
+            return true;
         }
 
         if (!$partName) {
-            return false; // gated, but lot has no part_name to check
+            return false;
         }
 
         foreach ($rules as $rule) {
             $match = match ($rule->match_type) {
                 'exact' => $rule->match_value === $partName,
                 'contains' => str_contains($partName, $rule->match_value),
-                'dedicated_list' => MachineDedicatedPart::query()
-                    ->where('machine_id', $machineId)
-                    ->where('part_name', $partName)
-                    ->exists(),
+                'dedicated_list' => isset($this->ref['dedicated_parts']["{$machineId}|{$partName}"]),
                 default => false,
             };
 
@@ -320,5 +455,611 @@ class SchedulerService
         }
 
         return false;
+    }
+
+    protected function isDedicatedListMatch(int $setupStateId, int $machineId, ?string $partName): bool
+    {
+        if (!$partName) {
+            return false;
+        }
+
+        $hasDedicatedRule = $this->ref['part_rules_by_state']
+            ->get($setupStateId, collect())
+            ->contains(fn($r) => $r->match_type === 'dedicated_list');
+
+        return $hasDedicatedRule && isset($this->ref['dedicated_parts']["{$machineId}|{$partName}"]);
+    }
+
+    protected function transitionCost(int $machineId, ?int $fromStateId, int $toStateId): array
+    {
+        if ($fromStateId === $toStateId) {
+            return ['operation_type' => 'none', 'duration' => 0, 'rule_id' => null];
+        }
+
+        $machineRules = $this->ref['transition_rules_by_machine']->get($machineId, collect());
+
+        $rule = $machineRules->first(fn($r) => $r->to_state_id === $toStateId && $r->from_state_id === $fromStateId)
+            ?? $machineRules->first(fn($r) => $r->to_state_id === $toStateId && $r->from_state_id === null);
+
+        return [
+            'operation_type' => $rule->operation_type ?? 'setup',
+            'duration' => $rule->est_duration_minutes ?? 240,
+            'rule_id' => $rule->rule_id ?? null,
+        ];
+    }
+
+    /**
+     * Rank every viable (machine, setup_state, insertion position) for
+     * ONE lot. Pure decision logic, no DB writes.
+     *
+     * @return array{
+     *     machine_id: int, resulting_setup_state_id: int, operation_type: string,
+     *     est_duration_minutes: int, matched_rule_id: int|null,
+     *     insert_after_entry_id: int|null, insert_before_entry_id: int|null,
+     * }|null
+     */
+    public function rankCandidatesForLot(
+        object $lot,
+        Collection $openEntriesByMachine,
+        Collection $anchorStateByMachine,
+        Collection $remainingCapacityByMachine
+    ): ?array {
+        $factory = $this->resolveFactory($lot->Focus_Group);
+
+        if ($factory === null) {
+            return null;
+        }
+
+        $estimatedCommit = $this->estimateCommit($lot);
+
+        [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
+        $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
+
+        $candidateStates = $this->ref['setup_states']->filter(fn($state) => $this->matchesLotCapability(
+            $state,
+            $factory,
+            $lot->Package_Name,
+            $bodySize2d,
+            $thickness,
+            $lot->Lead_Count,
+            $rampProcessType
+        ));
+
+        $best = null;
+
+        foreach ($candidateStates as $state) {
+            if (!$this->lotSatisfiesPartRules($state->setup_state_id, $state->machine_id, $lot->Part_Name)) {
+                continue;
+            }
+
+            $remainingCapacity = $remainingCapacityByMachine[$state->machine_id] ?? null;
+
+            if ($remainingCapacity === null) {
+                continue;
+            }
+            if ($estimatedCommit !== null && $remainingCapacity < $estimatedCommit) {
+                continue;
+            }
+
+            $isCr3Dedicated = ($lot->CR3 === 'RES')
+                && $this->isDedicatedListMatch($state->setup_state_id, $state->machine_id, $lot->Part_Name);
+
+            $openLots = ($openEntriesByMachine[$state->machine_id] ?? collect())
+                ->where('entry_type', 'lot')
+                ->values();
+
+            $anchorState = $anchorStateByMachine[$state->machine_id] ?? null;
+
+            $positions = $openLots->isEmpty()
+                ? [[null, null]]
+                : collect(range(0, $openLots->count()))->map(function ($i) use ($openLots) {
+                    $pred = $i === 0 ? null : $openLots[$i - 1];
+                    $succ = $i === $openLots->count() ? null : $openLots[$i];
+                    return [$pred, $succ];
+                })->all();
+
+            foreach ($positions as [$predEntry, $succEntry]) {
+                $predStateId = $predEntry->resulting_setup_state_id ?? $anchorState;
+                $succStateId = $succEntry->resulting_setup_state_id ?? null;
+
+                $entryCost = $this->transitionCost($state->machine_id, $predStateId, $state->setup_state_id);
+
+                if ($succStateId !== null) {
+                    $exitCost = $this->transitionCost($state->machine_id, $state->setup_state_id, $succStateId);
+                    $bridgeCost = $this->transitionCost($state->machine_id, $predStateId, $succStateId);
+                    $marginalDuration = $entryCost['duration'] + $exitCost['duration'] - $bridgeCost['duration'];
+                } else {
+                    $marginalDuration = $entryCost['duration'];
+                }
+
+                $candidate = [
+                    'machine_id' => $state->machine_id,
+                    'resulting_setup_state_id' => $state->setup_state_id,
+                    'operation_type' => $entryCost['operation_type'],
+                    'est_duration_minutes' => $entryCost['duration'],
+                    'matched_rule_id' => $entryCost['rule_id'],
+                    'insert_after_entry_id' => $predEntry->id ?? null,
+                    'insert_before_entry_id' => $succEntry->id ?? null,
+                    '_marginal_duration' => $marginalDuration,
+                    '_is_free' => $marginalDuration === 0,
+                    '_is_cr3_dedicated' => $isCr3Dedicated,
+                    '_remaining_capacity' => $remainingCapacity,
+                ];
+
+                if ($best === null || $this->isBetterCandidate($candidate, $best)) {
+                    $best = $candidate;
+                }
+            }
+        }
+
+        if ($best === null) {
+            return null;
+        }
+
+        unset($best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
+
+        return $best;
+    }
+
+    protected function isBetterCandidate(array $candidate, array $incumbent): bool
+    {
+        if ($candidate['_is_free'] !== $incumbent['_is_free']) {
+            return $candidate['_is_free'];
+        }
+        if ($candidate['_is_cr3_dedicated'] !== $incumbent['_is_cr3_dedicated']) {
+            return $candidate['_is_cr3_dedicated'];
+        }
+        if ($candidate['_marginal_duration'] !== $incumbent['_marginal_duration']) {
+            return $candidate['_marginal_duration'] < $incumbent['_marginal_duration'];
+        }
+        return $candidate['_remaining_capacity'] > $incumbent['_remaining_capacity'];
+    }
+
+    protected function findBridgingBlock(
+        Collection $rawOpenEntries,
+        ?LoadingPlanEntry $predEntry,
+        ?LoadingPlanEntry $succEntry
+    ): ?LoadingPlanEntry {
+        if ($succEntry === null) {
+            return null;
+        }
+
+        $lowerBound = $predEntry->sequence_order ?? -INF;
+
+        return $rawOpenEntries
+            ->where('entry_type', 'block')
+            ->first(fn($e) => $e->sequence_order > $lowerBound && $e->sequence_order < $succEntry->sequence_order);
+    }
+
+    protected function reconcileStaleBridge(
+        int $machineId,
+        LoadingPlanEntry $newLotEntry,
+        int $newLotStateId,
+        ?LoadingPlanEntry $succEntry,
+        Collection $rawOpenEntries,
+        ?LoadingPlanEntry $predEntry
+    ): void {
+        $staleBlock = $this->findBridgingBlock($rawOpenEntries, $predEntry, $succEntry);
+
+        if ($staleBlock === null || $succEntry === null || $succEntry->resulting_setup_state_id === null) {
+            return;
+        }
+
+        $trueCost = $this->transitionCost($machineId, $newLotStateId, $succEntry->resulting_setup_state_id);
+
+        if ($trueCost['operation_type'] === 'none') {
+            $staleBlock->delete();
+            return;
+        }
+
+        $staleBlock->update([
+            'block_label' => $this->describeOperation($trueCost, $newLotStateId, $succEntry->resulting_setup_state_id),
+            'accu_time' => $trueCost['duration'],
+            'operation_type' => $trueCost['operation_type'],
+            'matched_rule_id' => $trueCost['rule_id'],
+            'resulting_setup_state_id' => $succEntry->resulting_setup_state_id,
+        ]);
+    }
+
+    protected function describeOperation(array $cost, int $fromStateId, int $toStateId): string
+    {
+        return ucfirst($cost['operation_type']) . ": state {$fromStateId} -> {$toStateId}";
+    }
+
+    protected function applyPlacement(object $lot, array $choice, string $date): array
+    {
+        $machineId = $choice['machine_id'];
+        $afterId = $choice['insert_after_entry_id'];
+        $beforeId = $choice['insert_before_entry_id'];
+
+        $rawOpenEntries = LoadingPlanEntry::query()
+            ->where('machine_id', $machineId)
+            ->open()
+            ->orderBy('sequence_order')
+            ->get();
+
+        $predEntry = $afterId ? $rawOpenEntries->firstWhere('id', $afterId) : null;
+        $succEntry = $beforeId ? $rawOpenEntries->firstWhere('id', $beforeId) : null;
+
+        if ($choice['operation_type'] !== 'none') {
+            $blockResult = $this->addBlock(
+                $machineId,
+                $date,
+                $this->describeOperation($choice, 0, $choice['resulting_setup_state_id']),
+                $choice['est_duration_minutes'],
+                null,
+                $afterId
+            );
+
+            $afterId = $blockResult['entry_id'];
+        }
+
+        $generatedLotId = $lot->Lot_Id
+            ?? ('PICKUP-' . now()->format('YmdHis') . '-' . strtoupper(\Illuminate\Support\Str::random(4)));
+
+        $lotResult = $this->createManualLot(
+            $machineId,
+            $date,
+            [
+                'lot_id' => $generatedLotId,
+                'package_name' => $lot->Package_Name,
+                'part_name' => $lot->Part_Name,
+                'qty' => $lot->Qty,
+                'resulting_setup_state_id' => $choice['resulting_setup_state_id'],
+                'matched_rule_id' => $choice['matched_rule_id'],
+            ],
+            $beforeId,
+            $afterId
+        );
+
+        $newLotEntry = LoadingPlanEntry::findOrFail($lotResult['entry_id']);
+
+        $this->reconcileStaleBridge(
+            $machineId,
+            $newLotEntry,
+            $choice['resulting_setup_state_id'],
+            $succEntry,
+            $rawOpenEntries,
+            $predEntry
+        );
+
+        return $lotResult;
+    }
+
+    /**
+     * @param  Collection<object>|array  $pickup
+     */
+    public function commitPickupBatch($pickup, Carbon $targetDate): array
+    {
+        $gathered = $this->handlePickup($pickup, $targetDate);
+
+        $results = [
+            'placed' => [],
+            'unassigned' => collect(),
+            'unmatched_part_names' => $gathered['unmatched_part_names'],
+        ];
+
+        if ($gathered['pickup_lots']->isEmpty()) {
+            return $results;
+        }
+
+        $dateString = $targetDate->toDateString();
+
+        return DB::transaction(function () use ($gathered, $dateString, &$results) {
+            $openEntriesByMachine = $gathered['open_entries_by_machine'];
+            $anchorStateByMachine = $gathered['anchor_state_by_machine'];
+            $remainingCapacityByMachine = $gathered['remaining_capacity_by_machine'];
+
+            $orderedLots = $gathered['pickup_lots']
+                ->map(function ($lot) use ($openEntriesByMachine, $anchorStateByMachine, $remainingCapacityByMachine) {
+                    $preview = $this->rankCandidatesForLot(
+                        $lot,
+                        $openEntriesByMachine,
+                        $anchorStateByMachine,
+                        $remainingCapacityByMachine
+                    );
+                    return [
+                        'lot' => $lot,
+                        'has_free_option' => $preview !== null && $preview['operation_type'] === 'none',
+                    ];
+                })
+                ->sortByDesc('has_free_option')
+                ->pluck('lot');
+
+            foreach ($orderedLots as $lot) {
+                $choice = $this->rankCandidatesForLot(
+                    $lot,
+                    $openEntriesByMachine,
+                    $anchorStateByMachine,
+                    $remainingCapacityByMachine
+                );
+
+                if ($choice === null) {
+                    $results['unassigned']->push($lot);
+                    continue;
+                }
+
+                $results['placed'][] = $this->applyPlacement($lot, $choice, $dateString);
+
+                $machineId = $choice['machine_id'];
+                $anchorStateByMachine[$machineId] = $choice['resulting_setup_state_id'];
+
+                $commit = $this->estimateCommit($lot) ?? 0;
+                $remainingCapacityByMachine[$machineId] =
+                    ($remainingCapacityByMachine[$machineId] ?? 0) - $commit;
+
+                $openEntriesByMachine[$machineId] = LoadingPlanEntry::query()
+                    ->where('machine_id', $machineId)
+                    ->open()
+                    ->orderBy('sequence_order')
+                    ->get();
+            }
+
+            return $results;
+        });
+    }
+
+    /** Tier 1 = expedite. Tier 2 = above CT. Tier 3 = everything else. */
+    protected function priorityTier($item): int
+    {
+        if ($item->isExpedite ?? false) {
+            return 1;
+        }
+        if ($item->aboveCT ?? false) {
+            return 2;
+        }
+        return 3;
+    }
+
+    protected function hydrateLotFromEntry(LoadingPlanEntry $entry, ?CustomerDataWip $wip): ?object
+    {
+        $lotQty = $entry->lotQuantity;
+
+        if (!$wip) {
+            return null;
+        }
+
+        $formulas = LoadingPlanFormulas::make($wip);
+
+        return (object) [
+            'Lot_Id' => $entry->lot_id,
+            'Part_Name' => $lotQty->part_name ?? $wip->Part_Name,
+            'Package_Name' => $entry->package_name ?? $wip->Package_Name,
+            'Qty' => $lotQty?->effectiveQty() ?? $wip->Qty,
+            'Lead_Count' => $wip->Lead_Count,
+            'Body_Size' => $wip->Body_Size,
+            'Focus_Group' => $wip->Focus_Group,
+            'Ramp_Time' => $wip->Ramp_Time,
+            'CR3' => $wip->CR3,
+            'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
+            'aboveCT' => $formulas->cycleTimeExceedOverall,
+            // raw sortable CT value for tier 1/2 ordering — property name
+            // is a guess, confirm the real one on LoadingPlanFormulas
+            'CT' => $formulas->cycleTime ?? null,
+        ];
+    }
+
+    /**
+     * Places a tier in FIXED priority order: sorted by CT descending
+     * (nulls last — e.g. an expedite pickup with no computable CT sorts
+     * after expedite WIP lots that have one). No dynamic reordering —
+     * unlike tier 3, these are never reshuffled to save configuration
+     * time, per the stated priority hierarchy.
+     */
+    protected function placeTierByPriority(
+        Collection $items,
+        Collection &$openEntriesByMachine,
+        Collection &$anchorStateByMachine,
+        Collection &$remainingCapacityByMachine,
+        string $dateString,
+        array &$results
+    ): void {
+        $ordered = $items->sortByDesc(fn($item) => $item->CT ?? -INF)->values();
+
+        foreach ($ordered as $lot) {
+            $choice = $this->rankCandidatesForLot(
+                $lot,
+                $openEntriesByMachine,
+                $anchorStateByMachine,
+                $remainingCapacityByMachine
+            );
+
+            if ($choice === null) {
+                $results['unassigned']->push($lot);
+                continue;
+            }
+
+            $results['placed'][] = $this->applyPlacement($lot, $choice, $dateString);
+
+            $machineId = $choice['machine_id'];
+            $anchorStateByMachine[$machineId] = $choice['resulting_setup_state_id'];
+
+            $commit = $this->estimateCommit($lot) ?? 0;
+            $remainingCapacityByMachine[$machineId] =
+                ($remainingCapacityByMachine[$machineId] ?? 0) - $commit;
+
+            $openEntriesByMachine[$machineId] = LoadingPlanEntry::query()
+                ->where('machine_id', $machineId)
+                ->open()
+                ->orderBy('sequence_order')
+                ->get();
+        }
+    }
+
+    /**
+     * Places tier 3 via greedy-cheapest-next: re-previews all remaining
+     * items every round, places whichever is cheapest right now. This
+     * is where "minimize configuration" actually happens — tiers 1/2
+     * are placed by fixed CT order instead, never cost-reordered.
+     *
+     * NOTE: O(n^2) in tier size.
+     */
+    protected function greedyPlaceTier(
+        Collection $items,
+        Collection &$openEntriesByMachine,
+        Collection &$anchorStateByMachine,
+        Collection &$remainingCapacityByMachine,
+        string $dateString,
+        array &$results
+    ): void {
+        $remaining = $items->values();
+
+        while ($remaining->isNotEmpty()) {
+            $bestIdx = null;
+            $bestChoice = null;
+            $bestCost = null;
+
+            foreach ($remaining as $idx => $lot) {
+                $choice = $this->rankCandidatesForLot(
+                    $lot,
+                    $openEntriesByMachine,
+                    $anchorStateByMachine,
+                    $remainingCapacityByMachine
+                );
+
+                if ($choice === null) {
+                    continue;
+                }
+
+                $cost = $choice['operation_type'] === 'none' ? 0 : $choice['est_duration_minutes'];
+
+                if ($bestCost === null || $cost < $bestCost) {
+                    $bestCost = $cost;
+                    $bestIdx = $idx;
+                    $bestChoice = $choice;
+                }
+            }
+
+            if ($bestIdx === null) {
+                foreach ($remaining as $lot) {
+                    $results['unassigned']->push($lot);
+                }
+                return;
+            }
+
+            $lot = $remaining[$bestIdx];
+            $results['placed'][] = $this->applyPlacement($lot, $bestChoice, $dateString);
+
+            $machineId = $bestChoice['machine_id'];
+            $anchorStateByMachine[$machineId] = $bestChoice['resulting_setup_state_id'];
+
+            $commit = $this->estimateCommit($lot) ?? 0;
+            $remainingCapacityByMachine[$machineId] =
+                ($remainingCapacityByMachine[$machineId] ?? 0) - $commit;
+
+            $openEntriesByMachine[$machineId] = LoadingPlanEntry::query()
+                ->where('machine_id', $machineId)
+                ->open()
+                ->orderBy('sequence_order')
+                ->get();
+
+            $remaining = $remaining->forget($bestIdx)->values();
+        }
+    }
+
+    /**
+     * Full rebuild triggered by a pickup arrival: pools every OPEN
+     * entry on candidate machines with new pickup lots, wipes the open
+     * window, replans from scratch. Frozen entries never touched.
+     * Tier 1/2 placed by fixed CT-descending order; tier 3 by
+     * greedy-cheapest-next.
+     *
+     * NOTE: no reoptimization_runs/audit trail — accepted as-is per
+     * current instructions, open entries are deleted outright.
+     *
+     * @param  Collection|array  $pickup
+     */
+    public function rebuildForPickupArrival($pickup, Carbon $targetDate): array
+    {
+        [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
+
+        $results = ['placed' => [], 'unassigned' => collect(), 'unmatched_part_names' => $unmatchedPartNames];
+
+        $this->preloadReferenceData($pickupLots);
+        $candidateMachineIds = $this->getCandidateMachineIds($pickupLots);
+
+        if ($candidateMachineIds->isEmpty() && $pickupLots->isEmpty()) {
+            return $results;
+        }
+
+        $dateString = $targetDate->toDateString();
+
+        return DB::transaction(function () use ($candidateMachineIds, $pickupLots, $dateString, $targetDate, &$results) {
+            $entries = LoadingPlanEntry::query()
+                ->with(['lotQuantity', 'activeLotSplit'])
+                ->whereIn('machine_id', $candidateMachineIds)
+                ->open()
+                ->where('entry_type', 'lot')
+                ->get();
+
+            // resolveRootLotId() cached here so it's computed once per
+            // entry, not twice (once for the WIP batch-query, once during
+            // hydration) — both passes reuse this map
+            $rootLotIdByEntry = $entries->mapWithKeys(fn($e) => [$e->id => $e->resolveRootLotId()]);
+
+            $entriesByDate = $entries->groupBy(fn($e) => $e->scheduled_date->toDateString());
+
+            $wips = CustomerDataWip::query()
+                ->where(function ($query) use ($entriesByDate, $rootLotIdByEntry) {
+                    foreach ($entriesByDate as $date => $dateEntries) {
+                        $rootLotIds = $dateEntries->map(fn($e) => $rootLotIdByEntry[$e->id])->unique()->toArray();
+
+                        $query->orWhere(function ($subQuery) use ($date, $rootLotIds) {
+                            $subQuery->forDate($date)->whereIn('Lot_Id', $rootLotIds);
+                        });
+                    }
+                })
+                ->get();
+
+            $wipLookup = [];
+            foreach ($wips as $wip) {
+                $dateStr = Carbon::parse($wip->import_date)->toDateString();
+                $wipLookup["{$dateStr}:{$wip->Lot_Id}"] = $wip;
+            }
+
+            $existingLots = $entries->map(function ($entry) use ($wipLookup, $rootLotIdByEntry) {
+                $rootLotId = $rootLotIdByEntry[$entry->id];
+                $dateStr = $entry->scheduled_date->toDateString();
+                $wip = $wipLookup["{$dateStr}:{$rootLotId}"] ?? null;
+
+                return $this->hydrateLotFromEntry($entry, $wip);
+            })->filter()->values();
+
+            LoadingPlanEntry::query()->whereIn('machine_id', $candidateMachineIds)->open()->delete();
+
+            $anchorStateByMachine = $this->getAnchorStates($candidateMachineIds);
+            $remainingCapacityByMachine = $this->getRemainingCapacityByMachine($candidateMachineIds, $targetDate);
+            $openEntriesByMachine = collect();
+
+            $pool = $existingLots->merge($pickupLots);
+            $tiers = $pool->groupBy(fn($lot) => $this->priorityTier($lot));
+
+            $this->placeTierByPriority(
+                $tiers->get(1, collect()),
+                $openEntriesByMachine,
+                $anchorStateByMachine,
+                $remainingCapacityByMachine,
+                $dateString,
+                $results
+            );
+            $this->placeTierByPriority(
+                $tiers->get(2, collect()),
+                $openEntriesByMachine,
+                $anchorStateByMachine,
+                $remainingCapacityByMachine,
+                $dateString,
+                $results
+            );
+            $this->greedyPlaceTier(
+                $tiers->get(3, collect()),
+                $openEntriesByMachine,
+                $anchorStateByMachine,
+                $remainingCapacityByMachine,
+                $dateString,
+                $results
+            );
+
+            return $results;
+        });
     }
 }

@@ -28,4 +28,12 @@ class MachineDedicatedParts extends Model
     {
         return $this->belongsTo(QdnMachine::class, 'machine_id', 'id');
     }
+
+    public static function isDedicated(int $machineId, string $partName): bool
+    {
+        return static::query()
+            ->where('machine_id', $machineId)
+            ->where('part_name', $partName)
+            ->exists();
+    }
 }
