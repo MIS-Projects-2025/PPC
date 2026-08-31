@@ -676,6 +676,13 @@ function ReceivedList({ onEdit, lotActions }) {
     );
 }
 
+const LOCATION_THEMES = {
+    RESCON: "bg-emerald-500/10 border-emerald-500 text-emerald-400",
+    PL6: "bg-amber-500/10 border-amber-500 text-amber-400",
+    PL1: "bg-blue-500/10 border-blue-500 text-blue-400",
+};
+
+
 export default function LotsUpstream({
     lots: received,
     totalEntries,
@@ -687,6 +694,10 @@ export default function LotsUpstream({
     productionLine,
     productionLineId,
 }) {
+
+    console.log("LOG ~ LotsUpstream.jsx:698 ~ LotsUpstream ~ productionLine:", productionLine);
+    const currentTheme = LOCATION_THEMES[(String (productionLine)).toUpperCase()] || "bg-base-200 border-base-content";
+
     const toast = useToast();
     const lotActions = useLotActions();
     const {
@@ -1084,16 +1095,11 @@ export default function LotsUpstream({
 
             <div className="flex flex-col gap-4 overflow-hidden rounded-lg p-2">
                 <div className="flex items-center gap-2">
-                    <div
-                        className={clsx(
-                            "text-7xl font-extrabold text-shadow-lg",
-                            {
-                                "text-error": mode === RELEASE,
-                                "text-secondary": mode === RECEIVE,
-                            },
-                        )}
-                    >
-                        {productionLine}
+                    <div className={clsx("flex items-center justify-between px-2 rounded-xl border-l-8 shadow-lg", currentTheme)}>
+                        <div>
+                            <span className="text-xs font-bold uppercase tracking-widest opacity-70">Active Location</span>
+                            <h1 className="text-5xl font-extrabold tracking-tight">{productionLine.toUpperCase()}</h1>
+                        </div>
                     </div>
                     <fieldset
                         className={clsx(

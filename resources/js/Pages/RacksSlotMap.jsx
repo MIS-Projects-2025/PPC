@@ -57,7 +57,7 @@ function LotChip({ productionLine, lot }) {
                 onClick={() => {
                     router.visit(
                         route("lot-upstream.index", {
-                            productionLine: productionLine?.name,
+                            productionLine: productionLine?.key,
                         }),
                         {
                             data: { search: lot?.lot_id },
@@ -232,6 +232,8 @@ const LiveTimeLabel = ({ timestamp }) => {
 const LotActionsContext = createContext(null);
 
 export default function RacksSlotMap({ productionLine, slotMap: racks }) {
+
+    console.log("LOG ~ RacksSlotMap.jsx:236 ~ RacksSlotMap ~ productionLine:", productionLine);
     const [lastRefreshTime, setLastRefreshTime] = useState(Date.now());
     const { releaseLot, mutateLotCancel } = useLotActions();
     const [lotToBeReleased, setLotToBeReleased] = useState(null);
@@ -281,7 +283,7 @@ export default function RacksSlotMap({ productionLine, slotMap: racks }) {
                 <div className="flex items-start justify-between gap-4">
                     <div className="fle w-50 flex-col items-center">
                         <div className="text-xl font-medium uppercase tracking-widest text-base-content">
-                            <span>{productionLine?.name}</span> Slot map
+                            <span>{productionLine?.key}</span> Slot map
                         </div>
                         <div className="flex flex-1 justify-between items-center gap-1">
                             {lastRefreshTime && (

@@ -16,6 +16,7 @@ class Rack extends Model
 
     protected $fillable = [
         'production_line_id',
+        'rack_page_id',
         'label',
     ];
 
@@ -27,6 +28,11 @@ class Rack extends Model
     public function slots(): HasMany
     {
         return $this->hasMany(RackSlot::class);
+    }
+
+    public function rackPage(): BelongsTo
+    {
+        return $this->belongsTo(RackPage::class);
     }
 
     public function shelves(): Attribute

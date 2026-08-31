@@ -14,6 +14,7 @@ class LotPosition extends Model
         'rack_slot_id',
         'lot_staging_id',
         'production_line_id',
+        'rack_page_id',
         'assigned_at',
         'assigned_by',
         'released_at',

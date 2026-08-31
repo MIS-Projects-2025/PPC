@@ -27,13 +27,14 @@ class LotPositionRepository implements LotPositionRepositoryInterface
       ->first();
   }
 
-  public function assign(int $lotId, int $rackSlotId, int $lotStagingId, string $by, int $productionLineId): LotPosition
+  public function assign(int $lotId, int $rackSlotId, int $lotStagingId, string $by, int $productionLineId, int $rackPageId): LotPosition
   {
     return LotPosition::create([
       'lot_id'       => $lotId,
       'rack_slot_id' => $rackSlotId,
       'lot_staging_id'   => $lotStagingId,
       'production_line_id' => $productionLineId,
+      'rack_page_id' => $rackPageId,
       'assigned_at'  => now(),
       'assigned_by'  => $by,
     ]);
@@ -54,6 +55,20 @@ class LotPositionRepository implements LotPositionRepositoryInterface
         'released_at' => Carbon::now('UTC')
       ]);
     });
+  }
+
+  // Renamed from getOccupancyByProductionLine. Filters by rack_page_id
+  // (the page being viewed), not production_line_id — a ResCon page needs
+  // to show occupancy for lots physically sourced from multiple PLs, which
+  // production_line_id alone can't express.
+  public function getOccupancyByRackPage(int $rackPageId): Collection
+  {
+    return LotPosition::whereNull('released_at')
+      ->where('rack_page_id', $rackPageId)
+      ->select('rack_slot_id', 'lot_id')
+      ->get()
+      ->makeHidden(['created_at', 'updated_at', 'marked_full_by'])
+      ->groupBy('rack_slot_id');
   }
 
   public function getOccupancyByProductionLine(int $productionLineId): Collection

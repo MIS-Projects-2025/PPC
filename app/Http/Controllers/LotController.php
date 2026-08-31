@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Lot;
 use App\Models\ProductionLine;
+use App\Models\RackPage;
 use Inertia\Inertia;
 use Inertia\Response;
 use App\Services\LotService;
@@ -38,10 +39,12 @@ class LotController extends Controller
         return $this->lotRepo->all();
     }
 
-
+    // {productionLine} route segment now resolves a rack_pages.key
+    // (PL1 / PL6 / RESCON), not a production_lines.name. Kept the param name
+    // to avoid touching the route file / frontend links.
     public function index(string $productionLine): Response
     {
-        $pl = ProductionLine::where('name', strtoupper($productionLine))
+        $page = RackPage::where('key', strtoupper($productionLine))
             ->firstOrFail();
 
         $filters = request()->only([
@@ -63,8 +66,8 @@ class LotController extends Controller
         $todayEnd   = now('Asia/Manila')->endOfDay()->utc();
 
         return Inertia::render('LotsUpstream', [
-            'lots' => Inertia::always(function () use ($filters, $pl) {
-                $lots = $this->lotRepo->paginate($filters, $pl->id);
+            'lots' => Inertia::always(function () use ($filters, $page) {
+                $lots = $this->lotRepo->paginate($filters, $page->id);
 
                 // Separate data source (different DB schema, may be
                 // unavailable) — attach AFTER pagination, never inside the
@@ -81,24 +84,23 @@ class LotController extends Controller
 
                 return $lots;
             }),
-            'racks' => fn() => $this->rackRepo->getAllByProductionLine($pl->id),
-            'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByProductionLine($pl->id),
+            'racks' => fn() => $this->rackRepo->getAllByRackPage($page->id),
+            'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByRackPage($page->id),
             'filters' => $filters,
-            'productionLine' => $pl->name,
-            'productionLineId' => $pl->id,
+            'productionLine' => $page->key,
+            'productionLineId' => $page->id,
             'totalEntries' => Lot::whereHas(
                 'positions',
-                fn($q) =>
-                $q->where('production_line_id', $pl->id)
+                fn($q) => $q->where('rack_page_id', $page->id)
             )->count(),
             'totalReleased' => Lot::whereHas(
                 'stagings',
                 fn($q) => $q
                     ->whereBetween('released_at', [$todayStart, $todayEnd])
             )
-                ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $pl->id))
+                ->whereHas('stagings.positions', fn($q) => $q->where('rack_page_id', $page->id))
                 ->count(),
-            'totalReceived' => Lot::whereHas('positions', fn($q) => $q->where('production_line_id', $pl->id))
+            'totalReceived' => Lot::whereHas('positions', fn($q) => $q->where('rack_page_id', $page->id))
                 ->whereBetween('received_at', [$todayStart, $todayEnd])
                 ->count(),
         ]);
@@ -199,7 +201,7 @@ class LotController extends Controller
 
     public function download(string $productionLine)
     {
-        $pl = ProductionLine::where('name', strtoupper($productionLine))
+        $page = RackPage::where('key', strtoupper($productionLine))
             ->firstOrFail();
 
         $filters = request()->only([
@@ -217,7 +219,7 @@ class LotController extends Controller
 
         return $this->lotService->downloadFilteredExport(
             $filters,
-            $pl->id,
+            $page->id,
         );
     }
 }
