@@ -34,7 +34,7 @@ class LoadingPlanSplitController extends Controller
                 $data['child_lot_id'] ?? null,
                 $request->user()?->name,
             );
-
+            // DD($result);
             return response()->json($result, 201);
         } catch (InvalidSplitException $e) {
             return response()->json([

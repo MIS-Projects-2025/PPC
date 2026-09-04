@@ -16,7 +16,7 @@ window.Echo = new Echo({
     forceTLS: false,
     disableStats: true,
     enabledTransports: ["ws"],
-    // authEndpoint: "http://192.168.2.221:8194/MTS/broadcasting/auth",
+    // authEndpoint: "http://192.168.20.21:8194/MTS/broadcasting/auth",
     // auth: {
     //     headers: {
     //         "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')

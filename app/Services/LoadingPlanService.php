@@ -446,6 +446,15 @@ class LoadingPlanService
             'part_class'                 => $wipRow?->Part_Class ?? null,
             'date_code'                  => $wipRow?->Date_Code ?? null,
             'process_group'              => $wipRow?->Process_Group ?? null,
+            'bulk'                       => $wipRow?->Bulk ?? null,
+            'ccd'                        => $wipRow?->CCD ?? null,
+            'stage_run_days'             => $wipRow?->Stage_Run_Days ?? null,
+            'tray'                       => $wipRow?->Tray ?? null,
+            'osl_days'                   => $wipRow?->OSL_Days ?? null,
+            'be_group'                   => $wipRow?->BE_Group ?? null,
+            'strategy_code'              => $wipRow?->Strategy_Code ?? null,
+            'auto_part'                  => $wipRow?->Auto_Part ?? null,
+            'stock_position'             => $wipRow?->Stock_Position ?? null,
             'required_time'              => $wipRow?->Reqd_Time ?? null,
             'lot_entry_time'             => $wipRow?->Lot_Entry_Time ?? null,
             'stage_start_time'           => $wipRow?->Stage_Start_Time ?? null,
@@ -495,7 +504,7 @@ class LoadingPlanService
      * Mutates $entry in place and returns the LotQuantity row it looked up,
      * so callers can reuse it if they need anything else off it.
      */
-    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId): LoadingPlanEntry
+    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId): array
     {
         $entryDate = $entry->scheduled_date->toDateString();
 
@@ -510,10 +519,8 @@ class LoadingPlanService
 
         $data = $this->createPlannedLot($rootWip, $entry, $quantity);
 
-        foreach ($data as $key => $value) {
-            $entry->setAttribute($key, $value);
-        }
-
-        return $entry;
+        // array_merge so $data['id'] (the "entry-123" string) wins,
+        // and it's a plain array now — no cast machinery left to mangle it.
+        return array_merge($entry->toArray(), $data);
     }
 }

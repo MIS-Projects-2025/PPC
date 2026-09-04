@@ -5,6 +5,10 @@ namespace App\Providers;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\ServiceProvider;
 use Inertia\Inertia;
+use App\Models\LoadingPlanEntry;
+use App\Models\LotQuantity;
+use App\Observers\LoadingPlanEntryObserver;
+use App\Observers\LotQuantityObserver;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -26,5 +30,7 @@ class AppServiceProvider extends ServiceProvider
         ]);
         Vite::prefetch(concurrency: 3);
         \App\Models\Lot::observe(\App\Observers\LotObserver::class);
+        LoadingPlanEntry::observe(LoadingPlanEntryObserver::class);
+        LotQuantity::observe(LotQuantityObserver::class);
     }
 }

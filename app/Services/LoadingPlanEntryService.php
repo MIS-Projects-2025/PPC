@@ -308,7 +308,7 @@ class LoadingPlanEntryService
             }
 
             $wip = CustomerDataWip::query()
-                ->select('Lot_Id', 'Package_Name', 'import_date')
+                ->select('Lot_Id', 'Package_Name', 'import_date', 'Qty', 'Part_Name')
                 ->whereIn('Lot_Id', $unplannedLotIds)
                 ->orderBy('Lot_Id')
                 ->orderByDesc('import_date')
@@ -318,7 +318,7 @@ class LoadingPlanEntryService
 
             foreach ($unplannedLotIds as $lotId) {
                 $wipItem = $wip->get($lotId);
-
+                // DD($wipItem);
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
                     'lot_id'         => $lotId,

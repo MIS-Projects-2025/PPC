@@ -477,6 +477,8 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
     { onClose },
     ref,
 ) {
+    const nextRowIndex = useRef(INITIAL_ROW_COUNT);
+
     const [columns, setColumns] = useState(() =>
         Array.from({ length: INITIAL_COLUMN_COUNT }, (_, i) => makeColumn(i)),
     );
@@ -486,6 +488,16 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
             emptyRow(i, INITIAL_COLUMN_COUNT),
         ),
     );
+
+    const handleAddRowAtBottom = () => {
+        // Get current ID and increment the ref for the next addition
+        const newId = nextRowIndex.current;
+        nextRowIndex.current += 1;
+
+        const newRow = emptyRow(newId, INITIAL_COLUMN_COUNT);
+
+        setRows((prevRows) => [...prevRows, newRow]);
+    };
 
     const [expediteRows, setExpediteRows] = useState(() => new Set());
 
@@ -689,7 +701,19 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
     }, []);
 
     const deleteRow = useCallback((rowId) => {
-        setRows((prev) => prev.filter((r) => r.id !== rowId));
+        setRows((prev) => {
+            const filtered = prev.filter((r) => r.id !== rowId);
+
+            // If no rows remain after deletion, generate a new empty row
+            if (filtered.length === 0) {
+                const newId = nextRowIndex.current;
+                nextRowIndex.current += 1;
+                return [emptyRow(newId, INITIAL_COLUMN_COUNT)];
+            }
+
+            return filtered;
+        });
+
         setApiFilledCells((prev) => {
             const next = new Set(prev);
             [...next].forEach((entry) => {
@@ -697,8 +721,9 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
             });
             return next;
         });
+
         delete prevPartnamesRef.current[rowId];
-    }, []);
+    }, [INITIAL_COLUMN_COUNT]);
 
     const updateMapping = (colKey, fieldKey) => {
         manualOverridesRef.current.add(colKey);
@@ -965,12 +990,20 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
             <div className="modal-box bg-base-300 w-11/12 max-w-7xl max-h-[80vh] flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="font-bold text-lg">ADD PICKUP</h3>
-                    <button
-                        className="btn btn-sm btn-outline btn-error"
-                        onClick={() => setShowClearConfirm(true)}
-                    >
-                        Clear All
-                    </button>
+                    <div className="gap-2 flex">
+                        <button
+                            className="btn btn-sm btn-outline btn-primary"
+                            onClick={() => handleAddRowAtBottom()}
+                        >
+                            Add Row
+                        </button>
+                        <button
+                            className="btn btn-sm btn-outline btn-error"
+                            onClick={() => setShowClearConfirm(true)}
+                        >
+                            Clear All
+                        </button>
+                    </div>
                 </div>
 
                 <div style={{ width: "100%" }}>

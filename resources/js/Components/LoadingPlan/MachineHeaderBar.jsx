@@ -1,14 +1,16 @@
-import { COLUMNS, TOTAL_MIN_WIDTH } from "@/Components/LoadingPlan/columns.jsx";
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { Deferred } from "@inertiajs/react";
-import clsx from "clsx";
-import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useMemo } from "react";
 import HoverCell from "./HoverCell";
-import { TableInteractionContext } from "./MachineSectionBody";
-import MachineSectionBody from "./MachineSectionBody.jsx";
 
-export const isBlockRow = (row) => row?.is_block === true;
+export const TableInteractionContext = createContext({
+    isSortable: false,
+    disableSelection: false,
+    disableGripButton: false,
+    disableAddRowLot: false,
+    disableAddRowBlock: false,
+});
 
 export function MachineHeaderBar({
     row,
@@ -20,10 +22,9 @@ export function MachineHeaderBar({
     innerRef,
 }) {
 	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
-
-    // console.log("🚀 ~ MachineHeaderBar ~ isOver:", isOver)
     const machine = row?.machine;
-    const isUnassigned = machine === null;
+	const machineLabel = row?.machineLabel;
+    const isUnassigned = (String (machineLabel)).toLowerCase() === "Unassigned" || machine === null;
     const isManual = machine === MACHINE_MANUAL;
     const isPseudo = isUnassigned || isManual;
 
@@ -91,7 +92,7 @@ export function MachineHeaderBar({
 							{isCollapsed ? "►" : "▼"}
 						</span>
 						<span key={toggleKey} className="text-[20px] font-mono animate-slide-down inline-block">
-							{machine}
+							{machineLabel}
 						</span>
 					</button>
 				</div>

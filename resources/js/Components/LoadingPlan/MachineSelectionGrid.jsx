@@ -1,7 +1,43 @@
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
+import HoverCell from "./HoverCell";
 import MachineChipClasses from "./MachineChipClasses";
+import { TableInteractionContext } from "./MachineHeaderBar";
 
 const PLATFORM_ORDER = ["G6L", "Vitrox", "HSI"];
+
+// Accent styling per platform — used for group headers, dividers, and
+// (subtly) the exceeded/warning ring on chips stays semantic (error/warning)
+// regardless of platform, so these only touch neutral/branding chrome.
+const PLATFORM_STYLES = {
+    G6L: {
+        dot: "bg-sky-400",
+        text: "text-sky-500",
+        border: "border-sky-400/30",
+        bg: "bg-sky-400/[0.04]",
+    },
+    Vitrox: {
+        dot: "bg-violet-400",
+        text: "text-violet-500",
+        border: "border-violet-400/30",
+        bg: "bg-violet-400/[0.04]",
+    },
+    HSI: {
+        dot: "bg-amber-400",
+        text: "text-amber-500",
+        border: "border-amber-400/30",
+        bg: "bg-amber-400/[0.04]",
+    },
+    Other: {
+        dot: "bg-base-content/30",
+        text: "text-base-content/40",
+        border: "border-base-content/10",
+        bg: "bg-base-content/[0.02]",
+    },
+};
+
+function platformStyle(platform) {
+    return PLATFORM_STYLES[platform] ?? PLATFORM_STYLES.Other;
+}
 
 function groupByPlatform(machineNames, machinePlatform) {
     const groups = new Map();
@@ -19,19 +55,90 @@ function groupByPlatform(machineNames, machinePlatform) {
     );
 }
 
-function MachineChipButton({ machine, disabled, selected, onClick }) {
-    return (
+/**
+ * A single machine chip. For real machines (not pseudo-entries like
+ * "Unassigned" / "MANUAL"), renders a thin capacity-utilization bar along
+ * the bottom edge — mirroring the doable/capacity bar in MachineHeaderBar —
+ * and a hover tooltip with the exact numbers.
+ */
+function MachineChipButton({ machine, selected, onClick, isPseudo }) {
+    const { machineCapacity, machineTotalDoable } = useContext(
+        TableInteractionContext,
+    );
+
+    const capacityData = !isPseudo ? machineCapacity?.[machine] : null;
+    const CAPACITY = capacityData?.capacity ?? 0;
+    const doable = machineTotalDoable?.[machine] ?? 0;
+    const hasCapacity = !isPseudo && CAPACITY > 0;
+
+    const pct = hasCapacity ? Math.min((doable / CAPACITY) * 100, 100) : 0;
+    const isExceeded = hasCapacity && doable > CAPACITY;
+    const isWarning = hasCapacity && !isExceeded && pct > 85;
+
+    const barColor = isExceeded
+        ? "bg-error"
+        : isWarning
+        ? "bg-warning"
+        : "bg-lime-400";
+
+    const button = (
         <button
             type="button"
-            disabled={disabled}
             onClick={() => onClick(machine)}
-            className={`${MachineChipClasses(
-                disabled ? "disabled" : selected ? "active" : "idle",
-            )} ${disabled ? "" : "cursor-pointer"}`}
-            title={machine ?? "Unassigned"}
+            title={hasCapacity ? undefined : machine ?? "Unassigned"}
+            className={`relative w-full overflow-hidden rounded-md ${MachineChipClasses(
+                selected ? "active" : "idle",
+            )} ${"cursor-pointer"} ${
+                isExceeded ? "ring-1 ring-error ring-inset" : ""
+            }`}
         >
-            {machine ?? "Unassigned"}
+            <span className="relative z-10">{machine ?? "Unassigned"}</span>
+
+            {hasCapacity && (
+                <span className="absolute inset-x-0 bottom-0 h-[3px] bg-base-content/10">
+                    <span
+                        className={`block h-full ${barColor} transition-[width] duration-300 ease-out`}
+                        style={{ width: `${pct}%` }}
+                    />
+                </span>
+            )}
         </button>
+    );
+
+    if (!hasCapacity) return button;
+
+    return (
+        <HoverCell trigger={button}>
+            <div className="text-xs font-mono space-y-1.5 min-w-[150px] text-left">
+                <div className="font-bold text-primary pb-0.5 border-b border-neutral-content/15">
+                    {machine}
+                </div>
+                <div className="flex text-base-100 justify-between items-center gap-3">
+                    <span className="opacity-70">Doable:</span>
+                    <span className="font-semibold">
+                        {doable.toLocaleString()}
+                    </span>
+                </div>
+                <div className="flex text-base-100 justify-between items-center gap-3">
+                    <span className="opacity-70">Capacity:</span>
+                    <span className="font-semibold">
+                        {CAPACITY.toLocaleString()}
+                    </span>
+                </div>
+                <div
+                    className={`flex justify-between items-center gap-3 border-t border-neutral-content/15 pt-1 ${
+                        isExceeded
+                            ? "text-error"
+                            : isWarning
+                            ? "text-warning"
+                            : ""
+                    }`}
+                >
+                    <span className="opacity-70">Utilization:</span>
+                    <span className="font-bold">{pct.toFixed(0)}%</span>
+                </div>
+            </div>
+        </HoverCell>
     );
 }
 
@@ -60,7 +167,6 @@ export default function MachineSelectionGrid({
     selectedMachine: selectedMachineProp,
     defaultSelectedMachine = null,
     onSelect,
-    isDisabled = () => false,
     searchPlaceholder = "Search machine…",
 }) {
     const [query, setQuery] = useState("");
@@ -111,16 +217,21 @@ export default function MachineSelectionGrid({
             />
 
             {pseudoMachines.length > 0 && (
-                <div className="grid grid-cols-4 gap-1.5 mb-3">
-                    {pseudoMachines.map((m) => (
-                        <MachineChipButton
-                            key={m ?? "unassigned"}
-                            machine={m}
-                            disabled={isDisabled(m)}
-                            selected={selectedMachine === m}
-                            onClick={handleSelect}
-                        />
-                    ))}
+                <div className="mb-3 pb-3 border-b border-dashed border-base-content/10">
+                    <div className="text-[10px] font-semibold text-base-content/30 uppercase tracking-wide mb-1.5">
+                        Quick select
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                        {pseudoMachines.map((m) => (
+                            <MachineChipButton
+                                key={m ?? "unassigned"}
+                                machine={m}
+                                isPseudo
+                                selected={selectedMachine === m}
+                                onClick={handleSelect}
+                            />
+                        ))}
+                    </div>
                 </div>
             )}
 
@@ -129,25 +240,43 @@ export default function MachineSelectionGrid({
                     No machines match "{query}"
                 </div>
             ) : (
-                <div className="space-y-3">
-                    {grouped.map(([platform, group]) => (
-                        <div key={platform}>
-                            <div className="text-[10px] font-semibold text-base-content/40 uppercase tracking-wide mb-1">
-                                {platform}
-                            </div>
-                            <div className="grid grid-cols-6 gap-1.5">
-                                {group.map((m) => (
-                                    <MachineChipButton
-                                        key={m}
-                                        machine={m}
-                                        disabled={isDisabled(m)}
-                                        selected={selectedMachine === m}
-                                        onClick={handleSelect}
+                <div className="space-y-4">
+                    {grouped.map(([platform, group]) => {
+                        const style = platformStyle(platform);
+                        return (
+                            <div
+                                key={platform}
+                                className={`rounded-lg border ${style.border} ${style.bg} p-2`}
+                            >
+                                <div className="flex items-center gap-1.5 mb-2 px-0.5">
+                                    <span
+                                        className={`w-1.5 h-1.5 rounded-full ${style.dot} shrink-0`}
                                     />
-                                ))}
+                                    <span
+                                        className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}
+                                    >
+                                        {platform}
+                                    </span>
+                                    <span className="text-[9px] text-base-content/30 font-mono">
+                                        {group.length}
+                                    </span>
+                                    <div
+                                        className={`flex-1 h-px ${style.border} border-t`}
+                                    />
+                                </div>
+                                <div className="grid grid-cols-6 gap-1.5">
+                                    {group.map((m) => (
+                                        <MachineChipButton
+                                            key={m}
+                                            machine={m}
+                                            selected={selectedMachine === m}
+                                            onClick={handleSelect}
+                                        />
+                                    ))}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
         </div>

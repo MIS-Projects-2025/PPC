@@ -3,7 +3,6 @@ import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import { TableActionsContext } from "./RowContent";
 
 export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
-    console.log("🚀 ~ LotIdCell ~ isPlannedYesterday:", isPlannedYesterday);
     const { handleShowHistory = noop, handleShowMergeHistory = noop } =
         useContext(TableActionsContext);
 
@@ -21,17 +20,17 @@ export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
     }
 
     return (
-        <span className="flex items-center justify-between gap-1.5">
-            <div className="font-mono">
+        <span className="flex items-center justify-between gap-1.5 min-w-0 width-full">
+            <div className="font-mono truncate min-w-0">
                 {isPlannedYesterday && (
                     <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
                         past
                     </span>
                 )}
-                {lotId}
+                <span className="truncate">{lotId}</span>
             </div>
 
-            <div>
+            <div className="flex items-center gap-1 shrink-0">
                 {splitInfo && (
                     <SplitBadge
                         lotId={lotId}

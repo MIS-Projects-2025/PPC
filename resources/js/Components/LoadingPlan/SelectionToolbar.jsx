@@ -1,20 +1,11 @@
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { TAGS } from "@/Components/LoadingPlan/Tag";
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FaTrash } from "react-icons/fa";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import MergeModal from "./MergeModal";
 import SplitModal from "./SplitModal";
 import TransferModal from "./TransferModal";
-
-/** Display label for a machine bucket — Unassigned/Manual get real words
- *  instead of null/"MANUAL" literal. */
-function machineLabel(machine) {
-    if (machine === null) return "Unassigned";
-    if (machine === MACHINE_MANUAL) return "Manual";
-    return machine;
-}
 
 export default function SelectionToolbar({
     selectedIds,

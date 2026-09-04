@@ -51,7 +51,7 @@ class SchedulerService
         'CV1' => null,
         'SOF' => null,
         'WLT' => null,
-        'DLT' => 'F1', // <-- was null in every earlier confirmation, verify this is intentional
+        'DLT' => 'F1',
     ];
 
     /** Preloaded reference data for the batch currently being processed. */
@@ -159,7 +159,13 @@ class SchedulerService
                 return false;
             }
         }
-        if ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
+
+        $stateSupportsReel = false; // no machine_setup_states row can claim this yet
+        if ($rampProcessType === 'reel') {
+            if (!$stateSupportsReel) {
+                return false;
+            }
+        } elseif ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
             return false;
         }
 
@@ -230,10 +236,6 @@ class SchedulerService
             $item = (array) $item;
             $partName = $item['part_name'] ?? null;
 
-            // ASSUMPTION: PartName::findByPartName() is a static helper
-            // by analogy to the earlier PackageList model — confirm this
-            // actually exists on the real PartName model, or replace with:
-            // PartName::where('devicename', $partName)->first()
             $packageInfo = PartName::findByPartName($partName);
 
             if (!$packageInfo) {
@@ -252,7 +254,7 @@ class SchedulerService
                 'Focus_Group'  => $packageInfo->focus_grp,
                 'Ramp_Time'    => $packageInfo->allocation,
                 'CR3'          => null, // pickups assumed never RES
-                'isExpedite'   => $item['is_expedite'] ?? false,
+                'isExpedite'   => $item['is_manual_expedite'] ?? false,
                 'aboveCT'      => false, // pickups have no CT history to compute this from
                 'CT'           => null,  // no sortable CT value for pickups either
             ]);
@@ -380,11 +382,6 @@ class SchedulerService
         });
     }
 
-    /**
-     * commit = intdiv(qty, recipe). NOTE: 'recipe' column name on
-     * PartName unconfirmed under the devicename/focus_grp/allocation
-     * naming convention — verify before trusting this.
-     */
     public function estimateCommit(object $lot): ?int
     {
         $packageInfo = PartName::findByPartName($lot->Part_Name);
@@ -424,6 +421,22 @@ class SchedulerService
 
         if ($rampTime === 'TUBE') {
             return 'tubing';
+        }
+
+        if (in_array($rampTime, [
+            'R2',
+            'RL',
+            'RL5',
+            'REEL_7',
+            '500RL7',
+            'RL7',
+            'R250',
+            '500REEL',
+            'REEL5',
+            'REEL500',
+            'MINIREEL'
+        ], true)) {
+            return 'reel';
         }
 
         return 'both';
@@ -835,7 +848,7 @@ class SchedulerService
             'aboveCT' => $formulas->cycleTimeExceedOverall,
             // raw sortable CT value for tier 1/2 ordering — property name
             // is a guess, confirm the real one on LoadingPlanFormulas
-            'CT' => $formulas->cycleTime ?? null,
+            'CT' => $formulas->ct ?? null,
         ];
     }
 

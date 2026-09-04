@@ -1,4 +1,3 @@
-import { COL_WIDTHS } from "@/Components/LoadingPlan/columns.jsx";
 import { formatExpectedPT } from "@/Lib/time.js";
 import { CSS } from "@dnd-kit/utilities";
 import { flexRender } from "@tanstack/react-table";
@@ -16,6 +15,9 @@ import { TableInteractionContext } from "./MachineSectionBody";
 import { StatusBadge } from "./StatusBadge";
 import { TAGS, TagDot } from "./Tag";
 import interactiveCursorClasses from "./interactiveCursorClasses";
+
+const COL_WIDTHS = 0;
+
 /**
  * Editable columns and their input types.
  * accu_time replaces the old "duration" as the editable queue-time field.

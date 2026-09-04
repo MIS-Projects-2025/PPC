@@ -65,7 +65,7 @@ return [
         'qdn_db' => [
             'driver' => 'mysql',
             'url' => env('QDN_DB_URL'),
-            'host' => env('QDN_DB_HOST', '192.168.1.18'),
+            'host' => env('QDN_DB_HOST', '192.168.20.20'),
             'port' => env('QDN_DB_PORT', '6446'),
             'database' => env('QDN_DB_DATABASE', 'qdn_db'),
             'username' => env('QDN_DB_USERNAME', 'clusteradmin'),

@@ -1,9 +1,9 @@
-import { Head, router, usePage } from "@inertiajs/react";
-import { useState } from "react";
 import InputError from "@/Components/InputError";
 import InputLabel from "@/Components/InputLabel";
 import TextInput from "@/Components/TextInput";
 import useUserStore from "@/Store/useUserStore";
+import { Head, router, usePage } from "@inertiajs/react";
+import { useState } from "react";
 
 export default function Profile({ profile, errors }) {
 	console.log("🚀 ~ Profile ~ profile:", profile);
@@ -29,7 +29,7 @@ export default function Profile({ profile, errors }) {
 					localStorage.removeItem("authify-token");
 					router.get(route("logout"));
 					useUserStore.getState().clearUserData();
-					window.location.href = `http://192.168.2.221:8200/logout?key=${encodeURIComponent(
+					window.location.href = `http://192.168.20.21:8200/logout?key=${encodeURIComponent(
 						token,
 					)}&redirect=${encodeURIComponent(route("dashboard"))}`;
 				},

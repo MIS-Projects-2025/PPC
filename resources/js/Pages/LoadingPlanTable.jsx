@@ -144,16 +144,16 @@ import {
     packagesInGroup,
     toReverseMap,
 } from "@/Constants/loadingPlanPackageGroups.js";
-import {
-    applyTimeStartEdit,
-    findMachineNeighbors,
-    recomputeMachine,
-} from "@/Constants/loadingPlanSchedule.js";
 import { hasTimeline, MACHINE_MANUAL } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
 import { useMutation } from "@/Hooks/useMutation";
 import { useToast } from "@/Hooks/useToast";
 import { droppableTokenToMachine } from "@/Lib/dnd.js";
+import {
+    applyTimeStartEdit,
+    findMachineNeighbors,
+    recomputeMachine,
+} from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 import { createUndoStore } from "@/Store/undoStore";
 import toSnakeCase from "@/Utils/toSnakeCase";
 import {
