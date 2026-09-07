@@ -172,12 +172,13 @@ class PartNameController extends Controller
 
         $parts = array_map(function ($p) {
             return [
-                'devicename' => $p['devicename'] ?? '',
+                // 
+                'devicename' => $p['PARTNAME'] ?? '',
                 'focus_grp' => $p['focus_grp'] ?? '',
                 'areas' => $p['areas'] ?? '',
                 'productline' => $p['productline'] ?? 'PL1',
-                'package_type' => $p['package_type'] ?? '',
-                'lead_count' => $p['lead_count'] ?? '',
+                'package_type' => $p['PACKAGE'] ?? '',
+                'lead_count' => $p['LC'] ?? '',
                 'dimensions' => $p['dimensions'] ?? '',
             ];
         }, $parts);
