@@ -1,3 +1,5 @@
+select * from ppc.customer_data_wip where part_name = 'ADRV9061BBPZ-RL' limit 9999;
+
 SELECT devicename, focus_grp, allocation, recipe, ramp_category
 FROM (
     SELECT

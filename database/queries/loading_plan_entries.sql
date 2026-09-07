@@ -8,6 +8,8 @@ select * from ppc.lot_quantity_history;
 select distinct ramp_time from ppc.customer_data_wip;
 select * from qdn_db.package_list where devicename = 'LT1085CM-3^3#TRPBF';
 select * from qdn_db.package_list;
+select * from qdn_db.machine_list;
+select distinct machine_platform from qdn_db.machine_list;
 select * from qdn_db.machine_capability_part_rules;
 select * from qdn_db.machine_setup_groups;
 select * from qdn_db.machine_setup_states;

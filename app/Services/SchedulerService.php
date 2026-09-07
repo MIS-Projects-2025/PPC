@@ -9,6 +9,7 @@ use App\Models\MachineSetupState;
 use App\Models\MachineCapabilityPartRule;
 use App\Models\MachineTransitionRule;
 use App\Models\MachineDedicatedParts;
+use App\Models\MachineTransitionRuleException;
 use App\Services\LoadingPlanFormulas;
 use App\Models\PartName;
 use Illuminate\Support\Collection;
@@ -51,7 +52,7 @@ class SchedulerService
         'CV1' => null,
         'SOF' => null,
         'WLT' => null,
-        'DLT' => 'F1',
+        'DLT' => 'F1', // confirmed
     ];
 
     /** Preloaded reference data for the batch currently being processed. */
@@ -99,18 +100,19 @@ class SchedulerService
 
         $this->ref = [
             'setup_states' => $setupStates,
-            'part_rules_by_state' => MachineCapabilityPartRule::query()
-                ->whereIn('setup_state_id', $relevantStateIds)
-                ->get()
-                ->groupBy('setup_state_id'),
-            'dedicated_parts' => MachineDedicatedParts::query()
-                ->whereIn('part_name', $partNames)
-                ->get()
-                ->mapWithKeys(fn($d) => ["{$d->machine_id}|{$d->part_name}" => true]),
+            'part_name_override_states' => $this->resolvePartNameOverrideStates($partNames),
             'transition_rules_by_machine' => MachineTransitionRule::query()
                 ->whereIn('machine_id', $relevantMachineIds)
                 ->get()
                 ->groupBy('machine_id'),
+            // scoped by the SAME part_names as dedicated_parts above —
+            // an exception only ever applies to a part_name actually in
+            // this batch, so no need to load the whole table
+            'transition_exceptions_by_machine_part' => MachineTransitionRuleException::query()
+                ->whereIn('machine_id', $relevantMachineIds)
+                ->whereIn('part_name', $partNames)
+                ->get()
+                ->groupBy(fn($e) => "{$e->machine_id}|{$e->part_name}"),
         ];
 
         return $this->ref;
@@ -159,13 +161,7 @@ class SchedulerService
                 return false;
             }
         }
-
-        $stateSupportsReel = false; // no machine_setup_states row can claim this yet
-        if ($rampProcessType === 'reel') {
-            if (!$stateSupportsReel) {
-                return false;
-            }
-        } elseif ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
+        if ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
             return false;
         }
 
@@ -254,7 +250,7 @@ class SchedulerService
                 'Focus_Group'  => $packageInfo->focus_grp,
                 'Ramp_Time'    => $packageInfo->allocation,
                 'CR3'          => null, // pickups assumed never RES
-                'isExpedite'   => $item['is_manual_expedite'] ?? false,
+                'isExpedite'   => $item['is_expedite'] ?? false,
                 'aboveCT'      => false, // pickups have no CT history to compute this from
                 'CT'           => null,  // no sortable CT value for pickups either
             ]);
@@ -280,21 +276,15 @@ class SchedulerService
             [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
             $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
 
-            $eligible = $this->ref['setup_states']
-                ->filter(fn($state) => $this->matchesLotCapability(
-                    $state,
-                    $factory,
-                    $lot->Package_Name,
-                    $bodySize2d,
-                    $thickness,
-                    $lot->Lead_Count,
-                    $rampProcessType
-                ))
-                ->filter(fn($state) => $this->lotSatisfiesPartRules(
-                    $state->setup_state_id,
-                    $state->machine_id,
-                    $lot->Part_Name
-                ));
+            $eligible = $this->resolveCandidateStates(
+                $lot->Part_Name,
+                $factory,
+                $lot->Package_Name,
+                $bodySize2d,
+                $thickness,
+                $lot->Lead_Count,
+                $rampProcessType
+            );
 
             $machineIds = $machineIds->merge($eligible->pluck('machine_id'));
         }
@@ -382,6 +372,7 @@ class SchedulerService
         });
     }
 
+    /** commit = intdiv(qty, recipe). */
     public function estimateCommit(object $lot): ?int
     {
         $packageInfo = PartName::findByPartName($lot->Part_Name);
@@ -423,70 +414,134 @@ class SchedulerService
             return 'tubing';
         }
 
-        if (in_array($rampTime, [
-            'R2',
-            'RL',
-            'RL5',
-            'REEL_7',
-            '500RL7',
-            'RL7',
-            'R250',
-            '500REEL',
-            'REEL5',
-            'REEL500',
-            'MINIREEL'
-        ], true)) {
-            return 'reel';
-        }
-
         return 'both';
     }
 
-    protected function lotSatisfiesPartRules(int $setupStateId, int $machineId, ?string $partName): bool
+    // protected function lotSatisfiesPartRules(int $setupStateId, int $machineId, ?string $partName): bool
+    // {
+    //     $rules = $this->ref['part_rules_by_state']->get($setupStateId, collect());
+
+    //     if ($rules->isEmpty()) {
+    //         return true;
+    //     }
+
+    //     if (!$partName) {
+    //         return false;
+    //     }
+
+    //     foreach ($rules as $rule) {
+    //         $match = match ($rule->match_type) {
+    //             'exact' => $rule->match_value === $partName,
+    //             'contains' => str_contains($partName, $rule->match_value),
+    //             'dedicated_list' => isset($this->ref['dedicated_parts']["{$machineId}|{$partName}"]),
+    //             default => false,
+    //         };
+
+    //         if ($match) {
+    //             return true;
+    //         }
+    //     }
+
+    //     return false;
+    // }
+
+    /**
+     * Part names with a rule row get *exclusive* routing: whichever
+     * setup_state(s) their rule(s) name, structural fields ignored
+     * entirely. Part names with no rule are untouched by this table.
+     * Table is small — fetching all rows and matching in-memory is fine.
+     */
+    protected function resolvePartNameOverrideStates(Collection $partNames): Collection
     {
-        $rules = $this->ref['part_rules_by_state']->get($setupStateId, collect());
-
-        if ($rules->isEmpty()) {
-            return true;
+        if ($partNames->isEmpty()) {
+            return collect();
         }
 
-        if (!$partName) {
-            return false;
-        }
+        $rules = MachineCapabilityPartRule::all();
 
-        foreach ($rules as $rule) {
-            $match = match ($rule->match_type) {
-                'exact' => $rule->match_value === $partName,
+        $stateIds = $rules->pluck('setup_state_id')->unique();
+        $states = MachineSetupState::query()->whereIn('setup_state_id', $stateIds)->get()->keyBy('setup_state_id');
+
+        return $partNames->mapWithKeys(function ($partName) use ($rules, $states) {
+            $matched = $rules->filter(fn($rule) => match ($rule->match_type) {
+                'exact', 'dedicated_list' => $rule->match_value === $partName,
                 'contains' => str_contains($partName, $rule->match_value),
-                'dedicated_list' => isset($this->ref['dedicated_parts']["{$machineId}|{$partName}"]),
                 default => false,
-            };
+            });
 
-            if ($match) {
-                return true;
-            }
-        }
+            $entries = $matched
+                ->map(fn($rule) => (object) [
+                    'state' => $states->get($rule->setup_state_id),
+                    'is_dedicated' => $rule->match_type === 'dedicated_list',
+                ])
+                ->filter(fn($e) => $e->state !== null)
+                ->values();
 
-        return false;
+            return [$partName => $entries];
+        });
     }
 
-    protected function isDedicatedListMatch(int $setupStateId, int $machineId, ?string $partName): bool
+    /** Candidate states for a lot: override states if the part has any rule, else normal structural match. */
+    protected function resolveCandidateStates(
+        string $partName,
+        string $factory,
+        ?string $packageName,
+        ?string $bodySize2d,
+        ?float $thickness,
+        ?int $leadCount,
+        string $rampProcessType
+    ): Collection {
+        $overrides = $this->ref['part_name_override_states']->get($partName, collect());
+
+        if ($overrides->isNotEmpty()) {
+            return $overrides->pluck('state')->filter(fn($state) => $state->factory === $factory)->values();
+        }
+
+        return $this->ref['setup_states']->filter(fn($state) => $this->matchesLotCapability(
+            $state,
+            $factory,
+            $packageName,
+            $bodySize2d,
+            $thickness,
+            $leadCount,
+            $rampProcessType
+        ));
+    }
+
+    protected function isDedicatedListMatch(string $partName, int $setupStateId): bool
     {
-        if (!$partName) {
-            return false;
-        }
-
-        $hasDedicatedRule = $this->ref['part_rules_by_state']
-            ->get($setupStateId, collect())
-            ->contains(fn($r) => $r->match_type === 'dedicated_list');
-
-        return $hasDedicatedRule && isset($this->ref['dedicated_parts']["{$machineId}|{$partName}"]);
+        return $this->ref['part_name_override_states']
+            ->get($partName, collect())
+            ->contains(fn($o) => $o->is_dedicated && $o->state->setup_state_id === $setupStateId);
     }
 
-    protected function transitionCost(int $machineId, ?int $fromStateId, int $toStateId): array
+    /**
+     * Cost/rule to move from $fromStateId to $toStateId on a machine,
+     * for a specific part_name. Exceptions (machine_transition_rule_
+     * exceptions) are checked FIRST — they override the general
+     * machine_transition_rules for that one part_name only, e.g. "no
+     * setup on leadcount change" for a specific set of parts even
+     * though the general rule for that machine says otherwise.
+     */
+    protected function transitionCost(int $machineId, ?int $fromStateId, int $toStateId, ?string $partName = null): array
     {
         if ($fromStateId === $toStateId) {
             return ['operation_type' => 'none', 'duration' => 0, 'rule_id' => null];
+        }
+
+        if ($partName) {
+            $exceptions = $this->ref['transition_exceptions_by_machine_part'][$machineId . '|' . $partName] ?? collect();
+
+            $exception = $exceptions->first(fn($e) => $e->to_state_id === $toStateId && $e->from_state_id === $fromStateId)
+                ?? $exceptions->first(fn($e) => $e->to_state_id === $toStateId && $e->from_state_id === null);
+
+            if ($exception) {
+                return [
+                    'operation_type' => $exception->operation_type,
+                    'duration' => $exception->est_duration_minutes ?? 0,
+                    'rule_id' => null, // exceptions aren't machine_transition_rules rows
+                ];
+            }
         }
 
         $machineRules = $this->ref['transition_rules_by_machine']->get($machineId, collect());
@@ -528,22 +583,22 @@ class SchedulerService
         [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
         $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
 
-        $candidateStates = $this->ref['setup_states']->filter(fn($state) => $this->matchesLotCapability(
-            $state,
+        $candidateStates = $this->resolveCandidateStates(
+            $lot->Part_Name,
             $factory,
             $lot->Package_Name,
             $bodySize2d,
             $thickness,
             $lot->Lead_Count,
             $rampProcessType
-        ));
+        );
 
         $best = null;
 
         foreach ($candidateStates as $state) {
-            if (!$this->lotSatisfiesPartRules($state->setup_state_id, $state->machine_id, $lot->Part_Name)) {
-                continue;
-            }
+            // if (!$this->lotSatisfiesPartRules($state->setup_state_id, $state->machine_id, $lot->Part_Name)) {
+            //     continue;
+            // }
 
             $remainingCapacity = $remainingCapacityByMachine[$state->machine_id] ?? null;
 
@@ -555,7 +610,7 @@ class SchedulerService
             }
 
             $isCr3Dedicated = ($lot->CR3 === 'RES')
-                && $this->isDedicatedListMatch($state->setup_state_id, $state->machine_id, $lot->Part_Name);
+                && $this->isDedicatedListMatch($lot->Part_Name, $state->setup_state_id);
 
             $openLots = ($openEntriesByMachine[$state->machine_id] ?? collect())
                 ->where('entry_type', 'lot')
@@ -575,11 +630,11 @@ class SchedulerService
                 $predStateId = $predEntry->resulting_setup_state_id ?? $anchorState;
                 $succStateId = $succEntry->resulting_setup_state_id ?? null;
 
-                $entryCost = $this->transitionCost($state->machine_id, $predStateId, $state->setup_state_id);
+                $entryCost = $this->transitionCost($state->machine_id, $predStateId, $state->setup_state_id, $lot->Part_Name);
 
                 if ($succStateId !== null) {
-                    $exitCost = $this->transitionCost($state->machine_id, $state->setup_state_id, $succStateId);
-                    $bridgeCost = $this->transitionCost($state->machine_id, $predStateId, $succStateId);
+                    $exitCost = $this->transitionCost($state->machine_id, $state->setup_state_id, $succStateId, $lot->Part_Name);
+                    $bridgeCost = $this->transitionCost($state->machine_id, $predStateId, $succStateId, $lot->Part_Name);
                     $marginalDuration = $entryCost['duration'] + $exitCost['duration'] - $bridgeCost['duration'];
                 } else {
                     $marginalDuration = $entryCost['duration'];
@@ -658,7 +713,7 @@ class SchedulerService
             return;
         }
 
-        $trueCost = $this->transitionCost($machineId, $newLotStateId, $succEntry->resulting_setup_state_id);
+        $trueCost = $this->transitionCost($machineId, $newLotStateId, $succEntry->resulting_setup_state_id, $newLotEntry->part_name);
 
         if ($trueCost['operation_type'] === 'none') {
             $staleBlock->delete();
@@ -846,8 +901,6 @@ class SchedulerService
             'CR3' => $wip->CR3,
             'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
             'aboveCT' => $formulas->cycleTimeExceedOverall,
-            // raw sortable CT value for tier 1/2 ordering — property name
-            // is a guess, confirm the real one on LoadingPlanFormulas
             'CT' => $formulas->ct ?? null,
         ];
     }
