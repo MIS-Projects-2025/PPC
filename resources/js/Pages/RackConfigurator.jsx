@@ -104,23 +104,22 @@ function RackRow({ rack }) {
 		}
 	}
 
-	function handleDelete() {
+	async function handleDelete() {
 		if (!confirmDelete) {
 			setConfirmDelete(true);
 			return;
 		}
 
 		try {
-			deleteRack(route("rack.destroy", rack.id), {
+			await deleteRack(route("rack.destroy", rack.id), {
 				method: "DELETE",
 			});
 
 			toast.success("Rack deleted successfully!");
+			router.reload();
 		} catch (error) {
 			toast.error(error.message);
 		}
-
-		router.reload();
 	}
 
 	return (
@@ -142,6 +141,12 @@ function RackRow({ rack }) {
 					{rack.production_line && (
 						<span className="ml-2 text-xs text-base-content">
 							{rack.production_line.name}
+						</span>
+					)}
+
+					{rack.rack_page && (
+						<span className="ml-1 badge badge-sm badge-outline">
+							{rack.rack_page.label}
 						</span>
 					)}
 
@@ -168,7 +173,7 @@ function RackRow({ rack }) {
 								className="btn btn-sm btn-ghost"
 								onClick={() => {
 									setIsEditing(false);
-									setNewName(rack.label);
+									setNewName(rack.label || rack.name);
 								}}
 							>
 								Cancel
@@ -233,7 +238,7 @@ function RackRow({ rack }) {
 	);
 }
 
-export default function RackConfigurator({ racks, plines }) {
+export default function RackConfigurator({ racks, plines, rackPages }) {
 	const toast = useToast();
 
 	const [rackName, setRackName] = useState("");
@@ -243,6 +248,7 @@ export default function RackConfigurator({ racks, plines }) {
 	const [appliedCols, setAppliedCols] = useState(10);
 	const [disabledSlots, setDisabledSlots] = useState(new Set());
 	const [plID, setPlID] = useState(null);
+	const [rackPageId, setRackPageId] = useState(null);
 
 	const slots = useMemo(() => {
 		const rows = [];
@@ -285,8 +291,15 @@ export default function RackConfigurator({ racks, plines }) {
 		cancel: mutateRackCancel,
 	} = useMutation();
 
+	const canSave = rackName.trim() && plID && rackPageId;
+
 	async function handleSave() {
-		if (!rackName.trim()) return;
+		if (!canSave) {
+			toast.error(
+				"Rack name, production line, and rack page are all required.",
+			);
+			return;
+		}
 
 		try {
 			const payload = {
@@ -294,6 +307,7 @@ export default function RackConfigurator({ racks, plines }) {
 				layers: appliedLayers,
 				columns: appliedCols,
 				production_line_id: plID,
+				rack_page_id: rackPageId,
 				slots: slots.flat().map((label) => ({
 					label,
 					is_active: !disabledSlots.has(label),
@@ -308,6 +322,7 @@ export default function RackConfigurator({ racks, plines }) {
 			toast.success("Rack created successfully!");
 			setRackName("");
 			setPlID(null);
+			setRackPageId(null);
 			setLayerCount(4);
 			setColCount(10);
 
@@ -334,9 +349,9 @@ export default function RackConfigurator({ racks, plines }) {
 					/>
 				</div>
 
-				<div className="md:col-span-2 flex flex-col gap-1">
+				<div className="flex flex-col gap-1">
 					<label className="text-xs font-medium text-base-content uppercase tracking-wide">
-						Production
+						Production Line
 					</label>
 					<button
 						type="button"
@@ -359,8 +374,45 @@ export default function RackConfigurator({ racks, plines }) {
 							</li>
 						))}
 					</ul>
+					<span className="text-[10px] text-base-content/50">
+						Where the rack physically sits.
+					</span>
 				</div>
 
+				<div className="flex flex-col gap-1">
+					<label className="text-xs font-medium text-base-content uppercase tracking-wide">
+						Rack Page
+					</label>
+					<button
+						type="button"
+						className="btn"
+						popoverTarget="popover-2"
+						style={{ anchorName: "--anchor-2" }}
+					>
+						{rackPageId
+							? rackPages.find((page) => page.id === rackPageId)?.label
+							: "Select"}
+					</button>
+
+					<ul
+						className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm"
+						popover="auto"
+						id="popover-2"
+						style={{ positionAnchor: "--anchor-2" }}
+					>
+						{rackPages.map((page) => (
+							<li key={page.id}>
+								<a onClick={() => setRackPageId(page.id)}>{page.label}</a>
+							</li>
+						))}
+					</ul>
+					<span className="text-[10px] text-base-content/50">
+						Which page/view this rack shows lots on.
+					</span>
+				</div>
+			</div>
+
+			<div className="grid grid-cols-1 md:grid-cols-4 gap-4">
 				<div className="flex flex-col gap-1">
 					<label className="text-xs font-medium text-base-content uppercase tracking-wide">
 						Layers

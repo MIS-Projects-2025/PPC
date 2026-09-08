@@ -77,20 +77,34 @@ export default function NavLinks({ isCollapse = false }) {
                 label="Production"
                 icon={<MdConveyorBelt className="w-4 h-4" />}
                 links={[
-                    // {
-                    //     href: route("lot-upstream.index", {
-                    //         productionLine: "pl1",
-                    //     }),
-                    //     label: "PL1 WIP Controller",
-                    //     icon: <MdConveyorBelt className="w-4 h-4" />,
-                    //     notification: false,
-                    // },
-                    // {
-                    //     href: route("rack.slotMap", { productionLine: "pl1" }),
-                    //     label: "PL1 Rack Slot Map",
-                    //     icon: <PiTableLight className="w-4 h-4" />,
-                    //     notification: false,
-                    // },
+                    {
+                        href: route("lot-upstream.index", {
+                            productionLine: "pl1",
+                        }),
+                        label: "PL1 WIP Controller",
+                        icon: <MdConveyorBelt className="w-4 h-4" />,
+                        notification: false,
+                    },
+                    {
+                        href: route("rack.slotMap", { productionLine: "pl1" }),
+                        label: "PL1 Rack Slot Map",
+                        icon: <PiTableLight className="w-4 h-4" />,
+                        notification: false,
+                    },
+                    {
+                        href: route("lot-upstream.index", {
+                            productionLine: "RESCON",
+                        }),
+                        label: "RES Controller",
+                        icon: <MdConveyorBelt className="w-4 h-4" />,
+                        notification: false,
+                    },
+                    {
+                        href: route("rack.slotMap", { productionLine: "RESCON" }),
+                        label: "RESCON Rack Slot Map",
+                        icon: <PiTableLight className="w-4 h-4" />,
+                        notification: false,
+                    },
                     {
                         href: route("lot-upstream.index", {
                             productionLine: "pl6",

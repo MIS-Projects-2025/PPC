@@ -216,12 +216,12 @@ class LotService
         }
     }
 
-    public function downloadFilteredExport(array $filters, $productionLineId)
+    public function downloadFilteredExport(array $filters, $rackPageId)
     {
         $sheets = [
-            'LOTS' => function () use ($filters, $productionLineId) {
+            'LOTS' => function () use ($filters, $rackPageId) {
                 return $this->lots->buildLotQuery($filters, null)
-                    ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $productionLineId))
+                    ->whereHas('stagings.positions', fn($q) => $q->where('rack_page_id', $rackPageId))
                     ->with([
                         'positions' => fn($q) => $q
                             ->with(['staging', 'rackSlot.rack.productionLine'])

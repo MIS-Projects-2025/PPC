@@ -18,31 +18,36 @@ class LotPositionController extends Controller
     // Add an additional slot to an already-staged lot (e.g. WCO realises it needs A3 too)
     public function store(int $lotId)
     {
-        $data = request()->validate([
-            'rack_slot_id' => 'required|integer|exists:rack_slots,id',
-        ]);
+        // BROKEN: 
+        // NOTE: the code below is BROKEN
+        // BUT IT'S NOT BEING USE ANYWAY
 
-        $slot = $this->slots->find($data['rack_slot_id']);
+        // $data = request()->validate([
+        //     'rack_slot_id' => 'required|integer|exists:rack_slots,id',
+        // ]);
 
-        if (!$slot->isAvailable()) {
-            throw ValidationException::withMessages([
-                'rack_slot_id' => "Slot {$slot->label} is marked full.",
-            ]);
-        }
+        // $slot = $this->slots->find($data['rack_slot_id']);
 
-        $productionLineId = $slot->rack->production_line_id;
+        // if (!$slot->isAvailable()) {
+        //     throw ValidationException::withMessages([
+        //         'rack_slot_id' => "Slot {$slot->label} is marked full.",
+        //     ]);
+        // }
 
-        $by = session('emp_data')['emp_id'] ?? 'system';
+        // $productionLineId = $slot->rack->production_line_id;
+        // $rackPageId = $slot->rack->rack_page_id;
 
-        $this->repo->assign($lotId, $data['rack_slot_id'], $by, $productionLineId);
+        // $by = session('emp_data')['emp_id'] ?? 'system';
 
-        return response()->json([
-            'status' => 'success',
-            'message' => "Slot {$slot->label} assigned to lot.",
-            'data' => [
-                'slot_id' => $slot->id,
-                'label' => $slot->label
-            ]
-        ]);
+        // $this->repo->assign($lotId, $data['rack_slot_id'], $by, $productionLineId);
+
+        // return response()->json([
+        //     'status' => 'success',
+        //     'message' => "Slot {$slot->label} assigned to lot.",
+        //     'data' => [
+        //         'slot_id' => $slot->id,
+        //         'label' => $slot->label
+        //     ]
+        // ]);
     }
 }

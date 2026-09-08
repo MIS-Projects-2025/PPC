@@ -28,6 +28,15 @@ class RackRepository implements RackRepositoryInterface
       ->each->append('shelves');
   }
 
+  public function getAllByRackPage(int $rackPageId): Collection
+  {
+    return Rack::with(['slots'])
+      ->where('rack_page_id', $rackPageId)
+      ->orderBy('label')
+      ->get()
+      ->each->append('shelves');
+  }
+
   public function slotMap(int $productionLineId)
   {
     return Rack::with([
@@ -46,6 +55,36 @@ class RackRepository implements RackRepositoryInterface
       ]),
     ])
       ->where('production_line_id', $productionLineId)
+      ->get()
+      ->makeHidden('shelves')
+      ->each(function ($rack) {
+        $rack->slots->each(function ($slot) {
+          $slot->activePositions->each(function ($position) {
+            $position->lot?->setAppends([]);
+          });
+        });
+      });
+  }
+
+  public function slotMapByRackPage(int $rackPageId)
+  {
+    return Rack::with([
+      'slots.activePositions' => fn($q) => $q->with([
+        'lot' => fn($q) => $q
+          ->without([
+            'activePositions',
+            'activePositions.rackSlot',
+            'activePositions.rackSlot.rack',
+            'activePositions.rackSlot.rack.productionLine',
+            'activePositions.rackSlot.rack.rackPage',
+            'modifiedBy',
+            'receivedBy',
+            'releasedBy',
+          ])
+          ->select(['id', 'lot_id', 'partname', 'qty', 'status']),
+      ]),
+    ])
+      ->where('rack_page_id', $rackPageId)
       ->get()
       ->makeHidden('shelves')
       ->each(function ($rack) {

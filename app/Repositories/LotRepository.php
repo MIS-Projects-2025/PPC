@@ -73,7 +73,7 @@ class LotRepository implements LotRepositoryInterface
       ->get();
   }
 
-  public function buildLotQuery(array $filters, ?int $productionLineId)
+  public function buildLotQuery(array $filters, ?int $rackPageId)
   {
     $query = Lot::query();
 
@@ -85,9 +85,9 @@ class LotRepository implements LotRepositoryInterface
       $query->aging();
     }
 
-    if ($productionLineId) {
-      $query->whereHas('latestPosition', function ($q) use ($productionLineId) {
-        $q->where('production_line_id', $productionLineId);
+    if ($rackPageId) {
+      $query->whereHas('latestPosition', function ($q) use ($rackPageId) {
+        $q->where('rack_page_id', $rackPageId);
       });
     }
 
@@ -120,17 +120,18 @@ class LotRepository implements LotRepositoryInterface
     return $query;
   }
 
-  public function paginate(array $filters, int $productionLineId): LengthAwarePaginator
+  public function paginate(array $filters, int $rackPageId): LengthAwarePaginator
   {
     return $this->buildLotQuery($filters, null)
-      ->whereHas('stagings.positions', fn($q) => $q->where('production_line_id', $productionLineId))
+      ->whereHas('stagings.positions', fn($q) => $q->where('rack_page_id', $rackPageId))
       ->with([
         'stagings' => fn($q) => $q->with('withdrawer')->orderBy('cycle'),
         'stagings.positions.rackSlot.rack.productionLine',
+        'stagings.positions.rackSlot.rack.rackPage',
       ])
       ->with(['positions' => function ($q) {
         $q->orderBy('assigned_at');
-      }, 'positions.rackSlot.rack.productionLine'])
+      }, 'positions.rackSlot.rack.productionLine', 'positions.rackSlot.rack.rackPage'])
       ->paginate($filters['per_page'] ?? 20);
   }
 
@@ -162,6 +163,7 @@ class LotRepository implements LotRepositoryInterface
         'lot_staging_id'     => $staging->id,
         'rack_slot_id'       => $slotId,
         'production_line_id' => $slot->rack->production_line_id,
+        'rack_page_id'       => $slot->rack->rack_page_id,
         'assigned_at'        => $now,
         'assigned_by'        => $actorEmployId,
       ]);
@@ -237,6 +239,7 @@ class LotRepository implements LotRepositoryInterface
               'lot_staging_id'    => $activeStaging->id,  // key addition
               'rack_slot_id'      => $slotId,
               'production_line_id' => $slot->rack->production_line_id,
+              'rack_page_id'      => $slot->rack->rack_page_id,
               'assigned_at'       => $now,
               'assigned_by'       => $modifiedBy,
             ]);

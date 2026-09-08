@@ -6,6 +6,7 @@ use Illuminate\Http\RedirectResponse;
 use Inertia\Inertia;
 use Inertia\Response;
 use App\Models\ProductionLine;
+use App\Models\RackPage;
 use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\ProductionLineRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
@@ -24,25 +25,28 @@ class RackController extends Controller
     public function index(?string $productionLine = null): Response
     {
         // Initialize $racks with a default value
+        $page  = null;
         $racks = null;
 
         if ($productionLine) {
-            $pl = ProductionLine::where('name', strtoupper($productionLine))
+            $page = RackPage::where('key', strtoupper($productionLine))
                 ->firstOrFail();
 
             // Use the specific repository method if PL is provided
-            $racks = $this->repo->getAllByProductionLine($pl->id);
+            $racks = $this->repo->getAllByRackPage($page->id);
         } else {
             // Default to all if no parameter is passed
             $racks = $this->repo->all();
         }
 
-        Log::info("Racks count: " . $racks->count());
+        // Log::info("Racks count: " . $racks->count());
 
         return Inertia::render('Rack', [
             'racks'           => $racks,
             'slots'           => fn() => $this->rackSlotRepo->all()->keyBy('id'),
-            'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByProductionLine($pl->id),
+            'occupancy'       => fn() => $page
+                ? $this->lotPositionRepo->getOccupancyByRackPage($page->id)
+                : collect(),
             'productionLines' => $this->productionLines->allActive(),
         ]);
     }
@@ -54,7 +58,8 @@ class RackController extends Controller
 
         return Inertia::render('RackConfigurator', [
             'racks' => $racksWithSlots,
-            'plines' => $plines
+            'plines' => $plines,
+            'rackPages' => RackPage::all()
         ]);
     }
 
@@ -80,17 +85,17 @@ class RackController extends Controller
 
     public function slotMap(string $productionLine)
     {
-        $pl = $productionLine
-            ? ProductionLine::where('name', strtoupper($productionLine))->firstOrFail()
-            : ProductionLine::orderBy('id')->first();
+        $page = $productionLine
+            ? RackPage::where('key', strtoupper($productionLine))->firstOrFail()
+            : RackPage::orderBy('id')->first();
 
-        abort_if(!$pl, 404);
+        abort_if(!$page, 404);
 
-        $slotMap = $this->repo->slotMap($pl->id);
+        $slotMap = $this->repo->slotMapByRackPage($page->id);
 
         return Inertia::render('RacksSlotMap', [
             'slotMap'        => $slotMap,
-            'productionLine' => $pl,
+            'productionLine' => $page,
         ]);
     }
 
@@ -98,6 +103,7 @@ class RackController extends Controller
     {
         $data = request()->validate([
             'production_line_id' => 'required|exists:production_lines,id',
+            'rack_page_id'       => 'required|exists:rack_pages,id',
             'label'              => 'required|string|max:50',
             'description'        => 'nullable|string|max:255',
             'slots'              => 'required|array|min:1',
@@ -113,7 +119,7 @@ class RackController extends Controller
         }
 
         $rack = $this->repo->create(
-            request()->only('production_line_id', 'label', 'description')
+            request()->only('production_line_id', 'rack_page_id', 'label', 'description')
         );
 
         $rack->slots()->createMany(
