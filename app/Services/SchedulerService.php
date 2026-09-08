@@ -122,6 +122,7 @@ class SchedulerService
     protected function matchesLotCapability(
         MachineSetupState $state,
         string $factory,
+        string $focusGroup,
         ?string $packageName,
         ?string $bodySize2d,
         ?float $thickness,
@@ -129,6 +130,9 @@ class SchedulerService
         string $rampProcessType
     ): bool {
         if ($state->factory !== $factory) {
+            return false;
+        }
+        if ($state->focus_group !== null && $state->focus_group !== $focusGroup) {
             return false;
         }
         if ($state->package_name !== null && $state->package_name !== $packageName) {
@@ -279,6 +283,7 @@ class SchedulerService
             $eligible = $this->resolveCandidateStates(
                 $lot->Part_Name,
                 $factory,
+                $lot->Focus_Group,
                 $lot->Package_Name,
                 $bodySize2d,
                 $thickness,
@@ -485,6 +490,7 @@ class SchedulerService
     protected function resolveCandidateStates(
         string $partName,
         string $factory,
+        string $focusGroup,
         ?string $packageName,
         ?string $bodySize2d,
         ?float $thickness,
@@ -500,6 +506,7 @@ class SchedulerService
         return $this->ref['setup_states']->filter(fn($state) => $this->matchesLotCapability(
             $state,
             $factory,
+            $focusGroup,
             $packageName,
             $bodySize2d,
             $thickness,
@@ -586,6 +593,7 @@ class SchedulerService
         $candidateStates = $this->resolveCandidateStates(
             $lot->Part_Name,
             $factory,
+            $lot->Focus_Group,
             $lot->Package_Name,
             $bodySize2d,
             $thickness,

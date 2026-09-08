@@ -14,6 +14,21 @@ ramp_time
 from ppc.customer_data_wip where `Part_Name` like '%ADRF%' limit 99999;
 select * from ppc.customer_data_wip limit 100;
 
+
+
+select distinct `Part_Name` from ppc.customer_data_wip where `Package_Name` = 'LFCSP_SS' and `Focus_Group` = 'MPD';
+select distinct `Part_Name` from ppc.customer_data_wip where `Package_Name` = 'LFCSP' and `Body_Size` = '2x2x0.55';
+select * from ppc.customer_data_wip where `Package_Name` = 'LFCSP' and `Body_Size` = '2x2x0.55';
+select * from ppc.customer_data_wip where `Package_Name` = 'LFCSP' and `Body_Size` = '2x2x.58';
+select * from ppc.customer_data_wip where `Package_Name` = 'LFCSP_RT' and `Body_Size` = '2x2x0.58';
+select * from ppc.customer_data_wip where `Package_Name` = 'QFN' and `Body_Size` like '%5x7%';
+select * from ppc.customer_data_wip where `Package_Name` = 'QFN' and `Body_Size` like '%5x7x0.75%';
+select distinct `Focus_Group` from ppc.customer_data_wip where `Package_Name` = 'SOT_23_3' and `Lead_Count` = 3;
+select distinct `Ramp_Time` from ppc.customer_data_wip;
+show create table ppc.f3;
+select * from ppc.f3 limit 1000;
+select * from qdn_db.machine_list where machine_num like '%01V%';
+SHOW TRIGGERS;
 SELECT 
     Part_Name,
     COUNT(DISTINCT package_name) AS unique_package_names,
