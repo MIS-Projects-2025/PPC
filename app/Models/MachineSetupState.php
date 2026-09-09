@@ -39,11 +39,6 @@ class MachineSetupState extends Model
         return $this->belongsTo(QdnMachine::class, 'machine_id', 'id');
     }
 
-    public function group(): BelongsTo
-    {
-        return $this->belongsTo(MachineSetupGroup::class, 'group_id', 'group_id');
-    }
-
     public function partRules(): HasMany
     {
         return $this->hasMany(MachineCapabilityPartRule::class, 'setup_state_id', 'setup_state_id');

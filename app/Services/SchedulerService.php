@@ -8,7 +8,6 @@ use App\Models\MachineCapacity;
 use App\Models\MachineSetupState;
 use App\Models\MachineCapabilityPartRule;
 use App\Models\MachineTransitionRule;
-use App\Models\MachineDedicatedParts;
 use App\Models\MachineTransitionRuleException;
 use App\Services\LoadingPlanFormulas;
 use App\Models\PartName;
@@ -79,11 +78,12 @@ class SchedulerService
             ->select([
                 'setup_state_id',
                 'machine_id',
-                'group_id',
                 'factory',
+                'focus_group',
                 'package_name',
                 'body_size',
                 'thickness',
+                'leadcount_include',
                 'leadcount_min',
                 'leadcount_max',
                 'leadcount_exclude',
@@ -145,6 +145,13 @@ class SchedulerService
             if ($thickness === null || round((float) $state->thickness, 2) !== round($thickness, 2)) {
                 return false;
             }
+        }
+        if ($state->leadcount_include !== null) {
+            if ($leadCount === null) {
+                return false;
+            }
+            $included = array_map('trim', explode(',', $state->leadcount_include));
+            return in_array((string) $leadCount, $included, true);
         }
         if ($state->leadcount_min !== null) {
             if ($leadCount === null || $leadCount < $state->leadcount_min) {
@@ -422,34 +429,6 @@ class SchedulerService
         return 'both';
     }
 
-    // protected function lotSatisfiesPartRules(int $setupStateId, int $machineId, ?string $partName): bool
-    // {
-    //     $rules = $this->ref['part_rules_by_state']->get($setupStateId, collect());
-
-    //     if ($rules->isEmpty()) {
-    //         return true;
-    //     }
-
-    //     if (!$partName) {
-    //         return false;
-    //     }
-
-    //     foreach ($rules as $rule) {
-    //         $match = match ($rule->match_type) {
-    //             'exact' => $rule->match_value === $partName,
-    //             'contains' => str_contains($partName, $rule->match_value),
-    //             'dedicated_list' => isset($this->ref['dedicated_parts']["{$machineId}|{$partName}"]),
-    //             default => false,
-    //         };
-
-    //         if ($match) {
-    //             return true;
-    //         }
-    //     }
-
-    //     return false;
-    // }
-
     /**
      * Part names with a rule row get *exclusive* routing: whichever
      * setup_state(s) their rule(s) name, structural fields ignored
@@ -604,10 +583,6 @@ class SchedulerService
         $best = null;
 
         foreach ($candidateStates as $state) {
-            // if (!$this->lotSatisfiesPartRules($state->setup_state_id, $state->machine_id, $lot->Part_Name)) {
-            //     continue;
-            // }
-
             $remainingCapacity = $remainingCapacityByMachine[$state->machine_id] ?? null;
 
             if ($remainingCapacity === null) {

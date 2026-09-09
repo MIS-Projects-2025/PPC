@@ -25,9 +25,15 @@ select * from ppc.customer_data_wip where `Package_Name` = 'QFN' and `Body_Size`
 select * from ppc.customer_data_wip where `Package_Name` = 'QFN' and `Body_Size` like '%5x7x0.75%';
 select distinct `Focus_Group` from ppc.customer_data_wip where `Package_Name` = 'SOT_23_3' and `Lead_Count` = 3;
 select distinct `Ramp_Time` from ppc.customer_data_wip;
+select distinct `Lead_Count` from ppc.customer_data_wip;
 show create table ppc.f3;
 select * from ppc.f3 limit 1000;
 select * from qdn_db.machine_list where machine_num like '%01V%';
+
+select * from ppc.customer_data_wip where `Part_Name` like '%LTC7138%';
+select distinct `Part_Name` from ppc.customer_data_wip where `Part_Name` like '%LTC7138%' limit 9999;
+select distinct `Package_Name` from ppc.customer_data_wip where `Part_Name` like '%LTC7138%' limit 9999;
+
 SHOW TRIGGERS;
 SELECT 
     Part_Name,

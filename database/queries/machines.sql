@@ -1,4 +1,5 @@
 select * from qdn_db.machine_list where machine_num like "%05HSI400T%";
+select * from qdn_db.machine_list where machine_num like "%06HSI%";
 
 
 
