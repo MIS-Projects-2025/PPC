@@ -116,7 +116,7 @@ import DataIntegrityModal, {
 import DisseminationSummaryModal, {
     DISSEMINATION_MODAL_ID,
 } from "@/Components/LoadingPlan/DisseminationSummary";
-import GlobalTableHeader from "@/Components/LoadingPlan/GlobalTableHeader";
+// import GlobalTableHeader from "@/Components/LoadingPlan/GlobalTableHeader";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
 import MachineChip from "@/Components/LoadingPlan/MachineChip";
 import MachineSection, {
@@ -2692,10 +2692,10 @@ export default function LoadingPlanTable({
                                     style={{ minWidth: TOTAL_MIN_WIDTH }}
                                 >
                                     <div className="sticky top-0 z-20 w-full">
-                                        <GlobalTableHeader
+                                        {/* <GlobalTableHeader
                                             sorting={sorting}
                                             onSortingChange={setSorting}
-                                        />
+                                        /> */}
                                     </div>
                                     <GapInfoContext.Provider value={gapInfo}>
                                         <TableInteractionContext.Provider
