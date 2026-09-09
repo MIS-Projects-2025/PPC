@@ -1,3 +1,4 @@
+import generateId from "@/Utils/generateId";
 import { Deferred } from "@inertiajs/react";
 import { useState } from "react";
 
@@ -53,7 +54,7 @@ function mismatchReason(row) {
         : "field_mismatch";
 }
 
-export const DATA_INTEGRITY_MODAL_ID = `data_integrity_modal-${crypto.randomUUID()}`;
+export const DATA_INTEGRITY_MODAL_ID = `data_integrity_modal-${generateId()}`;
 
 function DataIntegrityModal({
     partnameMismatches,

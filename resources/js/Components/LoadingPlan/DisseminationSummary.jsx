@@ -1,3 +1,4 @@
+import generateId from "@/Utils/generateId";
 import { useId, useRef } from "react";
 
 function StatusBadge({ overCapacity }) {
@@ -23,7 +24,7 @@ function FlagBadge({ flag }) {
     );
 }
 
-export const DISSEMINATION_MODAL_ID = `dissemination-modal-${crypto.randomUUID()}`;
+export const DISSEMINATION_MODAL_ID = `dissemination-modal-${generateId()}`;
 
 export default function DisseminationSummaryModal({
     summary,

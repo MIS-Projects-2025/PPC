@@ -1,4 +1,5 @@
 import { parseDatetime } from "@/Lib/time.js";
+import generateId from "@/Utils/generateId";
 import dayjs from "dayjs"; // or whatever date lib is already available
 
 const GAP_LABEL = "Gap";
@@ -70,7 +71,7 @@ export function applyTimeStartEdit(
         );
     } else {
         const newBlock = {
-            _dndId: `entry-${crypto.randomUUID()}`,
+            _dndId: `entry-${generateId()}`,
             is_block: true,
             entry_type: "block",
             block_label: GAP_LABEL,
