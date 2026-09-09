@@ -3,6 +3,7 @@ import SidebarLink from "@/Components/sidebar/SidebarLink";
 import { BiBarcode, BiCabinet, BiImport } from "react-icons/bi";
 import { FaBatteryHalf, FaCheckCircle, FaRecycle } from "react-icons/fa";
 import { FaCodeBranch, FaLayerGroup, FaTruckPickup } from "react-icons/fa6";
+import { ImCalendar } from "react-icons/im";
 import {
     LuLayoutDashboard,
     LuList,
@@ -66,6 +67,21 @@ export default function NavLinks({ isCollapse = false }) {
                         href: route("residual.dashboard"),
                         label: "Residual Dashboard",
                         icon: <FaRecycle className="w-4 h-4" />,
+                        notification: false,
+                    },
+                ]}
+                notification={false}
+            />
+
+            <Dropdown
+                isIconOnly={isCollapse}
+                label="Loading Plan"
+                icon={<ImCalendar className="w-4 h-4" />}
+                links={[
+                    {
+                        href: route("loading-plan.index"),
+                        label: "Loading Plan",
+                        icon: <ImCalendar className="w-4 h-4" />,
                         notification: false,
                     },
                 ]}
