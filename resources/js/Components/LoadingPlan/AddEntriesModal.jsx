@@ -4,10 +4,10 @@ import { TableActionsContext } from "./RowContent";
 const DEFAULT_BLOCK_PRESETS = {
     setup: { label: "Set-up", duration: 120 },
     conversion: { label: "Conversion", duration: 600 },
-    pm: { label: "PM", duration: 120 },
-    systemTime: { label: "System Time", duration: 600 },
-    hardDown: { label: "Hard Down", duration: 600 },
-    configuration: { label: "Configuration", duration: 600 },
+    pm: { label: "Preventive Maintenance", duration: 720 },
+    systemTime: { label: "System Time", duration: 240 },
+    hardDown: { label: "Hard Down", duration: 720 },
+    configuration: { label: "Configuration", duration: 360 },
 };
 
 const AddEntryModal = forwardRef(function AddEntryModal(

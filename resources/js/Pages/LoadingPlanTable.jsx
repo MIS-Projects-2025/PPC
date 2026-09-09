@@ -129,12 +129,12 @@ import {
     TableInteractionContext,
 } from "@/Components/LoadingPlan/MachineSectionBody";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
-import PackageTabs from "@/Components/LoadingPlan/PackageTabs";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import {
     EDITABLE_COLUMNS,
     TableActionsContext,
 } from "@/Components/LoadingPlan/RowContent";
+import PackageTabs from "@/Components/LoadingPlan/ScrollableTabs";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
@@ -144,16 +144,16 @@ import {
     packagesInGroup,
     toReverseMap,
 } from "@/Constants/loadingPlanPackageGroups.js";
-import {
-    applyTimeStartEdit,
-    findMachineNeighbors,
-    recomputeMachine,
-} from "@/Constants/loadingPlanSchedule.js";
 import { hasTimeline, MACHINE_MANUAL } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
 import { useMutation } from "@/Hooks/useMutation";
 import { useToast } from "@/Hooks/useToast";
 import { droppableTokenToMachine } from "@/Lib/dnd.js";
+import {
+    applyTimeStartEdit,
+    findMachineNeighbors,
+    recomputeMachine,
+} from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 import { createUndoStore } from "@/Store/undoStore";
 import toSnakeCase from "@/Utils/toSnakeCase";
 import {
@@ -469,7 +469,6 @@ export default function LoadingPlanTable({
     data: initialData,
     date,
     machines: serverMachines,
-
     machineDayStarts,
     disseminationSummary,
     machineCapacity,

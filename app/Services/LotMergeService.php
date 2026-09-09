@@ -92,8 +92,8 @@ class LotMergeService
                 $sourceEntry->resolveRootLotId()
             );
 
-            $targetEnriched->merge_info = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $sourceLotId];
-            $sourceEnriched->merge_info = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $targetLotId];
+            $targetEnriched['merge_info'] = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $sourceLotId];
+            $sourceEnriched['merge_info'] = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $targetLotId];
 
             return [
                 'merge'  => $merge->fresh(),
@@ -147,7 +147,7 @@ class LotMergeService
                     $targetEntry->fresh(),
                     $targetEntry->resolveRootLotId()
                 );
-                $targetEntry->merge_info = null;
+                $targetEntry['merge_info'] = null;
             }
 
             if ($sourceEntry) {
@@ -156,7 +156,7 @@ class LotMergeService
                     $sourceEntry->fresh(),
                     $sourceEntry->resolveRootLotId()
                 );
-                $sourceEntry->merge_info = null;
+                $sourceEntry['merge_info'] = null;
             }
 
             return [
@@ -209,7 +209,7 @@ class LotMergeService
                     $targetEntry->fresh(),
                     $targetEntry->resolveRootLotId()
                 );
-                $targetEntry->merge_info = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
+                $targetEntry['merge_info'] = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
             }
 
             if ($sourceEntry) {
@@ -218,7 +218,7 @@ class LotMergeService
                     $sourceEntry->fresh(),
                     $sourceEntry->resolveRootLotId()
                 );
-                $sourceEntry->merge_info = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
+                $sourceEntry['merge_info'] = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
             }
 
             return ['merge' => $merge->fresh(), 'target' => $targetEntry, 'source' => $sourceEntry];

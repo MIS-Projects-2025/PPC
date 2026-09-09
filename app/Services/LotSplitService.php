@@ -109,17 +109,17 @@ class LotSplitService
             $this->recalculateParentQty($parentEntry);
 
             $freshParent = $loadingPlanService->enrichEntryForResponse($parentEntry->fresh(), $rootLotId);
-
+            // DD($freshParent);
             // createPlannedLot's splitInfo reflects the pre-split cache (built at
             // service construction) — override with the split we just created.
-            $freshParent->split_info = [
+            $freshParent['split_info'] = [
                 'isParent'  => true,
                 'isChild'   => false,
                 'rootLotId' => $rootLotId,
                 'splitId'   => null, // ambiguous when a parent has multiple splits — matches buildSplitMeta()'s convention
             ];
 
-            $childEntry->split_info = [
+            $childEntry['split_info'] = [
                 'isParent'  => false,
                 'isChild'   => true,
                 'rootLotId' => $rootLotId,
@@ -172,12 +172,12 @@ class LotSplitService
                 $this->recalculateParentQty($parentEntry);
                 $parentEntry = $loadingPlanService->enrichEntryForResponse($parentEntry->fresh(), $split->root_lot_id);
 
-                $parentQuantity = LotQuantity::where('lot_id', $parentEntry->lot_id)
+                $parentQuantity = LotQuantity::where('lot_id', $parentEntry['lot_id'])
                     ->where('scheduled_date', $split->scheduled_date)
                     ->first();
 
                 $stillActiveSplits = LotSplit::active()
-                    ->where('parent_lot_id', $parentEntry->lot_id)
+                    ->where('parent_lot_id', $parentEntry['lot_id'])
                     ->where('scheduled_date', $split->scheduled_date)
                     ->exists();
 

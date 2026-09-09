@@ -27,6 +27,8 @@ class PartName extends Model
         'generic_name',
         'drypack',
         'recipe',
+        'created_by',
+        'updated_by',
     ];
 
     protected $casts = [
@@ -35,4 +37,13 @@ class PartName extends Model
     ];
 
     public $timestamps = false;
+
+    public static function findByPartName(?string $partName): ?self
+    {
+        if (!$partName) {
+            return null;
+        }
+
+        return static::query()->where('devicename', $partName)->first();
+    }
 }

@@ -18,8 +18,9 @@ class LoadingPlanFormulas
 
     public ?float $ct;
     public ?float $osl;
-    public bool $cycleTimeExceedResidual;
+    public bool $cycleTimeExceedOverall;
     public bool $cycleTimeExceed;
+    public bool $cycleTimeExceedResidual;
     public bool $isBakeHighlight;
 
     /**
@@ -50,8 +51,10 @@ class LoadingPlanFormulas
         $this->ct = self::computeCT($dateLoaded, $beStarttime);
         $this->osl = self::computeOSL($this->ct, $backendLeadtime);
 
-        $this->cycleTimeExceedResidual = ($cr3 === 'RES') && ($lotEntryTimeDays > 2);
         $this->cycleTimeExceed = $this->ct !== null && $this->ct > 2;
+        $this->cycleTimeExceedResidual = ($cr3 === 'RES') && ($lotEntryTimeDays > 2);
+
+        $this->cycleTimeExceedOverall = $this->cycleTimeExceedResidual || $this->cycleTimeExceed;
 
         $this->isBakeHighlight = ($bake === 'For Bake')
             && in_array($station, self::BAKE_STATIONS, true)

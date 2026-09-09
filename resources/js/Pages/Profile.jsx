@@ -1,9 +1,9 @@
-import { Head, router, usePage } from "@inertiajs/react";
-import { useState } from "react";
 import InputError from "@/Components/InputError";
 import InputLabel from "@/Components/InputLabel";
 import TextInput from "@/Components/TextInput";
 import useUserStore from "@/Store/useUserStore";
+import { Head, router, usePage } from "@inertiajs/react";
+import { useState } from "react";
 
 export default function Profile({ profile, errors }) {
     console.log("🚀 ~ Profile ~ profile:", profile);
@@ -18,24 +18,24 @@ export default function Profile({ profile, errors }) {
 
     const [passwordForm, setPasswordForm] = useState(false);
 
-    const handleChangePassword = () => {
-        router.post(
-            route("changePassword"),
-            { ...password },
-            {
-                preserveScroll: true,
-                onSuccess: () => {
-                    const token = localStorage.getItem("authify-token");
-                    localStorage.removeItem("authify-token");
-                    router.get(route("logout"));
-                    useUserStore.getState().clearUserData();
-                    window.location.href = `http://192.168.20.21:8200/logout?key=${encodeURIComponent(
-                        token,
-                    )}&redirect=${encodeURIComponent(route("dashboard"))}`;
-                },
-            },
-        );
-    };
+	const handleChangePassword = () => {
+		router.post(
+			route("changePassword"),
+			{ ...password },
+			{
+				preserveScroll: true,
+				onSuccess: () => {
+					const token = localStorage.getItem("authify-token");
+					localStorage.removeItem("authify-token");
+					router.get(route("logout"));
+					useUserStore.getState().clearUserData();
+					window.location.href = `http://192.168.20.21:8200/logout?key=${encodeURIComponent(
+						token,
+					)}&redirect=${encodeURIComponent(route("dashboard"))}`;
+				},
+			},
+		);
+	};
 
     return (
         <>

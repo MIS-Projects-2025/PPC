@@ -7,6 +7,8 @@ use App\Services\LotScheduleCalculator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Awobaz\Compoships\Compoships;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Carbon\Carbon;
 
 class LoadingPlanEntry extends Model
 {
@@ -28,9 +30,13 @@ class LoadingPlanEntry extends Model
         'time_start',
         'time_end',
         'lock_version',
+        'is_manual_expedite',
         'machine_snapshot',
         'doable_snapshot',
         'finalized_at',
+        'resulting_setup_state_id',
+        'operation_type',
+        'matched_rule_id',
     ];
 
     protected $casts = [
@@ -91,6 +97,13 @@ class LoadingPlanEntry extends Model
         return $this->machineModel?->machine_num;
     }
 
+    public function activeLotSplit(): HasOne
+    {
+        return $this->hasOne(LotSplit::class, 'child_lot_id', 'lot_id')
+            ->whereColumn('scheduled_date', 'loading_plan_entries.scheduled_date')
+            ->active();
+    }
+
     // capacity_uph_snapshot is now stored in lot_quantities, so this method is no longer used.
     // protected static function booted()
     // {
@@ -110,9 +123,19 @@ class LoadingPlanEntry extends Model
      */
     public function resolveRootLotId(): string
     {
-        $asChild = LotSplit::active()->where('child_lot_id', $this->lot_id)->value('root_lot_id');
+        // 1. Use loaded relation if available
+        if ($this->relationLoaded('activeLotSplit')) {
+            return $this->activeLotSplit?->root_lot_id ?? $this->lot_id;
+        }
 
-        return $asChild ?? $this->lot_id;
+        // 2. Query DB if not loaded
+        $rootLotId = LotSplit::active()
+            ->where('child_lot_id', $this->lot_id)
+            ->where('scheduled_date', $this->scheduled_date->toDateString())
+            ->value('root_lot_id');
+
+        // 3. Fallback to $this->lot_id
+        return $rootLotId ?? $this->lot_id;
     }
 
     /**
@@ -160,5 +183,32 @@ class LoadingPlanEntry extends Model
         }
 
         return $entry;
+    }
+
+    public function resultingSetupState(): BelongsTo
+    {
+        return $this->belongsTo(MachineSetupState::class, 'resulting_setup_state_id', 'setup_state_id');
+    }
+
+    public function matchedRule(): BelongsTo
+    {
+        return $this->belongsTo(MachineTransitionRule::class, 'matched_rule_id', 'rule_id');
+    }
+
+    /** Not yet started — the "open window" a rebuild is allowed to touch. */
+    public function scopeOpen(Builder $query): Builder
+    {
+        return $query
+            ->where(function ($q) {
+                $q->whereNull('time_start')->orWhere('time_start', '>', Carbon::now());
+            });
+    }
+
+    /** Already started (or past) — frozen, cannot be moved by a rebuild. */
+    public function scopeFrozen(Builder $query): Builder
+    {
+        return $query
+            ->whereNotNull('time_start')
+            ->where('time_start', '<=', Carbon::now());
     }
 }

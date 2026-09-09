@@ -60,6 +60,12 @@ function DataIntegrityModal({
     unknownPackages,
     recipeMismatches,
 }) {
+
+    console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ recipeMismatches:", recipeMismatches);
+
+    console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ unknownPackages:", unknownPackages);
+
+    console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ partnameMismatches:", partnameMismatches);
     const [activeTab, setActiveTab] = useState("overview");
 
     const mismatchCount = partnameMismatches?.length;
@@ -353,11 +359,11 @@ function MismatchesTable({ rows }) {
                     {rows.map((row) => {
                         const info = getReasonInfo(mismatchReason(row));
                         return (
-                            <tr key={row.customer_data_id ?? row.lot_id}>
+                            <tr key={row.customer_data_id ?? row.Lot_Id}>
                                 <td className="font-mono text-xs">
-                                    {row.lot_id}
+                                    {row.Lot_Id}
                                 </td>
-                                <td>{row.part_name}</td>
+                                <td>{row.Part_Name}</td>
                                 <td
                                     className={`bg-${info.tone} text-center p-0`}
                                 >
@@ -415,6 +421,8 @@ function UnknownPackagesList({ packages }) {
 }
 
 function RecipeIssuesTable({ rows }) {
+
+    console.log("LOG ~ DataIntegrityModal.jsx:419 ~ RecipeIssuesTable ~ rows:", rows);
     if (!rows?.length) {
         return <ValidState text="No recipe issues found." />;
     }
@@ -434,11 +442,11 @@ function RecipeIssuesTable({ rows }) {
                     {rows.map((row) => {
                         const info = getReasonInfo(row.reason);
                         return (
-                            <tr key={row.customer_data_id ?? row.lot_id}>
+                            <tr key={row.customer_data_id ?? row.Lot_Id}>
                                 <td className="font-mono text-xs">
-                                    {row.lot_id}
+                                    {row.Lot_Id}
                                 </td>
-                                <td>{row.part_name}</td>
+                                <td>{row.Part_Name}</td>
                                 <td
                                     className={`bg-${info.tone} text-center p-0`}
                                 >

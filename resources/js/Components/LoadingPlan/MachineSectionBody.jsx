@@ -1,10 +1,6 @@
 import { machineToDroppableToken } from "@/Lib/dnd.js";
 import { useDroppable } from "@dnd-kit/core";
 import {
-    SortableContext,
-    verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import {
     getCoreRowModel,
     getSortedRowModel,
     useReactTable,
@@ -12,36 +8,14 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
     createContext,
-    Fragment,
     memo,
     useContext,
     useLayoutEffect,
     useMemo,
     useRef,
 } from "react";
-import { COLUMNS, TOTAL_MIN_WIDTH } from "./columns";
-import GapHintRow from "./GapHintRow";
-import { SortableRow } from "./SortableRow";
 
 export const PREFIX_EMPTY_DROPPABLE = "empty-";
-
-function EmptyMachineDropRow({ machine }) {
-    const { setNodeRef, isOver } = useDroppable({
-        id: `${PREFIX_EMPTY_DROPPABLE}${machineToDroppableToken(machine)}`,
-    });
-    return (
-        <tr ref={setNodeRef}>
-            <td
-                colSpan={COLUMNS.length}
-                className={`px-2.5 py-6 text-center text-xs ${
-                    isOver ? "bg-info/10 text-info" : "text-base-content/30"
-                }`}
-            >
-                Drop a lot here
-            </td>
-        </tr>
-    );
-}
 
 export const ScrollParentContext = createContext(null);
 
@@ -65,7 +39,7 @@ const MachineSectionBody = memo(function MachineSectionBody({
 
     const table = useReactTable({
         data: rows,
-        columns: COLUMNS,
+        columns: null,
         state: { sorting: globalSorting },
         onSortingChange,
         getCoreRowModel: getCoreRowModel(),
@@ -108,74 +82,75 @@ const MachineSectionBody = memo(function MachineSectionBody({
         rowVirtualizer.getTotalSize() - (virtualRows.at(-1)?.end ?? 0);
 
     return (
-        <div ref={sectionRef} className="rounded-b-xl">
-            <table
-                className="w-full border-collapse"
-                style={{ tableLayout: "fixed", minWidth: TOTAL_MIN_WIDTH }}
-            >
-                <colgroup>
-                    {table.getAllColumns().map((col) => (
-                        <col key={col.id} style={{ width: col.getSize() }} />
-                    ))}
-                </colgroup>
-                <tbody>
-                    <SortableContext
-                        items={dndIds}
-                        strategy={verticalListSortingStrategy}
-                    >
-                        {tableRows.length === 0 ? (
-                            <EmptyMachineDropRow machine={machine} />
-                        ) : (
-                            <>
-                                {paddingTop > 0 && (
-                                    <tr>
-                                        <td
-                                            style={{ height: paddingTop }}
-                                            colSpan={COLUMNS.length}
-                                        />
-                                    </tr>
-                                )}
-                                {virtualRows.map((vRow) => {
-                                    const row = tableRows[vRow.index];
-                                    const gapEntry =
-                                        allGapInfo[machine]?.[
-                                            row.original._dndId
-                                        ];
-                                    return (
-                                        <Fragment key={row.original._dndId}>
-                                            {gapEntry && (
-                                                <GapHintRow
-                                                    segments={gapEntry.segments}
-                                                    gapStart={gapEntry.gapStart}
-                                                    gapEnd={gapEntry.gapEnd}
-                                                />
-                                            )}
-                                            <SortableRow
-                                                row={row}
-                                                orderedDndIds={dndIds}
-                                                itemNumber={vRow.index + 1}
-                                                measureElement={
-                                                    rowVirtualizer.measureElement
-                                                }
-                                                virtualIndex={vRow.index}
-                                            />
-                                        </Fragment>
-                                    );
-                                })}
-                                {paddingBottom > 0 && (
-                                    <tr>
-                                        <td
-                                            style={{ height: paddingBottom }}
-                                            colSpan={COLUMNS.length}
-                                        />
-                                    </tr>
-                                )}
-                            </>
-                        )}
-                    </SortableContext>
-                </tbody>
-            </table>
-        </div>
+        <div>empty</div>
+        // <div ref={sectionRef} className="rounded-b-xl">
+        //     <table
+        //         className="w-full border-collapse"
+        //         style={{ tableLayout: "fixed", minWidth: TOTAL_MIN_WIDTH }}
+        //     >
+        //         <colgroup>
+        //             {table.getAllColumns().map((col) => (
+        //                 <col key={col.id} style={{ width: col.getSize() }} />
+        //             ))}
+        //         </colgroup>
+        //         <tbody>
+        //             <SortableContext
+        //                 items={dndIds}
+        //                 strategy={verticalListSortingStrategy}
+        //             >
+        //                 {tableRows.length === 0 ? (
+        //                     <EmptyMachineDropRow machine={machine} />
+        //                 ) : (
+        //                     <>
+        //                         {paddingTop > 0 && (
+        //                             <tr>
+        //                                 <td
+        //                                     style={{ height: paddingTop }}
+        //                                     colSpan={COLUMNS.length}
+        //                                 />
+        //                             </tr>
+        //                         )}
+        //                         {virtualRows.map((vRow) => {
+        //                             const row = tableRows[vRow.index];
+        //                             const gapEntry =
+        //                                 allGapInfo[machine]?.[
+        //                                     row.original._dndId
+        //                                 ];
+        //                             return (
+        //                                 <Fragment key={row.original._dndId}>
+        //                                     {gapEntry && (
+        //                                         <GapHintRow
+        //                                             segments={gapEntry.segments}
+        //                                             gapStart={gapEntry.gapStart}
+        //                                             gapEnd={gapEntry.gapEnd}
+        //                                         />
+        //                                     )}
+        //                                     <SortableRow
+        //                                         row={row}
+        //                                         orderedDndIds={dndIds}
+        //                                         itemNumber={vRow.index + 1}
+        //                                         measureElement={
+        //                                             rowVirtualizer.measureElement
+        //                                         }
+        //                                         virtualIndex={vRow.index}
+        //                                     />
+        //                                 </Fragment>
+        //                             );
+        //                         })}
+        //                         {paddingBottom > 0 && (
+        //                             <tr>
+        //                                 <td
+        //                                     style={{ height: paddingBottom }}
+        //                                     colSpan={COLUMNS.length}
+        //                                 />
+        //                             </tr>
+        //                         )}
+        //                     </>
+        //                 )}
+        //             </SortableContext>
+        //         </tbody>
+        //     </table>
+        // </div>
     );
 });
 

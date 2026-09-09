@@ -53,4 +53,15 @@ class MachineCapacity extends Model
                     ->orWhere('effective_to', '>=', $date);
             });
     }
+
+    public static function effectiveFor(int $machineId, \Carbon\Carbon $date): ?self
+    {
+        return static::query()
+            ->where('machine_id', $machineId)
+            ->where('effective_from', '<=', $date->toDateString())
+            ->where(function ($q) use ($date) {
+                $q->whereNull('effective_to')->orWhere('effective_to', '>=', $date->toDateString());
+            })
+            ->first();
+    }
 }

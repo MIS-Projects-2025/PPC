@@ -1,8 +1,8 @@
 import { COLUMNS } from "@/Components/LoadingPlan/columns";
 import { GripIcon } from "@/Components/LoadingPlan/GripIcon";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge";
-import { computeCT, computeOSL } from "@/Constants/loadingPlanSchedule";
 import { fmt2dp } from "@/Lib/format";
+import { computeCT, computeOSL } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { formatExpectedPT } from "@/Lib/time";
 
 // ---------------------------------------------------------------------------

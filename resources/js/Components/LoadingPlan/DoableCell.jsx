@@ -1,4 +1,5 @@
 import React from "react";
+import { LuTriangleAlert } from "react-icons/lu";
 import HoverCell from "./HoverCell";
 
 // ---------------------------------------------------------------------------
@@ -9,12 +10,12 @@ const DOABLE_STATUS_COPY = {
     unknown: {
         label: "No commit found",
         description:
-            "No commit exists yet for this customer, so doable can't be calculated.",
+            "No commit exists yet for this lot, so doable can't be calculated.",
     },
     no_recipe: {
         label: "No recipe defined",
         description:
-            "This item has no recipe for this customer, so doable can't be calculated.",
+            "This item has no recipe for this lot, so doable can't be calculated.",
     },
     qty_below_recipe: {
         label: "Below recipe minimum",
@@ -29,11 +30,23 @@ const DOABLE_STATUS_COPY = {
 // that reveals why the value looks the way it does on hover.
 //
 // Props:
-//   value  — the numeric doable value (may be 0 or null)
-//   status — one of 'ok' | 'unknown' | 'no_recipe' | 'qty_below_recipe'
+//   value        — the numeric doable value (may be 0 or null)
+//   status       — one of 'ok' | 'unknown' | 'no_recipe' | 'qty_below_recipe'
+//   recipeSource — object containing recipe details or null
 // ---------------------------------------------------------------------------
 export function DoableCell({ value, status, recipeSource }) {
-    const display = value > 0 ? value.toLocaleString() : "—";
+    let display;
+
+    if (status === "no_recipe") {
+        display = (
+            <span className="inline-flex items-center gap-1.5 text-error font-medium">
+                <LuTriangleAlert className="w-4 h-4 text-error shrink-0" />
+                No Recipe
+            </span>
+        );
+    } else {
+        display = value > 0 ? value.toLocaleString() : "—";
+    }
 
     const statusCopy = DOABLE_STATUS_COPY[status] ?? null;
 
@@ -109,21 +122,3 @@ export function DoableCell({ value, status, recipeSource }) {
         </HoverCell>
     );
 }
-
-// ---------------------------------------------------------------------------
-// Column def usage:
-//
-//   import { DoableCell } from "./DoableCell";
-//
-//   columnHelper.accessor("Doable", {
-//     header: "Doable",
-//     size: 80,
-//     cell: (info) => (
-//       <DoableCell
-//         value={info.getValue()}
-//         status={info.row.original.doable_status}
-//         recipeSource={info.row.original.doable_recipe_source}
-//       />
-//     ),
-//   }),
-// ---------------------------------------------------------------------------
