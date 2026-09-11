@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\MachinePlatformCapacityBand;
 use App\Models\QdnMachine;
+use App\Models\PartName;
 use App\Models\LotQuantity;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -34,6 +35,15 @@ class LotScheduleCalculator
         $this->lotIds = collect($lotIds)->all();
     }
 
+    private function isTubeOrTrayAllocation(?string $allocation): bool
+    {
+        if ($allocation === null) {
+            return false;
+        }
+
+        return in_array(strtoupper(trim($allocation)), ['TUBE', 'TRAY', 'WAFFLE_TRAY'], true);
+    }
+
     /**
      * Explicitly loads the devicename => package_list row map. Must be called
      * before recalculate()/recalculateAndRetime() — those throw otherwise.
@@ -55,7 +65,7 @@ class LotScheduleCalculator
             ->unique()
             ->all();
 
-        $query = DB::connection('qdn_db')->table('package_list')->select('id', 'devicename', 'recipe');
+        $query = PartName::query()->select('id', 'devicename', 'recipe', 'allocation');
 
         if (! empty($partNames)) {
             $query->whereIn('devicename', $partNames);
@@ -238,22 +248,31 @@ class LotScheduleCalculator
         $recipe = $packageListRow?->recipe;
         $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
 
-        $lotQuantity->recipe_used = $recipe;
-        $lotQuantity->recipe_source_id = $packageListRow?->id;
-        $lotQuantity->commit = $commit;
-        $lotQuantity->recipe_status = match (true) {
+        $recipeStatus = match (true) {
             $recipe && $recipe > 0 && $commit === 0 => 'qty_below_recipe',
             $recipe && $recipe > 0                  => 'ok',
             default                                 => 'no_recipe',
         };
+
+        // Packaging tolerance: TUBE/TRAY (incl. WAFFLE_TRAY) allocations allow a final
+        // partial container down to 95% of one recipe unit. This lives here only —
+        // it is deliberately NOT mirrored in the ppc.trg_lot_commit_insert trigger.
+        if ($this->isTubeOrTrayAllocation($packageListRow?->allocation)) {
+            $tolerance = $effectiveQty * 0.95;
+            $commit = (int) floor($tolerance);
+            $recipeStatus = 'ok_tube_tray';
+        }
+
+        $lotQuantity->recipe_used = $recipe;
+        $lotQuantity->recipe_source_id = $packageListRow?->id;
+        $lotQuantity->commit = $commit;
+        $lotQuantity->recipe_status = $recipeStatus;
 
         $capacityUph = $this->capacityUph($machineName, $effectiveQty);
         $lotQuantity->capacity_uph_snapshot = $capacityUph;
 
         $lotQuantity->save();
 
-        // write directly onto the caller's instance, not a separate query —
-        // keeps $entry->accu_time correct in-memory for whatever runs next
         $entry->accu_time = $this->accuTime($commit, $capacityUph);
         $entry->save();
     }

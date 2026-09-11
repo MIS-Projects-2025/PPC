@@ -1,7 +1,9 @@
 select * from qdn_db.machine_list where machine_num like "%05HSI400T%";
 select * from qdn_db.machine_list where machine_num like "%06HSI%";
+show create table qdn_db.machine_list;
+select * from qdn_db.machine_focus_group_rules;
 
-
+select 
 
 -- select * from qdn_db.machine_list where machine_num like "%HSI400T%";
 -- 110	02HSI400T	HSI400	TURRET	TNR	PMNT 2050	CN 1002	9002214	EXISTECH	Active	01/01/2013	PL1	F2	EXISTECH	2518 x 1250 X 2100	230

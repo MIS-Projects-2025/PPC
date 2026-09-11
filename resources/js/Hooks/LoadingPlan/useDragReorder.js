@@ -110,6 +110,8 @@ export function useDragReorder({
                     return prev;
                 }
 
+
+                console.log("LOG ~ useDragReorder.js:114 ~ useDragReorder ~ baseTimes:", baseTimes);
                 if (baseTimes) {
                     recomputeMachine(next, toMachine, baseTimes, date);
                     if (isTransfer) recomputeMachine(next, fromMachine, baseTimes, date);
@@ -169,7 +171,11 @@ export function useDragReorder({
                         (prev) =>
                             prev.map((r) =>
                                 r.id === moved.id
-                                    ? { ...r, sequence_order: entry.sequence_order, lock_version: entry.lock_version }
+                                    ? { ...r, 
+                                        time_start: entry.time_start, 
+                                        time_end: entry.time_end, 
+                                        sequence_order: entry.sequence_order, 
+                                        lock_version: entry.lock_version }
                                     : r,
                             ),
                         true,

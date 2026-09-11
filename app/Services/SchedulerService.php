@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\Scheduling;
+namespace App\Services;
 
 use App\Models\CustomerDataWip;
 use App\Models\LoadingPlanEntry;
@@ -9,7 +9,11 @@ use App\Models\MachineSetupState;
 use App\Models\MachineCapabilityPartRule;
 use App\Models\MachineTransitionRule;
 use App\Models\MachineTransitionRuleException;
+use App\Models\MachineAutoPartRule;
+use App\Models\MachineFocusGroupRule;
+use App\Models\MachinePartExclusion;
 use App\Services\LoadingPlanFormulas;
+use App\Services\FocusGroupFactoryService;
 use App\Models\PartName;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -31,28 +35,9 @@ class SchedulerService
      * NOTE: DLT here maps to 'F1' — every prior confirmation had it as
      * null ("Removed, not TSPI"). Flagging in case this is a typo.
      */
-    private const FOCUS_GROUP_FACTORY_MAP = [
-        'AER' => 'F1',
-        'COM' => 'F1',
-        'HPC' => 'F1',
-        'HPCA' => 'F1',
-        'HPCC' => 'F1',
-        'HPCS' => 'F1',
-        'INT' => 'F1',
-        'MIC' => 'F1',
-        'MIC_WL' => 'F1',
-        'MPD' => 'F1',
-        'RFC' => 'F1',
-        'STR' => 'F1',
-        'CV' => 'F2',
-        'LT' => 'F2',
-        'LTCL' => 'F2',
-        'LTI' => 'F2',
-        'CV1' => null,
-        'SOF' => null,
-        'WLT' => null,
-        'DLT' => 'F1', // confirmed
-    ];
+    public function __construct(
+        protected FocusGroupFactoryService $focusGroupFactoryService
+    ) {}
 
     /** Preloaded reference data for the batch currently being processed. */
     private array $ref = [];
@@ -113,6 +98,20 @@ class SchedulerService
                 ->whereIn('part_name', $partNames)
                 ->get()
                 ->groupBy(fn($e) => "{$e->machine_id}|{$e->part_name}"),
+            'auto_part_rules_by_machine' => MachineAutoPartRule::query()
+                ->whereIn('machine_id', $relevantMachineIds)
+                ->get()
+                ->groupBy('machine_id'),
+
+            'focus_group_rules_by_machine' => MachineFocusGroupRule::query()
+                ->whereIn('machine_id', $relevantMachineIds)
+                ->get()
+                ->groupBy('machine_id'),
+
+            'part_exclusions_by_part' => MachinePartExclusion::query()
+                ->whereIn('part_name', $partNames)
+                ->get()
+                ->groupBy('part_name'),
         ];
 
         return $this->ref;
@@ -127,7 +126,7 @@ class SchedulerService
         ?string $bodySize2d,
         ?float $thickness,
         ?int $leadCount,
-        string $rampProcessType
+        ?string $rampProcessType
     ): bool {
         if ($state->factory !== $factory) {
             return false;
@@ -171,6 +170,9 @@ class SchedulerService
             if (in_array((string) $leadCount, $excluded, true)) {
                 return false;
             }
+        }
+        if ($rampProcessType === null) {
+            return false; // unrecognized ramp_time -- reject outright, even against 'both' states
         }
         if ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
             return false;
@@ -260,6 +262,7 @@ class SchedulerService
                 // fixed from focus_group/ramp_time, which don't exist on that model
                 'Focus_Group'  => $packageInfo->focus_grp,
                 'Ramp_Time'    => $packageInfo->allocation,
+                'is_auto_part' => (bool) $packageInfo->is_auto_part,
                 'CR3'          => null, // pickups assumed never RES
                 'isExpedite'   => $item['is_expedite'] ?? false,
                 'aboveCT'      => false, // pickups have no CT history to compute this from
@@ -294,6 +297,7 @@ class SchedulerService
                 $lot->Package_Name,
                 $bodySize2d,
                 $thickness,
+                $lot->is_auto_part,
                 $lot->Lead_Count,
                 $rampProcessType
             );
@@ -343,7 +347,7 @@ class SchedulerService
             return null;
         }
 
-        return self::FOCUS_GROUP_FACTORY_MAP[$focusGroup] ?? null;
+        return $this->focusGroupFactoryService->resolveFactory($focusGroup);
     }
 
     /**
@@ -412,21 +416,39 @@ class SchedulerService
     }
 
     /** Any value containing "TAPE" -> taping. "TUBE" -> tubing. REEL/other -> 'both' (unmodeled, no setup list yet). */
-    protected function resolveRampProcessType(?string $rampTime): string
+    protected function resolveRampProcessType(?string $rampTime): ?string
     {
         if (!$rampTime) {
-            return 'both';
+            return null;
         }
 
-        if (stripos($rampTime, 'TAPE') !== false) {
-            return 'taping';
-        }
+        $rampTime = strtoupper(trim($rampTime));
 
-        if ($rampTime === 'TUBE') {
-            return 'tubing';
-        }
+        $trayValues = ['TRAY', 'WAFFLE_TRAY'];
+        $tubeValues = ['TUBE'];
+        $tapeValues = [
+            'PCKTTAPE13',
+            'PCKTTAPE7',
+            '500REEL',
+            '500RL7',
+            'MINIREEL',
+            'R2',
+            'R250',
+            'REEL',
+            'REEL_7',
+            'REEL13',
+            'REEL250',
+            'REELS',
+            'REEL500',
+            'REEL7',
+            'RL',
+        ];
 
-        return 'both';
+        if (in_array($rampTime, $trayValues, true)) return 'tray';
+        if (in_array($rampTime, $tubeValues, true)) return 'tubing';
+        if (in_array($rampTime, $tapeValues, true)) return 'taping';
+
+        return null; // unmapped -- fail safe, not 'both'
     }
 
     /**
@@ -465,6 +487,53 @@ class SchedulerService
         });
     }
 
+    protected function passesNewRestrictions(int $machineId, string $factory, ?string $packageName, ?string $focusGroup, ?bool $isAutoPart, ?string $partName): bool
+    {
+        // machine_part_exclusions — pure negative, checked first
+        if (
+            $partName && $this->ref['part_exclusions_by_part']->get($partName, collect())
+            ->contains(fn($e) => $e->machine_id === $machineId)
+        ) {
+            return false;
+        }
+
+        // machine_focus_group_rules
+        $fgRules = $this->ref['focus_group_rules_by_machine']->get($machineId, collect())
+            ->where('focus_group', $focusGroup);
+        if ($fgRules->contains(fn($r) => $r->rule_type === 'exclude')) {
+            return false;
+        }
+
+        // machine_auto_part_rules — only relevant when the lot IS auto
+        if ($isAutoPart) {
+            $allAutoRulesForPackage = $this->ref['auto_part_rules_by_machine']
+                ->flatten(1)
+                ->filter(fn($r) => $r->package_name === null || $r->package_name === $packageName);
+
+            $includeOnlyMachineIds = $allAutoRulesForPackage
+                ->where('rule_type', 'include_only')
+                ->pluck('machine_id');
+
+            // GLOBAL check: if ANY include_only rule exists for this
+            // package (on any machine, not just this one), this machine
+            // is only valid if it's IN that set
+            if ($includeOnlyMachineIds->isNotEmpty() && !$includeOnlyMachineIds->contains($machineId)) {
+                return false;
+            }
+
+            // exclude check unchanged, still per-machine
+            $excludedHere = $allAutoRulesForPackage
+                ->where('machine_id', $machineId)
+                ->where('rule_type', 'exclude')
+                ->isNotEmpty();
+            if ($excludedHere) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /** Candidate states for a lot: override states if the part has any rule, else normal structural match. */
     protected function resolveCandidateStates(
         string $partName,
@@ -473,13 +542,17 @@ class SchedulerService
         ?string $packageName,
         ?string $bodySize2d,
         ?float $thickness,
+        ?bool $isAutoPart,
         ?int $leadCount,
-        string $rampProcessType
+        ?string $rampProcessType
     ): Collection {
         $overrides = $this->ref['part_name_override_states']->get($partName, collect());
 
         if ($overrides->isNotEmpty()) {
-            return $overrides->pluck('state')->filter(fn($state) => $state->factory === $factory)->values();
+            return $overrides->pluck('state')
+                ->filter(fn($state) => $state->factory === $factory)
+                ->filter(fn($state) => $this->passesNewRestrictions($state->machine_id, $factory, $packageName, $focusGroup, $isAutoPart, $partName))
+                ->values();
         }
 
         return $this->ref['setup_states']->filter(fn($state) => $this->matchesLotCapability(
@@ -491,7 +564,7 @@ class SchedulerService
             $thickness,
             $leadCount,
             $rampProcessType
-        ));
+        ))->filter(fn($state) => $this->passesNewRestrictions($state->machine_id, $factory, $packageName, $focusGroup, $isAutoPart, $partName));;
     }
 
     protected function isDedicatedListMatch(string $partName, int $setupStateId): bool
@@ -576,6 +649,7 @@ class SchedulerService
             $lot->Package_Name,
             $bodySize2d,
             $thickness,
+            $lot->is_auto_part,
             $lot->Lead_Count,
             $rampProcessType
         );
@@ -880,6 +954,7 @@ class SchedulerService
             'Lead_Count' => $wip->Lead_Count,
             'Body_Size' => $wip->Body_Size,
             'Focus_Group' => $wip->Focus_Group,
+            'is_auto_part' => $wip->Auto_Part === 'Y',
             'Ramp_Time' => $wip->Ramp_Time,
             'CR3' => $wip->CR3,
             'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),

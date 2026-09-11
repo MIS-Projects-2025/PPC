@@ -13,7 +13,42 @@ body_size,
 ramp_time
 from ppc.customer_data_wip where `Part_Name` like '%ADRF%' limit 99999;
 select * from ppc.customer_data_wip limit 100;
+select * from ppc.customer_data_wip where `Part_Name` like '%MAT12AHZ%' limit 1000;
+show create table qdn_db.package_list;
+select distinct Auto_Part from ppc.customer_data_wip;
+select * from ppc.customer_data_wip where Part_Name like '%ADG884%';
+select * from ppc.customer_data_wip where Part_Name like '%ADUM4137%';
+select distinct `Package_Name` from ppc.customer_data_wip where Part_Name like '%ADUM4137%';
+select * from ppc.customer_data_wip where Part_Name like '%ADUM4138%';
+select distinct `Package_Name` from ppc.customer_data_wip where Part_Name like '%ADUM141E%';
+select * from ppc.customer_data_wip where Part_Name like '%ADUM3202%';
+select * from ppc.customer_data_wip where Part_Name like '%ADUM32%';
+select * from ppc.customer_data_wip where Part_Name like '%ADUM3210%';
 
+show create table qdn_db.machine_setup_states;
+show create table ppc.customer_data_wip;
+show create table ppc.focus_group_factory;
+CREATE TABLE `machine_setup_states` (
+  `setup_state_id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `machine_id` int NOT NULL,
+  `factory` enum('F1','F2','F3') NOT NULL,
+  `focus_group` varchar(10) DEFAULT NULL,
+  `package_name` varchar(50) DEFAULT NULL,
+  `body_size` varchar(20) DEFAULT NULL,
+  `thickness` decimal(5,2) DEFAULT NULL,
+  `leadcount_min` int DEFAULT NULL,
+  `leadcount_max` int DEFAULT NULL,
+  `leadcount_exclude` varchar(50) DEFAULT NULL,
+  `leadcount_include` varchar(255) DEFAULT NULL,
+  `process_type` enum('taping','tubing','both') NOT NULL,
+  `capacity_daily` int DEFAULT NULL,
+  `remarks` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+)
+
+ALTER TABLE qdn_db.machine_setup_states
+  MODIFY COLUMN process_type ENUM('taping','tubing','both','tray') NOT NULL;
 
 
 select distinct `Part_Name` from ppc.customer_data_wip where `Package_Name` = 'LFCSP_SS' and `Focus_Group` = 'MPD';

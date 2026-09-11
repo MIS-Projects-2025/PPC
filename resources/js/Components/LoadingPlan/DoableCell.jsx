@@ -22,6 +22,11 @@ const DOABLE_STATUS_COPY = {
         description:
             "The committed quantity is below the recipe's minimum, so doable is 0.",
     },
+    ok_tube_tray: {
+        label: "Committed via tube/tray tolerance",
+        description:
+            "The quantity was below the recipe minimum, but this item's tube/tray allocation allows committing at 95% of the recipe.",
+    },
 };
 
 // ---------------------------------------------------------------------------

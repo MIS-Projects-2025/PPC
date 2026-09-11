@@ -286,9 +286,11 @@ export default function Deemo({
         update,
         undo,
         redo,
+        canUndo,
+        canRedo
     } = useLoadingPlanStore();
     
-    console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
+    // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
     console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
 
     const toast = useToast();
@@ -398,7 +400,7 @@ export default function Deemo({
         [activePackage, packageGroups],
     );
 
-    console.log("LOG ~ Deemo.jsx:1001 ~ Deemo ~ activePackageGroup:", activePackageGroup);
+    // console.log("LOG ~ Deemo.jsx:1001 ~ Deemo ~ activePackageGroup:", activePackageGroup);
 
     const toggleMachineCollapsed = useCallback((machine) => {
         setCollapsedMachines((prev) => {
@@ -777,19 +779,19 @@ export default function Deemo({
 
     // stub handlers — wire these up once the real bulk actions are defined
     const handleBakeApprove = useCallback(() => {
-        console.log("Approve bake lots (stub):", Array.from(selectedBakeRows));
+        // console.log("Approve bake lots (stub):", Array.from(selectedBakeRows));
     }, [selectedBakeRows]);
 
     const handleBakeReprocess = useCallback(() => {
-        console.log("Reprocess bake lots (stub):", Array.from(selectedBakeRows));
+        // console.log("Reprocess bake lots (stub):", Array.from(selectedBakeRows));
     }, [selectedBakeRows]);
 
     const handleBakeExport = useCallback(() => {
-        console.log("Export bake lots (stub):", Array.from(selectedBakeRows));
+        // console.log("Export bake lots (stub):", Array.from(selectedBakeRows));
     }, [selectedBakeRows]);
 
     const handleBakeDelete = useCallback(() => {
-        console.log("Delete bake lots (stub):", Array.from(selectedBakeRows));
+        // console.log("Delete bake lots (stub):", Array.from(selectedBakeRows));
         setSelectedBakeRows(new Set());
     }, [selectedBakeRows]);
 
@@ -811,8 +813,6 @@ export default function Deemo({
                 const activeList = activePackageGroup ?? [];
                 return activeList.includes(r.package_name);
             });
-
-            console.log("DI ~ Deemo.jsx:752 ~ Deemo ~ rowsForMachine:", rowsForMachine);
 
             if (rowsForMachine.length === 0 && !isUnassigned && !isManual) {
                 return [];
@@ -886,14 +886,14 @@ export default function Deemo({
     //     }
     // }
 
-    console.log("DI ~ Deemo.jsx:924 ~ Deemo ~ displayRows:", displayRows);
+    // console.log("DI ~ Deemo.jsx:924 ~ Deemo ~ displayRows:", displayRows);
 
     const stickyMachine = useStickyGroupHeader(displayRows, gridRef);
 
-    console.log("LOG ~ Deemo.jsx:783 ~ Deemo ~ stickyMachine:", stickyMachine);
+    // console.log("LOG ~ Deemo.jsx:783 ~ Deemo ~ stickyMachine:", stickyMachine);
     const stickyOven = useStickyGroupHeader(bakeDisplayRows, gridRef);
 
-    console.log("LOG ~ Deemo.jsx:786 ~ Deemo ~ stickyOven:", stickyOven);
+    // console.log("LOG ~ Deemo.jsx:786 ~ Deemo ~ stickyOven:", stickyOven);
 
     // Separate effect, sole job: clear the highlight 1.5s after it's set.
     // Depends ONLY on highlightedMatch — untouched by columns/displayRows
@@ -1053,20 +1053,6 @@ export default function Deemo({
     const hoveredRowData = displayRows[hoveredRow?.rowIdx] ?? null;
     const isInsertRowButtonVisible = hoveredRowData && hoveredRowData?.machine !== null && hoveredRowData?.__type === "data" && !isUpdating;
 
-    console.log("LOG ~ Deemo.jsx:1056 ~ Deemo ~ hoveredRowData.__type:", hoveredRowData?.__type);
-
-    console.log("LOG ~ Deemo.jsx:1056 ~ Deemo ~ hoveredRowData.machine:", hoveredRowData?.machine);
-
-    console.log("LOG ~ Deemo.jsx:1056 ~ Deemo ~ isInsertRowButtonVisible:", isInsertRowButtonVisible);
-
-    console.log("LOG ~ Deemo.jsx:1055 ~ Deemo ~ hoveredRowData:", hoveredRowData);
-
-    // console.log("LOG hoveredRow ~ Deemo.jsx:954 ~ Deemo ~ hoveredRow:", hoveredRow);
-    
-    // console.log("LOG hoveredRow ~ Deemo.jsx:954 ~ Deemo ~ dataR:", dataRowsRef.current[hoveredRow?.rowIdx]);
-    // console.log("LOG hoveredRow ~ Deemo.jsx:954 ~ Deemo ~dataRows:", dataRows);
-    // console.log("LOG hoveredRow ~ Deemo.jsx:954 ~ Deemo ~displayRows:", displayRows);
-
     const tableActionsValue = useMemo(
         () => ({
             handleStatusClick,
@@ -1163,12 +1149,12 @@ export default function Deemo({
 
                             <div className="w-px h-4 bg-base-300 mx-1" />
 
-                            {/* <button
+                            <button
                                 onClick={handleUndo}
                                 disabled={!canUndo() || isUpdating}
                                 className={clsx(
                                     "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
-                                    interactiveCursorClasses(isUpdating),
+                                    interactiveCursorClasses(!canUndo() || isUpdating),
                                 )}
                                 title="Undo (Ctrl+Z)"
                             >
@@ -1179,12 +1165,12 @@ export default function Deemo({
                                 disabled={!canRedo() || isUpdating}
                                 className={clsx(
                                     "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
-                                    interactiveCursorClasses(isUpdating),
+                                    interactiveCursorClasses(!canRedo() || isUpdating),
                                 )}
                                 title="Redo (Ctrl+Y)"
                             >
                                 ↪ Redo
-                            </button> */}
+                            </button>
 
                             <div className="w-px h-4 bg-base-300 mx-1" />
                             
@@ -1414,7 +1400,7 @@ export default function Deemo({
                                         headerRowHeight={HEADER_ROW_HEIGHT}
                                         defaultColumnOptions={{ resizable: true }}
                                         isRowSelectionDisabled={(row) =>
-                                            row.isLocked || isBlockRow(row)
+                                            row.isLocked
                                         }
                                         onScroll={handleGridScroll}
                                         className="bg-base-100"

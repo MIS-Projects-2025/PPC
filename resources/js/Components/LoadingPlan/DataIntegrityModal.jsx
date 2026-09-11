@@ -62,11 +62,11 @@ function DataIntegrityModal({
     recipeMismatches,
 }) {
 
-    console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ recipeMismatches:", recipeMismatches);
+    // console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ recipeMismatches:", recipeMismatches);
 
-    console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ unknownPackages:", unknownPackages);
+    // console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ unknownPackages:", unknownPackages);
 
-    console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ partnameMismatches:", partnameMismatches);
+    // console.log("LOG ~ DataIntegrityModal.jsx:64 ~ DataIntegrityModal ~ partnameMismatches:", partnameMismatches);
     const [activeTab, setActiveTab] = useState("overview");
 
     const mismatchCount = partnameMismatches?.length;
@@ -423,7 +423,7 @@ function UnknownPackagesList({ packages }) {
 
 function RecipeIssuesTable({ rows }) {
 
-    console.log("LOG ~ DataIntegrityModal.jsx:419 ~ RecipeIssuesTable ~ rows:", rows);
+    // console.log("LOG ~ DataIntegrityModal.jsx:419 ~ RecipeIssuesTable ~ rows:", rows);
     if (!rows?.length) {
         return <ValidState text="No recipe issues found." />;
     }

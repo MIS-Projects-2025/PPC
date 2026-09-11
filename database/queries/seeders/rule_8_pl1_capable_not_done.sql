@@ -1,4 +1,5 @@
--- NOT DONE
+-- NOT DONE YET.
+-- THERE SOME SOME LEFT OVER.
 
 -- Seeded from wide-checkbox capability sheet (batch 2, 89 rows).
 -- Package names are placeholder group labels per user -- seeded literally,
@@ -64,8 +65,12 @@ SELECT id, 'F1', 'LCC_MPD', '8,14', 'taping', 'PL: PL1'
 FROM qdn_db.machine_list WHERE machine_num = '70AT28';
 -- not done yet
 INSERT INTO qdn_db.machine_setup_states (machine_id, factory, package_name, leadcount_include, process_type, remarks)
-SELECT id, 'F1', 'LFCSP_TUBE_MPD', '16', 'both', 'PL: PL1'
+SELECT id, 'F1', 'LFCSP_TUBE_MPD', '32', 'both', 'PL: PL1'
 FROM qdn_db.machine_list WHERE machine_num = '11AT128 ADGT';
+
+select * from ppc.customer_data_wip where `Part_Name` like '%adxl%'; -- 60883
+select * from ppc.customer_data_wip where `Part_Name` like '%adxl31%';
+select * from ppc.customer_data_wip where `Package_Name` like '%LFCSP%' and f1_focus_group_flag = 1;
 
 -- INSERT INTO qdn_db.machine_setup_states (machine_id, factory, package_name, leadcount_include, process_type, remarks)
 -- SELECT id, 'F1', 'MINI_SO', '8,10', 'both', 'PL: PL1'

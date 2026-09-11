@@ -42,12 +42,12 @@ class LoadingPlanEntryService
 
     public function resolveEntry(int $entryId): LoadingPlanEntry
     {
-        return LoadingPlanEntry::with('machineModel')
+        return LoadingPlanEntry::with(['machineModel', 'lotQuantity'])
             ->whereKey($entryId)
             ->firstOrFail();
     }
 
-    public function moveEntry(string $entryType, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine): LoadingPlanEntry
+    public function moveEntry(string $entryType, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine)
     {
         return DB::transaction(function () use ($entryType, $entryId, $beforeEntryId, $afterEntryId, $machine) {
             $entry = $this->resolveEntry($entryId);
@@ -74,17 +74,35 @@ class LoadingPlanEntryService
 
             $entry->update(['sequence_order' => $newOrder, 'lock_version' => DB::raw('lock_version + 1')]);
 
+            $allEntriesOnMachine = LoadingPlanEntry::where('machine_id', $machineId)
+                ->orderBy('sequence_order')
+                ->where('scheduled_date', $resolvedDate)
+                ->get();
+
+            Log::info('Machine entry export', ['test' => $allEntriesOnMachine->toArray()]);
+
             if ($entryType === 'lot') {
                 (new LotScheduleCalculator([$resolvedDate], [$entry->lot_id]))
                     ->loadPackageList()
                     ->recalculateAndRetime($entryId, $machineId);
             }
 
-            return $entry->fresh('machineModel');
+            $wip = CustomerDataWip::query()
+                ->where('Lot_Id', $entry->lot_id)
+                ->where('import_date', $entry->scheduled_date)
+                ->firstOrFail();
+
+            $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
+
+            return (new LoadingPlanService($resolvedDate))->createPlannedLot(
+                $wip,
+                $freshEntry,
+                $freshEntry->lotQuantity // Fresh relation
+            );
         });
     }
 
-    public function transferEntry(string $entryType, ?int $entryId, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId): LoadingPlanEntry
+    public function transferEntry(string $entryType, ?int $entryId, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId): array
     {
         return DB::transaction(function () use ($entryType, $entryId, $targetMachine, $beforeEntryId, $afterEntryId) {
             $entry = $this->resolveEntry($entryId);
@@ -101,8 +119,6 @@ class LoadingPlanEntryService
             }
 
             $resolvedDate = $this->assertConsistentDates($anchorEntries);
-
-            $resolvedDate = $entry->scheduled_date->toDateString();
 
             $sourceMachineId = $entry->machine_id;
             $targetMachineId = $this->resolveMachineId($targetMachine);
@@ -138,14 +154,25 @@ class LoadingPlanEntryService
                 if ($sourceMachineId && $sourceMachineId !== $targetMachineId) {
                     $sourceRestart = $this->findFirstRemainingRow($sourceMachineId, $resolvedDate);
                     if ($sourceRestart) {
-                        // source machine only lost a row — pure retiming, no
-                        // qty/recipe/capacity change for its remaining rows
                         app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($sourceRestart, $sourceMachineId);
                     }
                 }
             }
 
-            return $entry->fresh('machineModel');
+            // Fetch WIP data to pass into planned lot creation
+            $wip = CustomerDataWip::query()
+                ->where('Lot_Id', $entry->lot_id)
+                ->where('import_date', $entry->scheduled_date)
+                ->firstOrFail();
+
+            // Refresh entry and reload required relationships
+            $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
+
+            return (new LoadingPlanService($resolvedDate))->createPlannedLot(
+                $wip,
+                $freshEntry,
+                $freshEntry->lotQuantity
+            );
         });
     }
 
@@ -1159,6 +1186,262 @@ class LoadingPlanEntryService
         WHERE scheduled_date = ? AND id IN ($placeholders)";
 
         DB::statement($sql, [...$bindings, $machineId, $date, ...$ids]);
+    }
+
+    public function syncRows(array $rows, array $order, array $deletedEntryIds, string $date): array
+    {
+        return DB::transaction(function () use ($rows, $order, $deletedEntryIds, $date) {
+            $this->assertDateNotFinalized($date);
+
+            $deletedEntries = empty($deletedEntryIds)
+                ? collect()
+                : LoadingPlanEntry::whereKey($deletedEntryIds)->get();
+
+            $machineIds = $this->resolveMachineIds([
+                ...collect($rows)->pluck('machine')->filter()->all(),
+                ...$deletedEntries->pluck('machine_id')->filter()->all(),
+            ]);
+            if (!empty($machineIds)) {
+                $this->lockMachineRows($machineIds, $date);
+            }
+
+            foreach ($deletedEntries as $entry) {
+                $this->assertNotFinalized($entry);
+
+                // Guard against the split-child landmine: a plain vanished-row
+                // delete (e.g. an undone auto-gap block) is safe to hard-delete,
+                // but a split child carries a qty invariant on its parent
+                // (LotSplit::child_qty / recalculateParentQty) that only
+                // LotSplitService::revert() knows how to unwind correctly.
+                $isActiveSplitChild = \App\Models\LotSplit::active()
+                    ->where('child_lot_id', $entry->lot_id)
+                    ->where('scheduled_date', $entry->scheduled_date)
+                    ->exists();
+
+                if ($isActiveSplitChild) {
+                    throw new \RuntimeException(
+                        "Entry [{$entry->id}] is an active split child — revert the split instead of deleting the row directly."
+                    );
+                }
+
+                $entry->delete();
+            }
+
+            $vacatedMachineIds = $deletedEntries->pluck('machine_id')->filter()->unique()->values()->all();
+            foreach ($vacatedMachineIds as $machineId) {
+                $restart = $this->findFirstRemainingRow($machineId, $date);
+                if ($restart) {
+                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId);
+                }
+            }
+
+            $dndToEntryId = [];
+            $results = [];
+
+            foreach ($rows as $row) {
+                $entry = $row['entry_id'] === null
+                    ? ($row['entry_type'] === 'block'
+                        ? $this->createBlockRow($row, $date)
+                        : $this->createLotRow($row, $date))
+                    : $this->updateRow($row);
+
+                $dndToEntryId[$row['dnd_id']] = $entry->id;
+                $results[] = $entry;
+            }
+
+            foreach ($order as $machine => $ids) {
+                $entryIds = collect($ids)->map(fn($id) => $dndToEntryId[$id] ?? $id)->all();
+                $this->resequenceMachine($entryIds, $machine, $date);
+            }
+
+            return ['results' => $results];
+        });
+    }
+
+    private function createLotRow(array $row, string $date)
+    {
+        $lotId = $row['lot_id'] ?? throw new \InvalidArgumentException('create row missing lot_id for entry_type lot');
+        $fields = $row['fields'] ?? [];
+        $machineId = $row['machine'] !== null ? $this->resolveMachineId($row['machine']) : null;
+
+        // Mirrors bulkTransfer()'s unplannedLotIds branch — this is a WIP lot
+        // being placed for the first time, not a synthetic manual lot, so pull
+        // package/part/qty from CustomerDataWip the same way that path does.
+        $wipItem = CustomerDataWip::query()
+            ->where('Lot_Id', $lotId)
+            ->where('import_date', $date)
+            ->first();
+
+        $entry = LoadingPlanEntry::create([
+            'entry_type'     => 'lot',
+            'lot_id'         => $lotId,
+            'package_name'   => $wipItem?->Package_Name,
+            'scheduled_date' => $date,
+            'machine_id'     => $machineId,
+            'sequence_order' => null, // phase 3 resequence sets the real value
+            'status'         => $fields['status'] ?? 'NONE',
+            'remarks'        => $fields['remarks'] ?? null,
+            'tag'            => $fields['tag'] ?? null,
+            'accu_time'      => $fields['accu_time'] ?? null,
+            'lock_version'   => 1,
+        ]);
+
+        $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date]);
+        $lot->part_name = $wipItem?->Part_Name ?? $lot->part_name ?? '';
+        $lot->qty_base  = $wipItem?->Qty ?? $lot->qty_base ?? 0;
+        if ($lot->isDirty()) {
+            $lot->save();
+        }
+
+        $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
+
+        return (new LoadingPlanService($date))->createPlannedLot(
+            $wipItem,
+            $entry,
+            $freshEntry->lotQuantity
+        );
+    }
+
+    private function createBlockRow(array $row, string $date)
+    {
+        $fields = $row['fields'] ?? [];
+        $machineId = $row['machine'] !== null ? $this->resolveMachineId($row['machine']) : null;
+
+        $entry = LoadingPlanEntry::create([
+            'entry_type'     => 'block',
+            'lot_id'         => null,
+            'scheduled_date' => $date,
+            'machine_id'     => $machineId,
+            'sequence_order' => null,
+            'block_label'    => $fields['block_label'] ?? 'Gap',
+            'accu_time'      => $fields['accu_time'] ?? 0,
+            'lock_version'   => 1,
+        ]);
+
+        return (new LoadingPlanService($date))->createPlannedLot(
+            null,
+            $entry,
+            null
+        );
+    }
+
+    private function updateRow(array $row)
+    {
+        $entryId = $row['entry_id'];
+        $existing = LoadingPlanEntry::find($entryId);
+        if (!$existing) {
+            throw new \RuntimeException("Row [{$entryId}] not found.");
+        }
+        $this->assertNotFinalized($existing);
+
+        $fields = $row['fields'] ?? [];
+        $this->assertSupportedEditField($fields);
+
+        $machineId = $row['machine'] !== null ? $this->resolveMachineId($row['machine']) : null;
+        if ($machineId !== $existing->machine_id) {
+            $fields['machine_id'] = $machineId;
+        }
+
+        $affected = LoadingPlanEntry::whereKey($entryId)
+            ->where('lock_version', $row['lock_version'] ?? null)
+            ->whereNull('finalized_at')
+            ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
+
+        if ($affected === 0) {
+            throw new StaleWriteException(LoadingPlanEntry::find($entryId));
+        }
+
+        $freshEntry = LoadingPlanEntry::findOrFail($entryId);
+
+        $wipItem = CustomerDataWip::query()
+            ->where('Lot_Id', $freshEntry->lot_id)
+            ->where('import_date', $freshEntry->scheduled_date)
+            ->first();
+
+        return (new LoadingPlanService($freshEntry->scheduled_date))->createPlannedLot(
+            $wipItem,
+            $freshEntry,
+            $freshEntry->lotQuantity
+        );
+    }
+
+    /**
+     * Full ordered list per machine → sequence_order is just index * GAP_SEED,
+     * no before/after anchor resolution needed since every row on the machine
+     * is present, not just the ones that moved.
+     */
+    private function resequenceMachine(array $entryIds, string $machine, string $date): void
+    {
+        if (empty($entryIds)) return;
+
+        $machineId = $this->resolveMachineId($machine);
+
+        $currentRows = LoadingPlanEntry::where('machine_id', $machineId)
+            ->where('scheduled_date', $date)
+            ->lockForUpdate()
+            ->get();
+
+        $currentIds = $currentRows->pluck('id')->all();
+        $stray = array_diff($currentIds, $entryIds);
+
+        if (!empty($stray)) {
+            Log::warning('resequenceMachine: stray rows on machine not in entryIds', [
+                'machine' => $machine,
+                'date' => $date,
+                'stray' => $stray,
+            ]);
+        }
+
+        // Stage the full current set, not just $entryIds — guarantees zero
+        // collision even if $entryIds is incomplete.
+        $this->stageTempSequenceOrders($currentIds);
+
+        $cases = [];
+        $bindings = [];
+        foreach ($entryIds as $i => $id) {
+            $cases[] = "WHEN id = ? THEN ?";
+            $bindings[] = $id;
+            $bindings[] = ($i + 1) * self::GAP_SEED;
+        }
+        // Strays keep their place at the end rather than vanishing into limbo.
+        $nextSeq = (count($entryIds) + 1) * self::GAP_SEED;
+        foreach ($stray as $id) {
+            $cases[] = "WHEN id = ? THEN ?";
+            $bindings[] = $id;
+            $bindings[] = $nextSeq;
+            $nextSeq += self::GAP_SEED;
+        }
+
+        $allIds = [...$entryIds, ...$stray];
+        $placeholders = implode(',', array_fill(0, count($allIds), '?'));
+
+        DB::statement(
+            "UPDATE loading_plan_entries
+         SET sequence_order = CASE " . implode(' ', $cases) . " END,
+             machine_id = ?,
+             lock_version = lock_version + 1
+         WHERE id IN ($placeholders)",
+            [...$bindings, $machineId, ...$allIds]
+        );
+
+        $lotIds = LoadingPlanEntry::whereKey($allIds)
+            ->where('entry_type', 'lot')
+            ->pluck('lot_id')->filter()->unique()->values()->all();
+
+        $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList();
+        foreach ($allIds as $id) {
+            if (LoadingPlanEntry::find($id)?->entry_type === 'lot') {
+                $calc->recalculateAndRetime($id, $machineId);
+            }
+        }
+
+        $restart = $this->findFirstRemainingRow($machineId, $date);
+        if ($restart) {
+            DB::table('machine_day_starts')->updateOrInsert(
+                ['machine_id' => $machineId, 'scheduled_date' => $date],
+                ['day_start_time' => $restart->fresh()->time_start?->format('H:i:s'), 'updated_at' => now()]
+            );
+        }
     }
 
     public function batchApply(array $operations, string $date): array

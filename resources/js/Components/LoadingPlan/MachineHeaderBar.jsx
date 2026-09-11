@@ -97,7 +97,7 @@ export function MachineHeaderBar({
 					</button>
 				</div>
 
-				<div className="w-50">
+				<div className="w-65">
                     <span className="opacity-50 font-extralight mr-2">Rows:</span>
                     <span key={`rows-${toggleKey}`} className="animate-slide-down inline-block font-mono mr-4">{rowCount?.toLocaleString() ?? 0}</span>
                     <span className="opacity-50 font-extralight mr-2">total Qty:</span> 

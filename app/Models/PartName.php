@@ -24,6 +24,7 @@ class PartName extends Model
         'lead_count',
         'dimensions',
         'allocation',
+        'is_auto_part',
         'generic_name',
         'drypack',
         'recipe',
