@@ -19,7 +19,7 @@ class PackageGroups
         'RM' => ['MINI_SO', 'MINI_SO_EP'],
         'SSOP' => ['SSOP', 'SSOP-W'],
         'DDPAK' => ['DDPAK'],
-        'MANUAL_' => [
+        'MANUAL' => [
             'JLCC',
             'LDCC',
             'MCML',

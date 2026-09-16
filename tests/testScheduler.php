@@ -216,41 +216,136 @@ $pickup = [
     // ['part_name' => '...', 'package_name' => '...', 'qty' => ..., 'lead_count' => ..., 'body_size' => '...']
 ];
 
+$targetDate = \Carbon\Carbon::parse('2026-09-09');
 
 // STEP 1: gather everything — this only ever runs SELECT queries,
 // no INSERT/UPDATE/DELETE happens anywhere in handlePickup().
-$gathered = $service->handlePickup($pickup, \Carbon\Carbon::parse('2026-09-09'));
+$gathered = $service->handlePickup($pickup, $targetDate);
 
-echo "Unmatched part names (no PartName row found):\n";
-print_r($gathered['unmatched_part_names']->all());
-echo "\n";
+$output = '';
+$log = function (string $line = '') use (&$output) {
+    $output .= $line . "\n";
+    echo $line . "\n";
+};
 
-echo "Candidate machine IDs found across all lots:\n";
-print_r($gathered['candidate_machine_ids']->all());
-echo "\n";
+$log("Unmatched part names (no PartName row found):");
+$log(print_r($gathered['unmatched_part_names']->all(), true));
 
-// STEP 2: rank each resolved lot individually — pure decision logic,
-// no writes. This is what tells you WHERE a lot would land and WHY,
-// without anything actually being scheduled.
+$log("Candidate machine IDs found across all lots:");
+$log(print_r($gathered['candidate_machine_ids']->all(), true));
+
+// Mutable simulation state — advanced after each placement, mirroring
+// what commitPickupBatch's loop does with anchorStateByMachine /
+// remainingCapacityByMachine / openEntriesByMachine, but with a fake
+// in-memory entry instead of a DB write, so lot #2's preview sees
+// lot #1 having already landed on that machine. No writes happen.
+$openEntriesByMachine = $gathered['open_entries_by_machine'];
+$anchorStateByMachine = $gathered['anchor_state_by_machine'];
+$remainingCapacityByMachine = $gathered['remaining_capacity_by_machine'];
+
+$placedByMachine = []; // machine_id => [['lot' => ..., 'choice' => ...], ...] in placement order
+$fakeEntryId = -1;     // negative so it can never collide with a real entry id
+
+$fromStateByPlacement = [];
+
+// STEP 2: rank each resolved lot individually, in the order given
+// (this does NOT reproduce commitPickupBatch's has_free_option /
+// priority-tier / greedy-cheapest reordering — it's a straight
+// sequential preview in pickup order, same as the original tester).
 foreach ($gathered['pickup_lots'] as $i => $lot) {
-    echo "--- Lot #{$i}: {$lot->Part_Name} ---\n";
-    echo "Resolved Focus_Group: " . ($lot->Focus_Group ?? 'NULL') . "\n";
-    echo "Resolved Ramp_Time: " . ($lot->Ramp_Time ?? 'NULL') . "\n";
+    $log("--- Lot #{$i}: {$lot->Part_Name} ---");
+    $log("Resolved Focus_Group: " . ($lot->Focus_Group ?? 'NULL'));
+    $log("Resolved Ramp_Time: " . ($lot->Ramp_Time ?? 'NULL'));
 
     $choice = $service->rankCandidatesForLot(
         $lot,
-        $gathered['open_entries_by_machine'],
-        $gathered['anchor_state_by_machine'],
-        $gathered['remaining_capacity_by_machine']
+        $openEntriesByMachine,
+        $anchorStateByMachine,
+        $remainingCapacityByMachine
     );
 
     if ($choice === null) {
-        echo "RESULT: unassigned — no capable machine had room\n\n";
+        $log("RESULT: unassigned — no capable machine had room");
+        $log('');
         continue;
     }
 
-    echo "RESULT: would place on machine_id={$choice['machine_id']}, ";
-    echo "state_id={$choice['resulting_setup_state_id']}, ";
-    echo "operation={$choice['operation_type']}, ";
-    echo "duration={$choice['est_duration_minutes']}min\n\n";
+    $log("RESULT: would place on machine_id={$choice['machine_id']}, "
+        . "state_id={$choice['resulting_setup_state_id']}, "
+        . "operation={$choice['operation_type']}, "
+        . "duration={$choice['est_duration_minutes']}min");
+    $log('');
+
+    $machineId = $choice['machine_id'];
+    $placedByMachine[$machineId][] = ['lot' => $lot, 'choice' => $choice];
+
+    $predStateBefore = $anchorStateByMachine[$machineId] ?? null;
+    $anchorStateByMachine[$machineId] = $choice['resulting_setup_state_id'];
+    $fromStateByPlacement[$machineId][] = $predStateBefore;
+
+    $commit = $service->estimateCommit($lot) ?? 0;
+    $remainingCapacityByMachine[$machineId] =
+        ($remainingCapacityByMachine[$machineId] ?? 0) - $commit;
+
+    $existingOpen = $openEntriesByMachine[$machineId] ?? collect();
+    $fakeEntry = (object) [
+        'id' => $fakeEntryId--,
+        'entry_type' => 'lot',
+        'resulting_setup_state_id' => $choice['resulting_setup_state_id'],
+    ];
+    $openEntriesByMachine[$machineId] = $existingOpen->push($fakeEntry);
 }
+
+// Sequence view: any machine that received more than one lot this run.
+$log(str_repeat('=', 60));
+$log('SEQUENCE BY MACHINE (this run only)');
+$log(str_repeat('=', 60));
+
+$anyMultiLot = false;
+
+foreach ($placedByMachine as $machineId => $placements) {
+    if (count($placements) < 2) {
+        continue;
+    }
+
+    $anyMultiLot = true;
+    $log("Machine {$machineId}:");
+
+    foreach ($placements as $idx => $p) {
+        $lot = $p['lot'];
+        $choice = $p['choice'];
+        $fromStateId = $fromStateByPlacement[$machineId][$idx];
+
+        if ($choice['operation_type'] !== 'none') {
+            $log(sprintf(
+                "  [BLOCK] %s: state %s -> %d (%dmin)",
+                ucfirst($choice['operation_type']),
+                $fromStateId ?? 'NULL',
+                $choice['resulting_setup_state_id'],
+                $choice['est_duration_minutes']
+            ));
+        }
+
+        $log(sprintf(
+            "  %d. %s (pkg=%s, lc=%s) -> state_id=%d",
+            $idx + 1,
+            $lot->Part_Name,
+            $lot->Package_Name ?? 'NULL',
+            $lot->Lead_Count ?? 'NULL',
+            $choice['resulting_setup_state_id']
+        ));
+    }
+
+    $log('');
+}
+
+if (!$anyMultiLot) {
+    $log('(no machine received more than one lot in this run)');
+}
+
+// STEP 3: write everything to a timestamped file
+$filename = 'scheduler_test_' . now()->format('Y-m-d_His') . '.txt';
+$path = storage_path('app/' . $filename);
+file_put_contents($path, $output);
+
+echo "\nFull output written to: {$path}\n";

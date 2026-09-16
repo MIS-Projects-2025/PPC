@@ -35,6 +35,22 @@ select * from qdn_db.package_list where devicename in
 )
 
 select * from ppc.customer_data_wip where part_name = 'ADRV9061BBPZ-RL' limit 9999;
+select distinct `Part_Name`, `Focus_Group` from ppc.customer_data_wip limit 200;
+
+SELECT 
+    Part_Name, 
+    COUNT(DISTINCT Focus_Group) AS group_count
+FROM ppc.customer_data_wip
+GROUP BY Part_Name
+HAVING COUNT(DISTINCT Focus_Group) > 1;
+
+SELECT 
+    Part_Name, 
+    GROUP_CONCAT(DISTINCT Focus_Group ORDER BY Focus_Group SEPARATOR ', ') AS focus_groups,
+    COUNT(DISTINCT Focus_Group) AS group_count
+FROM ppc.customer_data_wip
+GROUP BY Part_Name
+HAVING COUNT(DISTINCT Focus_Group) > 1 limit 9999;
 
 SELECT devicename, focus_grp, allocation, recipe, ramp_category
 FROM (

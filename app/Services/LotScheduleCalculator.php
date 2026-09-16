@@ -103,6 +103,11 @@ class LotScheduleCalculator
         $this->recomputeTimeStartAndEnd($entry, $machineId);
     }
 
+    public function machineNumFor(int $id): string
+    {
+        return $this->machineNumById->get($id) ?? null;
+    }
+
     /**
      * Walks forward from $affectedEntry, recomputing time_start/time_end for
      * it and every row after it on the same machine — across scheduled_date
@@ -226,6 +231,46 @@ class LotScheduleCalculator
         return $anchor;
     }
 
+    /**
+     * Pure computation extracted from recalculate() — no DB writes, safe to
+     * call in a tight loop (bulk placement). Requires loadPackageList()
+     * already called.
+     */
+    public function computeMetrics(string $partName, int $effectiveQty, ?string $machineName): array
+    {
+        if ($this->packageListByDeviceName === null) {
+            throw new \LogicException(
+                'computeMetrics() called without loadPackageList() first.'
+            );
+        }
+
+        $packageListRow = $this->packageListByDeviceName->get($partName);
+        $recipe = $packageListRow?->recipe;
+        $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
+
+        $recipeStatus = match (true) {
+            $recipe && $recipe > 0 && $commit === 0 => 'qty_below_recipe',
+            $recipe && $recipe > 0                  => 'ok',
+            default                                 => 'no_recipe',
+        };
+
+        if ($this->isTubeOrTrayAllocation($packageListRow?->allocation)) {
+            $commit = (int) floor($effectiveQty * 0.95);
+            $recipeStatus = 'ok';
+        }
+
+        $capacityUph = $this->capacityUph($machineName, $effectiveQty);
+
+        return [
+            'recipe_used' => $recipe,
+            'recipe_source_id' => $packageListRow?->id,
+            'commit' => $commit,
+            'recipe_status' => $recipeStatus,
+            'capacity_uph_snapshot' => $capacityUph,
+            'accu_time' => $this->accuTime($commit, $capacityUph),
+        ];
+    }
+
     private function recalculate(LoadingPlanEntry $entry, ?string $machineName, ?string $newPartName = null): void
     {
         if ($this->packageListByDeviceName === null) {
@@ -243,37 +288,16 @@ class LotScheduleCalculator
         }
 
         $effectiveQty = $lotQuantity->effectiveQty();
-        $packageListRow = $this->packageListByDeviceName->get($lotQuantity->part_name);
+        $metrics = $this->computeMetrics($lotQuantity->part_name, $effectiveQty, $machineName);
 
-        $recipe = $packageListRow?->recipe;
-        $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
-
-        $recipeStatus = match (true) {
-            $recipe && $recipe > 0 && $commit === 0 => 'qty_below_recipe',
-            $recipe && $recipe > 0                  => 'ok',
-            default                                 => 'no_recipe',
-        };
-
-        // Packaging tolerance: TUBE/TRAY (incl. WAFFLE_TRAY) allocations allow a final
-        // partial container down to 95% of one recipe unit. This lives here only —
-        // it is deliberately NOT mirrored in the ppc.trg_lot_commit_insert trigger.
-        if ($this->isTubeOrTrayAllocation($packageListRow?->allocation)) {
-            $tolerance = $effectiveQty * 0.95;
-            $commit = (int) floor($tolerance);
-            $recipeStatus = 'ok_tube_tray';
-        }
-
-        $lotQuantity->recipe_used = $recipe;
-        $lotQuantity->recipe_source_id = $packageListRow?->id;
-        $lotQuantity->commit = $commit;
-        $lotQuantity->recipe_status = $recipeStatus;
-
-        $capacityUph = $this->capacityUph($machineName, $effectiveQty);
-        $lotQuantity->capacity_uph_snapshot = $capacityUph;
-
+        $lotQuantity->recipe_used = $metrics['recipe_used'];
+        $lotQuantity->recipe_source_id = $metrics['recipe_source_id'];
+        $lotQuantity->commit = $metrics['commit'];
+        $lotQuantity->recipe_status = $metrics['recipe_status'];
+        $lotQuantity->capacity_uph_snapshot = $metrics['capacity_uph_snapshot'];
         $lotQuantity->save();
 
-        $entry->accu_time = $this->accuTime($commit, $capacityUph);
+        $entry->accu_time = $metrics['accu_time'];
         $entry->save();
     }
 

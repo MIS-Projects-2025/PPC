@@ -25,6 +25,7 @@ use App\Http\Controllers\{
     PickupController,
     PlPackageMasterController,
     LoadingPlanSplitController,
+    RuleExplorerController,
     LoadingPlanMergeController,
     PlRuleController,
     WipController,
@@ -39,6 +40,44 @@ $app_name = env('APP_NAME', '');
 Route::redirect('/', "/$app_name");
 
 require __DIR__ . '/auth.php';
+
+Route::prefix('rules')->group(function () {
+    Route::get('/', [RuleExplorerController::class, 'index']);
+    Route::get('/data', [RuleExplorerController::class, 'data']);
+    Route::get('/machines', [RuleExplorerController::class, 'machineList']);
+    Route::get('/setup-states', [RuleExplorerController::class, 'setupStatesForMachine']);
+    Route::get('/package-groups', [RuleExplorerController::class, 'packageGroups']);
+
+    // setup states
+    Route::post('/setup-states', [RuleExplorerController::class, 'storeSetupState']);
+    Route::patch('/setup-states/{id}', [RuleExplorerController::class, 'updateSetupState']);
+    Route::delete('/setup-states/{id}', [RuleExplorerController::class, 'destroySetupState']);
+
+    // transition rules
+    Route::post('/transition-rules', [RuleExplorerController::class, 'storeTransitionRule']);
+    Route::patch('/transition-rules/{id}', [RuleExplorerController::class, 'updateTransitionRule']);
+    Route::delete('/transition-rules/{id}', [RuleExplorerController::class, 'destroyTransitionRule']);
+
+    // part rules
+    Route::post('/part-rules', [RuleExplorerController::class, 'storePartRule']);
+    Route::delete('/part-rules/{id}', [RuleExplorerController::class, 'destroyPartRule']);
+
+    // axis rules
+    Route::post('/axis-rules', [RuleExplorerController::class, 'storeAxisRule']);
+    Route::delete('/axis-rules/{id}', [RuleExplorerController::class, 'destroyAxisRule']);
+
+    // transition exceptions
+    Route::post('/transition-exceptions', [RuleExplorerController::class, 'storeTransitionException']);
+    Route::delete('/transition-exceptions/{id}', [RuleExplorerController::class, 'destroyTransitionException']);
+
+    // flat tables
+    Route::post('/auto-part-rules', [RuleExplorerController::class, 'storeAutoPartRule']);
+    Route::post('/focus-group-rules', [RuleExplorerController::class, 'storeFocusGroupRule']);
+    Route::post('/part-exclusions', [RuleExplorerController::class, 'storePartExclusion']);
+    Route::post('/package-groups', [RuleExplorerController::class, 'storePackageGroup']);
+    Route::delete('/{table}/{id}', [RuleExplorerController::class, 'destroyRule'])
+        ->where('table', 'machine_auto_part_rules|machine_focus_group_rules|machine_part_exclusions|package_groups');
+});
 
 Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::post('move', [LoadingPlanEntryController::class, 'move'])->name('move');

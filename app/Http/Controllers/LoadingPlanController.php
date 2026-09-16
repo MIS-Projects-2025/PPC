@@ -94,13 +94,6 @@ class LoadingPlanController extends Controller
         $loadingPlanService->initWipAndEntries();
         $result = $loadingPlanService->initEntries();
 
-        // var_dump("LOG ~ LoadingPlanController.php:90 ~ LoadingPlanController ~ index ~ previousDate:", $previousDate);
-
-        // var_dump("LOG ~ LoadingPlanController.php:90 ~ LoadingPlanController ~ index ~ selectedLocation:", $selectedLocation);
-
-        // var_dump("LOG ~ LoadingPlanController.php:90 ~ LoadingPlanController ~ index ~ date:", $date);
-        // var_dump("🚀 RE S U L T", $result);
-
         $unassignedRows = $result->filter(function ($row) {
             if ($row['is_block']) {
                 return false;
@@ -109,47 +102,97 @@ class LoadingPlanController extends Controller
             return $row['entry_id'] === null || $row['machine'] === null;
         })->values();
 
-        $disseminationService = App::make(\App\Services\DisseminationService::class, ['location' => $selectedLocation]);
-        $disseminationResult = $disseminationService->disseminate($unassignedRows);
+        // dump("LOG ~ LoadingPlanController.php:99 ~ LoadingPlanController ~ index ~ unassignedRows:", $unassignedRows);
 
-        $assignments = collect($disseminationResult['assignments'])
-            ->map(fn($a) => ['lot_id' => $a['lot_id'], 'machine' => $a['machine_code']])
+        $unassignedWipOnly = $unassignedRows->filter(fn($row) => $row['entry_id'] === null);
+        // dump($unassignedWipOnly);
+
+        // $skippedUnassigned = $unassignedRows->count() - $unassignedWipOnly->count();
+        // dump($skippedUnassigned);
+
+        // if ($skippedUnassigned > 0) {
+        //     Log::warning("Skipped {$skippedUnassigned} unassigned row(s) with an existing entry_id — "
+        //         . "these have machine_id=NULL, so rebuildForPickupArrival's own machine-scoped "
+        //         . "cleanup pass won't pick them up either (it only queries entries WHERE machine_id "
+        //         . "IN candidateMachineIds, derived from the NEW pickup lots).");
+        // }
+
+        $unassignedLotIds = $unassignedWipOnly->pluck('lot_id')->filter()->all();
+        // dump($unassignedLotIds);
+        // dump($loadingPlanService->todayWipRows);
+
+        $wipRowsToSchedule = $loadingPlanService->todayWipRows
+            ->toBase()
+            ->only($unassignedLotIds);
+
+
+        $pickup = $wipRowsToSchedule
+            ->map(fn($wip) => $loadingPlanService->mapWipToPickupPayload($wip))
+            ->values()
             ->all();
 
-        $saveFailed = false;
-        $saveError = null;
+        // dump($pickup);
 
-        if (! empty($assignments)) {
-            try {
-                // 2. Perform transfer and get transformed updated payload array items
-                $updatedEntries = (new LoadingPlanEntryService)->bulkTransferMulti($assignments, date: $date);
+        $schedulerResult = null;
 
-                if ($updatedEntries->isNotEmpty()) {
-                    // 3. Key both collections by lot_id
-                    $resultKeyed = $result->keyBy('lot_id');
-                    $updatedKeyed = $updatedEntries->keyBy('lot_id');
+        if (!empty($pickup)) {
+            $schedulerService = app(\App\Services\SchedulerService::class);
+            $schedulerResult = $schedulerService->rebuildForPickupArrival($pickup, Carbon::parse($date));
 
-                    // 4. Overwrite original entries with updated ones
-                    $merged = $resultKeyed->merge($updatedKeyed);
-
-                    // 5. Re-sort using your static helper method
-                    $result = LoadingPlanService::sortEntriesByMachineAndSequence($merged);
-                }
-            } catch (\Throwable $e) {
-                report($e);
-                $saveFailed = true;
-                $saveError = 'Auto-dissemination could not be saved. You can still plan manually.';
+            if ($schedulerResult['unmatched_part_names']->isNotEmpty()) {
+                Log::warning('Scheduler: unmatched part names', $schedulerResult['unmatched_part_names']->all());
             }
+            if ($schedulerResult['unassigned']->isNotEmpty()) {
+                Log::info('Scheduler: lots left unassigned', ['count' => $schedulerResult['unassigned']->count()]);
+            }
+
+            // rebuildForPickupArrival deleted and recreated every open entry on
+            // the affected machines, so $result needs a full rebuild from DB —
+            // no partial merge makes sense here
+            $result = $loadingPlanService->initEntries();
         }
 
-        $disseminationSummary = DisseminationService::buildFrontendPayload(
-            $disseminationResult,
-            $saveFailed,
-            $saveError,
-        );
+        // $disseminationService = App::make(\App\Services\DisseminationService::class, ['location' => $selectedLocation]);
+        // $disseminationResult = $disseminationService->disseminate($unassignedRows);
 
-        Log::info('Dissemination result', $disseminationResult);
-        Log::info('Dissemination summary', $disseminationSummary);
+        // $assignments = collect($disseminationResult['assignments'])
+        //     ->map(fn($a) => ['lot_id' => $a['lot_id'], 'machine' => $a['machine_code']])
+        //     ->all();
+
+        // $saveFailed = false;
+        // $saveError = null;
+
+        // if (! empty($assignments)) {
+        //     try {
+        //         // 2. Perform transfer and get transformed updated payload array items
+        //         $updatedEntries = (new LoadingPlanEntryService)->bulkTransferMulti($assignments, date: $date);
+
+        //         if ($updatedEntries->isNotEmpty()) {
+        //             // 3. Key both collections by lot_id
+        //             $resultKeyed = $result->keyBy('lot_id');
+        //             $updatedKeyed = $updatedEntries->keyBy('lot_id');
+
+        //             // 4. Overwrite original entries with updated ones
+        //             $merged = $resultKeyed->merge($updatedKeyed);
+
+        //             // 5. Re-sort using your static helper method
+        //             $result = LoadingPlanService::sortEntriesByMachineAndSequence($merged);
+        //         }
+        //     } catch (\Throwable $e) {
+        //         report($e);
+        //         $saveFailed = true;
+        //         $saveError = 'Auto-dissemination could not be saved. You can still plan manually.';
+        //     }
+        // }
+
+        // $disseminationSummary = DisseminationService::buildFrontendPayload(
+        //     $disseminationResult,
+        //     $saveFailed,
+        //     $saveError,
+        // );
+
+        // Log::info('Dissemination result', $disseminationResult);
+        // Log::info('Dissemination summary', $disseminationSummary);
 
         $packages = $result
             ->filter(fn($row) => !$row['is_block'])
@@ -182,7 +225,7 @@ class LoadingPlanController extends Controller
             'selectedLocation'  => $selectedLocation,
             'status'            => $status,
             'bakeLots'          => $bakeLots,
-            'disseminationSummary' => $disseminationSummary,
+            // 'disseminationSummary' => $disseminationSummary, // deprecated. going to use SchedulerService instead
 
             'partnameMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList) {
                 return $partnameIntegrity->findMismatches($wipRows, $getPackageList());

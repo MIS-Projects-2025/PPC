@@ -17,7 +17,9 @@ select * from qdn_db.machine_capability_part_rules;
 select * from qdn_db.machine_transition_rules;
 select * from qdn_db.machine_platform_capacity_bands;
 
-
+select * from loading_plan_entries where scheduled_date = '2026-09-15';
+select * from loading_plan_entries where scheduled_date = '2026-09-15' and machine_id = 61;
+select * from loading_plan_entries;
 
 -- CREATE TABLE `x_lot_quantities` (
 --   `x_id` bigint unsigned NOT NULL AUTO_INCREMENT,

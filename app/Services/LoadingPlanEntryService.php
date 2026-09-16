@@ -9,6 +9,8 @@ use App\Exceptions\LoadingPlanDateFinalizedException;
 use App\Models\LoadingPlanEntry;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
+use App\Models\LoadingPlanEntryHistory;
+use App\Models\LotQuantityHistory;
 use App\Models\CustomerDataWip;
 use App\Traits\ValidatesLoadingPlanEntries;
 use Exception;
@@ -16,6 +18,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
+
+use function Illuminate\Log\log;
 
 class LoadingPlanEntryService
 {
@@ -1736,11 +1741,11 @@ class LoadingPlanEntryService
             return collect();
         }
 
-        logger()->debug('DB check', [
-            'db' => DB::connection()->getDatabaseName(),
-            'host' => DB::connection()->getConfig('host'),
-            'port' => DB::connection()->getConfig('port'),
-        ]);
+        // logger()->debug('DB check', [
+        //     'db' => DB::connection()->getDatabaseName(),
+        //     'host' => DB::connection()->getConfig('host'),
+        //     'port' => DB::connection()->getConfig('port'),
+        // ]);
 
         $leakedCalc = DB::table('loading_plan_entries')
             ->select('id')
@@ -1764,5 +1769,217 @@ class LoadingPlanEntryService
         return LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
             ->whereKey($leakedIds)
             ->get();
+    }
+
+    /**
+     * Bulk-writes an entire machine-grouped placement plan in a fixed small
+     * number of queries, regardless of lot count. Only valid immediately
+     * after every OPEN entry on these machines/date has been deleted —
+     * i.e. the precondition rebuildForPickupArrival() already establishes.
+     * Nothing pre-existing can collide with a fresh insert, so this skips
+     * the midpoint-sequence-order / stageTempSequenceOrders dance entirely
+     * and uses plain index * GAP_SEED per machine, same as resequenceMachine().
+     *
+     * Bypasses Eloquent ::create() (and therefore LoadingPlanEntryObserver /
+     * LotQuantityObserver) for the bulk insert — history rows are written
+     * manually below to keep audit trail parity. ASSUMPTION: changed_columns/
+     * old_values/new_values are array/json-cast on the History models (implied
+     * by BaseHistoryObserver::record() passing raw PHP arrays to ::create());
+     * confirm this against the actual migration before relying on it, since
+     * raw insert() doesn't apply Eloquent casts — this code json_encode()s
+     * those columns itself to compensate.
+     *
+     * $plan: array<int machineId, array<['type' => 'block'|'lot', ...]>>
+     *   block: ['type' => 'block', 'label' => string, 'duration' => int]
+     *   lot:   ['type' => 'lot', 'lot_id' => string, 'package_name' => ?string,
+     *           'part_name' => string, 'qty' => int|float]
+     */
+    public function bulkPlacePlan(array $plan, string $date, LotScheduleCalculator $calc): Collection
+    {
+        if (empty($plan)) {
+            return collect();
+        }
+
+        $calc->loadPackageList();
+        $now = now();
+        // $changedBy = auth()->id();
+        $changedBy = null;
+
+        // --- pass 1: resolve continuity anchor per machine (bounded by
+        // machine count, not lot count) ---
+        $dayStartByMachine = [];
+        foreach (array_keys($plan) as $machineId) {
+            $predecessor = LoadingPlanEntry::where('machine_id', $machineId)
+                ->where('scheduled_date', '<', $date)
+                ->orderByDesc('scheduled_date')
+                ->orderByDesc('sequence_order')
+                ->first();
+
+            if ($predecessor && $predecessor->time_end !== null) {
+                $dayStartByMachine[$machineId] = ['cursor' => $predecessor->time_end, 'isBootstrap' => false];
+                continue;
+            }
+
+            $row = DB::table('machine_day_starts')
+                ->where('machine_id', $machineId)->where('scheduled_date', $date)->first();
+
+            $dayStartByMachine[$machineId] = $row
+                ? ['cursor' => Carbon::parse("{$date} {$row->day_start_time}"), 'isBootstrap' => false]
+                : ['cursor' => Carbon::parse("{$date} 00:00:00"), 'isBootstrap' => true];
+        }
+
+        // --- pass 2: build insert rows, computing accu_time/commit/timing
+        // entirely in-memory (no DB round-trip per lot) ---
+        $entryInsertRows = [];
+        $lotQuantityRows = [];
+        $walkMeta = []; // parallel to $entryInsertRows: ['machine_id', 'lot_id'|null]
+
+        foreach ($plan as $machineId => $rows) {
+            $seq = self::GAP_SEED;
+            $cursor = $dayStartByMachine[$machineId]['cursor'];
+            $machineName = $calc->machineNumFor($machineId); // see NOTE above
+
+            foreach ($rows as $row) {
+                if ($row['type'] === 'block') {
+                    $timeStart = $cursor;
+                    $timeEnd = (clone $cursor)->addMinutes($row['duration']);
+
+                    $entryInsertRows[] = [
+                        'entry_type' => 'block',
+                        'lot_id' => null,
+                        'package_name' => null,
+                        'scheduled_date' => $date,
+                        'machine_id' => $machineId,
+                        'sequence_order' => $seq,
+                        'status' => null,
+                        'block_label' => $row['label'],
+                        'accu_time' => $row['duration'],
+                        'time_start' => $timeStart,
+                        'time_end' => $timeEnd,
+                        'lock_version' => 1,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                    $walkMeta[] = ['machine_id' => $machineId, 'lot_id' => null];
+                    $cursor = $timeEnd;
+                } else {
+                    $metrics = $calc->computeMetrics($row['part_name'], (int) $row['qty'], $machineName);
+                    $timeStart = $cursor;
+                    $timeEnd = (clone $cursor)->addMinutes($metrics['accu_time'] ?? 0);
+
+                    $entryInsertRows[] = [
+                        'entry_type' => 'lot',
+                        'lot_id' => $row['lot_id'],
+                        'package_name' => $row['package_name'],
+                        'scheduled_date' => $date,
+                        'machine_id' => $machineId,
+                        'sequence_order' => $seq,
+                        'status' => 'NONE',
+                        'block_label' => null,
+                        'accu_time' => $metrics['accu_time'],
+                        'time_start' => $timeStart,
+                        'time_end' => $timeEnd,
+                        'lock_version' => 1,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                    $walkMeta[] = ['machine_id' => $machineId, 'lot_id' => $row['lot_id']];
+
+                    $lotQuantityRows[] = [
+                        'lot_id' => $row['lot_id'],
+                        'scheduled_date' => $date,
+                        'part_name' => $row['part_name'],
+                        'qty_base' => $row['qty'] ?? 0,
+                        'recipe_used' => $metrics['recipe_used'],
+                        'recipe_source_id' => $metrics['recipe_source_id'],
+                        'commit' => $metrics['commit'],
+                        'recipe_status' => $metrics['recipe_status'],
+                        'capacity_uph_snapshot' => $metrics['capacity_uph_snapshot'],
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+
+                    $cursor = $timeEnd;
+                }
+                $seq += self::GAP_SEED;
+            }
+        }
+
+        Log::info("entryInsertRows");
+        Log::info($entryInsertRows);
+
+        // --- pass 3: bulk write ---
+        LoadingPlanEntry::insert($entryInsertRows);
+
+        if (!empty($lotQuantityRows)) {
+            LotQuantity::upsert(
+                $lotQuantityRows,
+                ['lot_id', 'scheduled_date'],
+                ['part_name', 'qty_base', 'recipe_used', 'recipe_source_id', 'commit', 'recipe_status', 'capacity_uph_snapshot']
+            );
+        }
+
+        $machineIds = array_keys($plan);
+        $freshEntries = LoadingPlanEntry::whereIn('machine_id', $machineIds)
+            ->where('scheduled_date', $date)
+            ->orderBy('machine_id')->orderBy('sequence_order')
+            ->get();
+
+        // day_start_time bootstrap — only machines that had no predecessor
+        // and no existing machine_day_starts row
+        foreach ($dayStartByMachine as $machineId => $info) {
+            if (!$info['isBootstrap']) continue;
+            $firstEntry = $freshEntries->firstWhere('machine_id', $machineId);
+            if (!$firstEntry) continue;
+
+            DB::table('machine_day_starts')->updateOrInsert(
+                ['machine_id' => $machineId, 'scheduled_date' => $date],
+                ['day_start_time' => $firstEntry->time_start->format('H:i:s'), 'updated_at' => $now]
+            );
+        }
+
+        // --- pass 4: manual history rows, mirroring BaseHistoryObserver::created() ---
+        $entryHistoryRows = [];
+        $lotQuantityHistoryRows = [];
+        $ignoredEntryColumns = ['updated_at', 'lock_version'];
+
+        foreach ($freshEntries as $entry) {
+            // keys come from getAttributes(), not a literal branch — keep it that way
+            $attrs = collect($entry->getAttributes())->except($ignoredEntryColumns)->toArray();
+            $entryHistoryRows[] = [
+                'entry_id' => $entry->id,
+                'changed_by' => $changedBy,
+                'change_type' => 'created',
+                'changed_columns' => json_encode(array_keys($attrs)),
+                'old_values' => null,
+                'new_values' => json_encode($attrs),
+                'changed_at' => $now,
+            ];
+        }
+        LoadingPlanEntryHistory::insert($entryHistoryRows);
+
+        if (!empty($lotQuantityRows)) {
+            $lotIds = collect($lotQuantityRows)->pluck('lot_id');
+            $freshQuantities = LotQuantity::where('scheduled_date', $date)->whereIn('lot_id', $lotIds)->get();
+
+            foreach ($freshQuantities as $lq) {
+                // keys come from getAttributes(), not a literal branch — keep it that way
+                $attrs = collect($lq->getAttributes())->except(['updated_at'])->toArray();
+                $lotQuantityHistoryRows[] = [
+                    'lot_quantity_id' => $lq->id,
+                    'lot_id' => $lq->lot_id,
+                    'scheduled_date' => $lq->scheduled_date,
+                    'changed_by' => $changedBy,
+                    'change_type' => 'created',
+                    'changed_columns' => json_encode(array_keys($attrs)),
+                    'old_values' => null,
+                    'new_values' => json_encode($attrs),
+                    'changed_at' => $now,
+                ];
+            }
+            LotQuantityHistory::insert($lotQuantityHistoryRows);
+        }
+
+        return $freshEntries;
     }
 }
