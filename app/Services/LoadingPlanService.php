@@ -160,9 +160,6 @@ class LoadingPlanService
             ->toBase()
             ->except($todayPlannedLotIds);
 
-        // var_dump("LOG ~ LoadingPlanService.php:149 ~ LoadingPlanService ~ initEntries ~ unassignedTodayWip:", $unassignedTodayWip);
-
-
         $filterLocation = fn($entry) => $entry->machineModel?->location === null
             || $entry->machineModel?->location === $this->selectedLocation;
 
@@ -191,13 +188,6 @@ class LoadingPlanService
             ?CustomerDataWip $wip = null,
             ?LotQuantity $quantity = null
         ) {
-
-            // dump([
-            //     'quantity' => $quantity?->toArray(),
-            //     'wip'      => $wip?->toArray(),
-            //     'entry'    => $entry?->toArray(),
-            // ]);
-
             $resolvedQuantity = $quantity ?? $entry?->lotQuantity;
 
             return $this->createPlannedLot(
@@ -492,6 +482,21 @@ class LoadingPlanService
             // Split & Merge Metadata
             'split_info' => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent ?? null, $this->splitsByChild ?? null, $scheduledDate),
             'merge_info' => LotMergeService::buildMergeMeta($lotId, $this->mergesByTarget ?? null, $this->mergesBySource ?? null, $scheduledDate),
+        ];
+    }
+
+    public function mapWipToPickupPayload(CustomerDataWip $wip): array
+    {
+        // this payload is for SchedulerService
+
+        return [
+            'lot_id'       => $wip->Lot_Id,
+            'part_name'    => $wip->Part_Name,    // TODO confirm column name
+            'package_name' => $wip->Package_Name, // TODO confirm column name
+            'qty'          => $wip->Qty,           // TODO confirm column name
+            'lead_count'   => $wip->Lead_Count,    // TODO confirm column name
+            'body_size'    => $wip->Body_Size,     // TODO confirm column name
+            'is_expedite'  => false,               // TODO no source identified — see below
         ];
     }
 

@@ -5,7 +5,7 @@ namespace Tests\Unit\Scheduling;
 use App\Models\MachineSetupState;
 use App\Models\MachineTransitionRule;
 use App\Models\MachineCapabilityPartRule;
-use App\Services\Scheduling\SchedulerService;
+use App\Services\SchedulerService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 

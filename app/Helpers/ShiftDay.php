@@ -18,6 +18,14 @@ class ShiftDay
         return self::forTimestamp(now());
     }
 
+    /**
+     * The "business date" for yesterday relative to the current shift day.
+     */
+    public static function yesterday(): string
+    {
+        return Carbon::parse(self::current())->subDay()->toDateString();
+    }
+
     public static function forTimestamp(Carbon $timestamp): string
     {
         return $timestamp->hour < self::CUTOFF_HOUR

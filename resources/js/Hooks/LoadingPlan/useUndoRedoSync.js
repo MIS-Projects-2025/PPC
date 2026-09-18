@@ -2,12 +2,6 @@ import { recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import { useCallback, useEffect, useRef } from "react";
 
-/**
- * `getPresent` should be a stable function returning the undo store's
- * current `present` snapshot (e.g. `() => useDeemoStore.getState().present`)
- * — passed as a getter rather than a value so this hook always reads the
- * state *after* `undo`/`redo` has already mutated the store.
- */
 export function useUndoRedoSync({ dataRows, undo, redo, getPresent, baseTimes, date, mutate, update, toast }) {
     const dataRowsRef = useRef(dataRows);
     useEffect(() => {
@@ -22,7 +16,7 @@ export function useUndoRedoSync({ dataRows, undo, redo, getPresent, baseTimes, d
             isSyncingRef.current = true;
             try {
                 const prevSnapshot = dataRowsRef.current;
-                step(); // mutates the undo store in place (undo() or redo())
+                step();
 
                 const nextSnapshot = getPresent().map((r) => ({ ...r }));
 
@@ -34,10 +28,15 @@ export function useUndoRedoSync({ dataRows, undo, redo, getPresent, baseTimes, d
                     affectedMachines.forEach((m) => {
                         if (m !== null) recomputeMachine(nextSnapshot, m, baseTimes, date);
                     });
-                    update(() => nextSnapshot, true); // silent — no new undo/redo step
+                    update(() => nextSnapshot, true);
                 }
 
-                await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast);
+                const nextIds = new Set(nextSnapshot.map((r) => r._dndId));
+                const deletedEntryIds = prevSnapshot
+                    .filter((r) => r.entry_id && !nextIds.has(r._dndId))
+                    .map((r) => r.entry_id);
+
+                await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast, deletedEntryIds);
             } finally {
                 isSyncingRef.current = false;
             }

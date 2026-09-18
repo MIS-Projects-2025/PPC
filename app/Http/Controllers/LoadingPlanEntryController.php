@@ -229,6 +229,52 @@ class LoadingPlanEntryController extends Controller
         }
     }
 
+    public function batchSync(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'rows'                       => 'present|array',
+            'rows.*.dnd_id'              => 'required|string',
+            'rows.*.entry_id'            => 'nullable|integer',
+            'rows.*.machine'             => 'nullable|string',
+            'rows.*.entry_type'          => 'required|in:lot,block',
+            'rows.*.lot_id'              => 'nullable|string',
+            'rows.*.fields'              => 'nullable|array',
+            'deleted'                    => 'nullable|array',
+            'deleted.*'                  => 'integer',
+            'rows.*.fields.status'       => 'nullable|string',
+            'rows.*.fields.remarks'      => 'nullable|string',
+            'rows.*.fields.tag'          => 'nullable|string',
+            'rows.*.fields.accu_time'    => 'nullable|integer',
+            'rows.*.fields.block_label'  => 'nullable|string',
+            'rows.*.lock_version'        => 'nullable|integer',
+            'order'                      => 'nullable|array',
+            'order.*'                    => 'array',
+            'scheduled_date'             => 'required|date',
+        ]);
+
+        try {
+            $result = $this->service->syncRows($data['rows'], $data['order'] ?? [], $data['deleted'] ?? [], $data['scheduled_date']);
+            return response()->json($result);
+        } catch (StaleWriteException $e) {
+            return response()->json([
+                'error'   => 'stale_write',
+                'message' => $e->getMessage(),
+            ], 409);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json([
+                'error'          => 'finalized',
+                'message'        => $e->getMessage(),
+                'scheduled_date' => $e->scheduledDate,
+            ], 422);
+        } catch (\Throwable $e) {
+            Log::error('batchSync failed', ['exception' => $e]);
+            return response()->json([
+                'error'   => 'server_error',
+                'message' => 'Could not sync changes. Nothing was saved.',
+            ], 500);
+        }
+    }
+
     public function batchApply(Request $request): JsonResponse
     {
         $data = $request->validate([

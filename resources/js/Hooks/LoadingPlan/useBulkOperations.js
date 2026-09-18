@@ -163,7 +163,7 @@ export function useBulkOperations({
                         (prev) =>
                             prev.map((r) => {
                                 const match = updatedEntries?.find((e) =>
-                                    isBlockRow(r) ? e.id === r.entry_id : e.lot_id === r.lot_id,
+                                    e.id === r.id,
                                 );
                                 return match ? { ...r, ...match } : r;
                             }),

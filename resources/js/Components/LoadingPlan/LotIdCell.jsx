@@ -1,6 +1,6 @@
+import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import React, { useContext } from "react";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
-import { TableActionsContext } from "./RowContent";
 
 export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
     const { handleShowHistory = noop, handleShowMergeHistory = noop } =

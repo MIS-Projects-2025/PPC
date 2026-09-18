@@ -2,7 +2,7 @@ import { mergeRefs } from "@/Lib/dnd.js";
 import { useSortable } from "@dnd-kit/sortable";
 import { memo, useContext } from "react";
 import { TableInteractionContext } from "./MachineSectionBody";
-import RowContent from "./RowContent";
+// import RowContent from "./RowContent";
 
 export const SortableRow = memo(function SortableRow({
     row,
@@ -22,17 +22,18 @@ export const SortableRow = memo(function SortableRow({
     } = useSortable({ id: row.original._dndId, disabled: !isSortable });
 
     return (
-        <RowContent
-            row={row}
-            orderedDndIds={orderedDndIds}
-            setNodeRef={mergeRefs(setNodeRef, measureElement)}
-            virtualIndex={virtualIndex}
-            transform={transform}
-            transition={transition}
-            isDragging={isDragging}
-            dragHandleProps={{ ...attributes, ...listeners }}
-            itemNumber={itemNumber}
-            isSortable={isSortable}
-        />
+        null
+        // <RowContent
+        //     row={row}
+        //     orderedDndIds={orderedDndIds}
+        //     setNodeRef={mergeRefs(setNodeRef, measureElement)}
+        //     virtualIndex={virtualIndex}
+        //     transform={transform}
+        //     transition={transition}
+        //     isDragging={isDragging}
+        //     dragHandleProps={{ ...attributes, ...listeners }}
+        //     itemNumber={itemNumber}
+        //     isSortable={isSortable}
+        // />
     );
 });

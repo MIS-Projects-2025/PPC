@@ -490,15 +490,21 @@ class LotSplitService
             return $quantity->effectiveQty();
         }
 
-        return $this->wipQty($lotId);
+        return $this->wipQty($entry);
     }
 
-    private function wipQty(string $lotId): int
+    private function wipQty(LoadingPlanEntry $entry): int
     {
         $qty = CustomerDataWip::query()
-            ->where('Lot_Id', $lotId)
-            ->orderByDesc('import_date')
+            ->forDate($entry->scheduled_date)
+            ->where('Lot_Id', $entry->lot_id)
             ->value('Qty');
+
+        // TOOD: check if you need the entry->schedule_date instead of just taking the lates
+        // $qty = CustomerDataWip::query()
+        //     ->where('Lot_Id', $lotId)
+        //     ->orderByDesc('import_date')
+        //     ->value('Qty');
 
         if ($qty === null) {
             throw new InvalidSplitException("Could not resolve original quantity for lot [{$lotId}].");
