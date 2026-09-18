@@ -1453,7 +1453,7 @@ class SchedulerService
     {
         $this->preloadRecipes($pickup);
         [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
-
+        log_entities($pickupLots);
         $results = ['placed' => [], 'unassigned' => collect(), 'unmatched_part_names' => $unmatchedPartNames];
 
         $this->preloadReferenceData($pickupLots);
@@ -1520,7 +1520,7 @@ class SchedulerService
     */
 
             $start = $logTimer('LoadingPlanEntry::get');
-            // dump($candidateMachineIds);
+            log_entities($candidateMachineIds);
             $entries = LoadingPlanEntry::query()
                 ->with('lotQuantity')
                 ->whereIn('machine_id', $candidateMachineIds)

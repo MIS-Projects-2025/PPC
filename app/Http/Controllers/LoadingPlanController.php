@@ -7,6 +7,7 @@ use Inertia\Inertia;
 use App\Models\LoadingPlanEntry;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
+use App\Models\SchedulerRun;
 use App\Models\PpcPackageMaster;
 use App\Models\MachineCapacity;
 use App\Services\LoadingPlanPackageCoverage;
@@ -135,24 +136,6 @@ class LoadingPlanController extends Controller
 
         Log::info("pickup", ['pickup' => $pickup]);
 
-        $schedulerResult = null;
-
-        if (!empty($pickup) && !$isVisitingYesterday) {
-            $schedulerService = app(\App\Services\SchedulerService::class);
-            $schedulerResult = $schedulerService->rebuildForPickupArrival($pickup, Carbon::parse($date));
-            $mark('rebuildForPickupArrival');
-
-            if ($schedulerResult['unmatched_part_names']->isNotEmpty()) {
-                Log::warning('Scheduler: unmatched part names', $schedulerResult['unmatched_part_names']->all());
-            }
-            if ($schedulerResult['unassigned']->isNotEmpty()) {
-                Log::info('Scheduler: lots left unassigned', ['count' => $schedulerResult['unassigned']->count()]);
-            }
-
-            $result = $loadingPlanService->initEntries();
-            $mark('initEntries (2nd call, post-scheduler rebuild)');
-        }
-
         $packages = $result
             ->filter(fn($row) => !$row['is_block'])
             ->pluck('package_name')
@@ -215,12 +198,103 @@ class LoadingPlanController extends Controller
                         'capacity' => $item->capacity,
                         'effective_from' => $item->effective_from,
                     ]);
-            })
+            }),
+            'schedulerHistory' => Inertia::defer(
+                fn() =>
+                SchedulerRun::query()
+                    ->where('location', $selectedLocation)
+                    ->where('date', $date)
+                    ->latest()
+                    ->limit(20)
+                    ->get()
+            ),
         ]);
 
         $mark('Inertia::render (build response, excludes deferred props)');
 
         return $response;
+    }
+
+    public function runScheduler(Request $request)
+    {
+        $date = $request->get('date', ShiftDay::current());
+        $selectedLocation = $request->get('location', 'PL1');
+        $previousDate = Carbon::parse($date)->subDay()->toDateString();
+        $isVisitingYesterday = $date === ShiftDay::yesterday();
+
+        if ($isVisitingYesterday) {
+            return back()->with('error', 'Cannot run scheduler on a past date.');
+        }
+
+        $lockKey = "scheduler-run-lock:{$selectedLocation}:{$date}";
+        $lock = Cache::lock($lockKey, 60); // hold for max 60s
+
+        if (!$lock->get()) {
+            return back()->with('error', 'Scheduler is already running for this location/date.');
+        }
+
+        try {
+            $loadingPlanService = new LoadingPlanService($date, $selectedLocation, $previousDate);
+            $loadingPlanService->initWipAndEntries();
+            $result = $loadingPlanService->initEntries();
+
+            $unassignedRows = $result->filter(
+                fn($row) =>
+                !$row['is_block'] && ($row['entry_id'] === null || $row['machine'] === null)
+            )->values();
+
+            $unassignedWipOnly = $unassignedRows->filter(fn($row) => $row['entry_id'] === null);
+            $unassignedLotIds = $unassignedWipOnly->pluck('lot_id')->filter()->all();
+
+            $wipRowsToSchedule = $loadingPlanService->todayWipRows->toBase()->only($unassignedLotIds);
+            $pickup = $wipRowsToSchedule
+                ->map(fn($wip) => $loadingPlanService->mapWipToPickupPayload($wip))
+                ->values()
+                ->all();
+
+            if (empty($pickup)) {
+                SchedulerRun::create([
+                    'location'   => $selectedLocation,
+                    'date'       => $date,
+                    'user_id'    => auth()->id(),
+                    'status'     => 'skipped',
+                    'note'       => 'No unassigned pickup rows to schedule.',
+                ]);
+                return back()->with('success', 'Nothing to schedule.');
+            }
+
+            $schedulerService = app(\App\Services\SchedulerService::class);
+            $schedulerResult = $schedulerService->rebuildForPickupArrival($pickup, Carbon::parse($date));
+
+            SchedulerRun::create([
+                'location'          => $selectedLocation,
+                'date'              => $date,
+                'user_id'           => auth()->id(),
+                'status'            => 'ok',
+                'pickup_count'      => count($pickup),
+                'assigned_count'    => count($pickup) - $schedulerResult['unassigned']->count(),
+                'unassigned_count'  => $schedulerResult['unassigned']->count(),
+                'unmatched_parts'   => $schedulerResult['unmatched_part_names']->values()->all(),
+            ]);
+
+            if ($schedulerResult['unmatched_part_names']->isNotEmpty()) {
+                Log::warning('Scheduler: unmatched part names', $schedulerResult['unmatched_part_names']->all());
+            }
+
+            return back()->with('success', 'Scheduler run complete.');
+        } catch (\Throwable $e) {
+            SchedulerRun::create([
+                'location' => $selectedLocation,
+                'date'     => $date,
+                'user_id'  => auth()->id(),
+                'status'   => 'error',
+                'note'     => $e->getMessage(),
+            ]);
+            Log::error('Scheduler run failed', ['exception' => $e]);
+            return back()->with('error', 'Scheduler run failed. Check logs.');
+        } finally {
+            $lock->release();
+        }
     }
 
     // public function index(Request $request)

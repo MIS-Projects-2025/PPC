@@ -304,6 +304,7 @@ export default function Deemo({
     partnameMismatches,
     unknownPackages,
     recipeMismatches,
+    schedulerHistory,
 }) {
     const {
         present: dataRows,
@@ -319,7 +320,7 @@ export default function Deemo({
 
     const toast = useToast();
     const { mutate } = useMutation();
-
+    const [isRunningScheduler, setIsRunningScheduler] = useState(false);
     const [highlightedMatch, setHighlightedMatch] = useState(null); // { rowId, columnKey }
 
     const [activePackage, setActivePackage] = useState("LGA");
@@ -1379,6 +1380,17 @@ export default function Deemo({
                                     )}
                                 </button>
 
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={() => document.getElementById("scheduler_run_modal")?.showModal()}
+                                    title="Run scheduler / view history"
+                                >
+                                    Scheduler
+                                    {schedulerHistory?.[0]?.status === "error" && (
+                                        <span className="w-1.5 h-1.5 rounded-full bg-error ml-1" />
+                                    )}
+                                </button>
+
                                 {status && status !== "not_imported" && (
                                     <button
                                         className="btn btn-sm rounded-box btn-secondary"
@@ -1873,6 +1885,87 @@ export default function Deemo({
                         >
                             Add Block
                         </button>
+                    </div>
+                </div>
+                <form method="dialog" className="modal-backdrop">
+                    <button>close</button>
+                </form>
+            </dialog>
+
+            {/* ── Scheduler run modal ──────────────────────────────────
+                Triggers the scheduler run endpoint (POST) and lists recent
+                runs from the deferred schedulerHistory prop. History entries
+                are read-only; the only action here is "Run Scheduler". */}
+            <dialog id="scheduler_run_modal" className="modal">
+                <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
+                    <h3 className="font-bold text-lg mb-2">Scheduler</h3>
+
+                    <button
+                        className="btn btn-sm btn-primary mb-4 self-start"
+                        disabled={isRunningScheduler}
+                        onClick={() => {
+                            setIsRunningScheduler(true);
+                            router.post(
+                                "/loading-plan/run-scheduler",
+                                { date, location: selectedLocation },
+                                {
+                                    preserveScroll: true,
+                                    onFinish: () => setIsRunningScheduler(false),
+                                },
+                            );
+                        }}
+                    >
+                        {isRunningScheduler ? "Running…" : "Run Scheduler"}
+                    </button>
+
+                    <h4 className="font-semibold text-sm mb-2 text-base-content/70">
+                        Recent runs
+                    </h4>
+                    <div className="flex flex-col gap-1 overflow-y-auto pr-1">
+                        {schedulerHistory === undefined ? (
+                            <span className="text-sm text-base-content/50">Loading…</span>
+                        ) : schedulerHistory.length === 0 ? (
+                            <span className="text-sm text-base-content/50">No runs yet.</span>
+                        ) : (
+                            schedulerHistory.map((run) => (
+                                <div
+                                    key={run.id}
+                                    className="flex items-center justify-between gap-3 py-1 text-sm border-b border-base-content/10 last:border-0"
+                                >
+                                    <span className="flex items-center gap-1.5">
+                                        <span
+                                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                run.status === "ok"
+                                                    ? "bg-success"
+                                                    : run.status === "error"
+                                                    ? "bg-error"
+                                                    : "bg-warning"
+                                            }`}
+                                        />
+                                        {run.user?.name ?? "System"}
+                                    </span>
+                                    <span className="text-base-content/60">
+                                        {run.status === "ok"
+                                            ? `${run.assigned_count}/${run.pickup_count} assigned`
+                                            : run.status === "skipped"
+                                            ? "nothing to schedule"
+                                            : "failed"}
+                                    </span>
+                                    <span className="text-base-content/40 text-xs">
+                                        {new Date(run.created_at).toLocaleTimeString([], {
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                        })}
+                                    </span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    <div className="modal-action">
+                        <form method="dialog">
+                            <button className="btn btn-ghost btn-sm">Close</button>
+                        </form>
                     </div>
                 </div>
                 <form method="dialog" className="modal-backdrop">

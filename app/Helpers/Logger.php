@@ -12,6 +12,12 @@ if (!function_exists('log_entities')) {
      */
     function log_entities(mixed $data, string $label = 'Logged Entities', string $level = 'info'): void
     {
+        // Grab the caller's file/line (index 0 = this call site)
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
+        $location = collect($trace)
+            ->map(fn($t) => basename($t['file'] ?? '?') . ':' . ($t['line'] ?? '?'))
+            ->implode(' <- ');
+
         // 1. Convert collection to array if needed
         if ($data instanceof Collection) {
             $data = $data->all();
@@ -20,7 +26,7 @@ if (!function_exists('log_entities')) {
         // 2. Flatten nested arrays (e.g., $plan[$machineId][]) into a single flat array
         $items = is_array($data) ? Arr::flatten($data, 1) : [$data];
 
-        Log::log($level, "=== [{$label}] Count: " . count($items) . " ===");
+        Log::log($level, "=== [{$label}] ({$location}) Count: " . count($items) . " ===");
 
         foreach ($items as $index => $item) {
             if ($item instanceof Model) {

@@ -80,6 +80,9 @@ Route::prefix('rules')->group(function () {
 });
 
 Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
+    Route::post('run-scheduler', [LoadingPlanController::class, 'runScheduler'])
+        ->name('run-scheduler');
+
     Route::post('move', [LoadingPlanEntryController::class, 'move'])->name('move');
     Route::post('transfer', [LoadingPlanEntryController::class, 'transfer'])->name('transfer');
     Route::post('bulk-transfer', [LoadingPlanEntryController::class, 'bulkTransfer'])->name('bulk-transfer');
