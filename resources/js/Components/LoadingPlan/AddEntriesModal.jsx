@@ -1,5 +1,5 @@
+import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import { forwardRef, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { TableActionsContext } from "./RowContent";
 
 const DEFAULT_BLOCK_PRESETS = {
     setup: { label: "Set-up", duration: 120 },

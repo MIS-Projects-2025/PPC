@@ -691,9 +691,9 @@ class SchedulerService
      * though the general rule for that machine says otherwise.
      *
      * Machines with axis rules (machine_transition_axis_rules) are
-     * costed by diffing factory/package_group/leadcount live instead
-     * of a materialized pairwise row; cost = MAX of whichever axes
-     * differ. Machines with no axis rules fall through unchanged to
+     * costed by diffing factory/package_group/leadcount/body_size live
+     * instead of a materialized pairwise row; cost = MAX of whichever
+     * axes differ. Machines with no axis rules fall through unchanged to
      * the existing pairwise/wildcard machine_transition_rules lookup.
      */
     protected function transitionCost(int $machineId, ?int $fromStateId, int $toStateId, ?string $partName = null): array
@@ -738,6 +738,12 @@ class SchedulerService
                     || $fromState->leadcount_max !== $toState->leadcount_max
                 ) {
                     $applicable->push($axisRules->firstWhere('axis', 'leadcount'));
+                }
+                if ($fromState->body_size !== $toState->body_size) {
+                    $applicable->push($axisRules->firstWhere('axis', 'body_size'));
+                }
+                if ($fromState->process_type !== $toState->process_type) {
+                    $applicable->push($axisRules->firstWhere('axis', 'process_type'));
                 }
 
                 $applicable = $applicable->filter();
@@ -1452,7 +1458,7 @@ class SchedulerService
 
         $this->preloadReferenceData($pickupLots);
         $candidateMachineIds = $this->getCandidateMachineIds($pickupLots);
-
+        log_entities($candidateMachineIds);
         if ($candidateMachineIds->isEmpty() && $pickupLots->isEmpty()) {
             return $results;
         }
@@ -1796,6 +1802,7 @@ class SchedulerService
             $start = $logTimer('Delete existing open entries');
 
             $deletedCount = LoadingPlanEntry::query()
+                ->whereDate('scheduled_date', $targetDate)
                 ->whereIn('machine_id', $candidateMachineIds)
                 ->open()
                 ->delete();
@@ -2054,7 +2061,7 @@ class SchedulerService
 
             $start = $logTimer('bulkPlacePlan');
             Log::info("the plan");
-            Log::info($this->plan);
+            log_entities($this->plan);
             $freshEntries = $this
                 ->loadingPlanEntryService
                 ->bulkPlacePlan(

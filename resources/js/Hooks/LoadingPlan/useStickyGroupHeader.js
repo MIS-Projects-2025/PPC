@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 export function useStickyGroupHeader(displayRows, gridRef) {
     const [stickyGroup, setStickyGroup] = useState(null);
 
+    console.log("LOG ~ useStickyGroupHeader.js:8 ~ useStickyGroupHeader ~ stickyGroup:", stickyGroup);
+
     const groupHeaderOffsets = useMemo(() => {
         return displayRows.reduce((acc, row, index) => {
             if (row.__type === "header") {

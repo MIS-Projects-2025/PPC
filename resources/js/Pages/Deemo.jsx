@@ -1,7 +1,7 @@
 import DateNav from "@/Components/DateNav";
 import AddEntryModal from "@/Components/LoadingPlan/AddEntriesModal";
 import { BakeSelectionToolbar } from "@/Components/LoadingPlan/BakeSelectionToolbar";
-import { DATA_COLUMNS, makeBakeColumns, makeColumns } from "@/Components/LoadingPlan/columns";
+import { DATA_COLUMNS, TableActionsContext, makeBakeColumns, makeColumns } from "@/Components/LoadingPlan/columns";
 import DataIntegrityModal, {
     DATA_INTEGRITY_MODAL_ID,
     TabBadge,
@@ -16,7 +16,6 @@ import { MachineHeaderBar, TableInteractionContext } from "@/Components/LoadingP
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import { OvenHeaderCell } from "@/Components/LoadingPlan/OvenHeaderCell";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
-import { TableActionsContext } from "@/Components/LoadingPlan/RowContent";
 import { SavingCursorBadge } from "@/Components/LoadingPlan/SavingCursorBadge";
 import ScrollableTabs from "@/Components/LoadingPlan/ScrollableTabs";
 import { SearchBar } from "@/Components/LoadingPlan/SearchBar";
@@ -47,7 +46,7 @@ import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
 import { autoUpdate, offset, useFloating } from "@floating-ui/react";
 import { Deferred, router } from "@inertiajs/react";
 import clsx from "clsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DataGrid } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import { createPortal } from "react-dom";
@@ -820,6 +819,10 @@ export default function Deemo({
 
             const isCollapsed = collapsedMachines.has(m);
 
+            const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
+
+            console.log("LOG ~ Deemo.jsx:825 ~ Deemo ~ lotCount:", lotCount);
+
             const headerRow = {
                 id: `header-${m ?? "unassigned"}`,
                 __type: "header",
@@ -827,6 +830,7 @@ export default function Deemo({
                 machineLabel: isUnassigned ? "Unassigned" : isManual ? "MANUAL" : m,
                 platform: machinePlatform.get(m),
                 __rowCount: rowsForMachine.length, // total count, shown even while collapsed
+                __lotCount: lotCount,
                 otherPackageCount: isUnassigned ? 0 : (otherPackageCounts[m] ?? 0),
                 __isCollapsed: isCollapsed,
                 isLocked: true,
@@ -1476,6 +1480,7 @@ export default function Deemo({
                                                         }}
                                                         machineKey={stickyMachine.machine}
                                                         rowCount={stickyMachine.__rowCount}
+                                                        lotCount={stickyMachine.__lotCount}
                                                         isCollapsed={stickyMachine.__isCollapsed}
                                                         onToggleCollapse={toggleMachineCollapsed}
                                                     />

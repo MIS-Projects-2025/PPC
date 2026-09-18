@@ -1,6 +1,6 @@
+import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import { forwardRef, useContext } from "react";
 import { GoRepoForked } from "react-icons/go";
-import { TableActionsContext } from "./RowContent";
 
 function formatDate(dateStr) {
     if (!dateStr) return "—";

@@ -1,5 +1,6 @@
 import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+import { createContext } from 'react';
 import { SelectColumn } from "react-data-grid";
 import { isBlockRow } from "../../Lib/LoadingPlan/helpers";
 import { CellEditor } from "./CellEditor";
@@ -7,6 +8,8 @@ import { DoableCell } from "./DoableCell";
 import { MachineHeaderCell } from "./MachineHeaderCell";
 import { OvenHeaderCell } from "./OvenHeaderCell";
 import { RowDropTargetCell } from "./RowDropTargetCell";
+
+export const TableActionsContext = createContext(null);
 
 export const EDITABLE_COLUMNS = {
     accu_time: "integer",
@@ -217,6 +220,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         <MachineHeaderCell
                             row={row}
                             rowCount={row.__rowCount}
+                            lotCount={row.__lotCount}
                             onToggleCollapse={onToggleCollapse}
                         />
                     );
@@ -261,7 +265,11 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     ...col,
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
-                        if (row.__type === "header") return null;
+                        
+                        if (row.__type === "header" || row.entry_type !== "lot") {
+                            return null;
+                        }
+
                         return (
                             <button
                                 type="button"
@@ -282,7 +290,11 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
                         console.log("HEHE ~ columns.jsx:264 ~ makeColumns ~ row:", row);
-                        if (row.__type === "header") return null;
+                        
+                        if (row.__type === "header" || row.entry_type !== "lot") {
+                            return null;
+                        }
+
                         return (
                             <LotIdCell
                                 lotId={row.lot_id}
@@ -300,7 +312,11 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     ...col,
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
-                        if (row.__type === "header") return null;
+
+                        if (row.__type === "header" || row.entry_type !== "lot") {
+                            return null;
+                        }
+
                         return (
                             <DoableCell
                                 value={row.doable}

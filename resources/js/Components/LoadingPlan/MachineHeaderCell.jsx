@@ -5,7 +5,7 @@ import { useDroppable } from "@dnd-kit/core";
 // row.machine on data rows). For Unassigned/MANUAL, row.machine is
 // null/"MANUAL" -- droppableMachineFromToken() (helpers.js) undoes the
 // string coercion when reading the id back on drop.
-export function MachineHeaderCell({ row, rowCount, onToggleCollapse }) {
+export function MachineHeaderCell({ row, rowCount, lotCount, onToggleCollapse }) {
     const { setNodeRef, isOver } = useDroppable({
         id: `machine-${row.machine}`,
     });
@@ -16,6 +16,7 @@ export function MachineHeaderCell({ row, rowCount, onToggleCollapse }) {
                 <MachineHeaderBar
                     row={row}
                     rowCount={rowCount}
+                    lotCount={lotCount}
                     isOver={isOver}
                     innerRef={setNodeRef}
                     isCollapsed={row.__isCollapsed}

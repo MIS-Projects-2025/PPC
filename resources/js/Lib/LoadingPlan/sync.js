@@ -14,6 +14,7 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
     const prevById = new Map(prevRows.map((r) => [r._dndId, r]));
 
     const added = nextRows.filter((r) => !prevById.has(r._dndId));
+    const addedIds = new Set(added.map((r) => r._dndId));
 
     const changed = nextRows.filter((r) => {
         const p = prevById.get(r._dndId);
@@ -28,29 +29,37 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
     });
 
     const affected = [...added, ...changed];
-    const order = buildOrderPerMachine(nextRows);
+    const order = buildOrderPerMachine(prevRows, nextRows, addedIds);
 
     if (affected.length === 0 && deletedEntryIds.length === 0 && Object.keys(order).length === 0) {
         return Promise.resolve();
     }
 
-    const rows = affected.map((r) => ({
-        dnd_id: r._dndId,
-        entry_id: r.entry_id ?? null,
-        machine: r.machine,
-        entry_type: isBlockRow(r) ? "block" : "lot",
-        lot_id: r.lot_id ?? null,
-        fields: {
-            status: r.status,
-            remarks: r.remarks,
-            tag: r.tag,
-            accu_time: r.accu_time,
-            ...(isBlockRow(r) ? { block_label: r.block_label } : {}),
-        },
-        lock_version: r.lock_version ?? null,
-    }));
+    const rows = affected.map((r) => {
+        // Added (no prior _dndId) but already carrying an entry_id means
+        // undo just resurrected a row whose backend row was hard-deleted.
+        // Force it through the create path instead of updating an id that
+        // no longer exists.
+        const isResurrected = addedIds.has(r._dndId) && r.entry_id != null;
 
-    return mutate(route("loading-plan.sync-rows"), {
+        return {
+            dnd_id: r._dndId,
+            entry_id: isResurrected ? null : (r.entry_id ?? null),
+            machine: r.machine,
+            entry_type: isBlockRow(r) ? "block" : "lot",
+            lot_id: r.lot_id ?? null,
+            fields: {
+                status: r.status,
+                remarks: r.remarks,
+                tag: r.tag,
+                accu_time: r.accu_time,
+                ...(isBlockRow(r) ? { block_label: r.block_label } : {}),
+            },
+            lock_version: isResurrected ? null : (r.lock_version ?? null),
+        };
+    });
+
+    return mutate(route("loading-plan.batch-sync"), {
         body: { rows, order, deleted: deletedEntryIds, scheduled_date: date },
     })
         .then(({ results }) => {
@@ -75,17 +84,35 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
             toast?.error?.("That change couldn't be saved and was reverted.");
         });
 }
-function buildOrderPerMachine(rows) {
-    const byMachine = new Map();
-    rows.forEach((r) => {
-        if (r.machine === null) return; // Unassigned has no persisted order
-        if (!byMachine.has(r.machine)) byMachine.set(r.machine, []);
-        // entry_id when the row already has one; dnd_id for rows the
-        // backend is about to create in this same call — resolved
-        // server-side before the resequence pass.
-        byMachine.get(r.machine).push(r.entry_id ?? r._dndId);
+
+function buildOrderPerMachine(prevRows, nextRows, addedIds) {
+    const buildIdsByMachine = (rows) => {
+        const byMachine = new Map();
+        rows.forEach((r) => {
+            if (r.machine === null) return;
+            if (!byMachine.has(r.machine)) byMachine.set(r.machine, []);
+            const isResurrected = addedIds.has(r._dndId) && r.entry_id != null;
+            byMachine.get(r.machine).push(isResurrected ? r._dndId : (r.entry_id ?? r._dndId));
+        });
+        return byMachine;
+    };
+
+    const prevByMachine = buildIdsByMachine(prevRows);
+    const nextByMachine = buildIdsByMachine(nextRows);
+
+    const order = {};
+    const allMachines = new Set([...prevByMachine.keys(), ...nextByMachine.keys()]);
+
+    allMachines.forEach((m) => {
+        const prevIds = prevByMachine.get(m) ?? [];
+        const nextIds = nextByMachine.get(m) ?? [];
+        const changed = prevIds.length !== nextIds.length || prevIds.some((id, i) => id !== nextIds[i]);
+        if (changed) {
+            order[m] = nextIds;
+        }
     });
-    return Object.fromEntries(byMachine);
+
+    return order;
 }
 
 // import { findMachineNeighbors } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";

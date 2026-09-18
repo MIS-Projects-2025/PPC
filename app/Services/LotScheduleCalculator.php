@@ -87,6 +87,7 @@ class LotScheduleCalculator
         LoadingPlanEntry|int $lotEntryId,
         ?int $machineId,
         ?string $newPartName = null,
+        bool $retime = true,
     ): void {
         $entry = $lotEntryId instanceof LoadingPlanEntry
             ? $lotEntryId
@@ -96,7 +97,7 @@ class LotScheduleCalculator
 
         $this->recalculate($entry, $machineName, $newPartName);
 
-        if ($machineId === null) {
+        if ($machineId === null || !$retime) {
             return;
         }
 

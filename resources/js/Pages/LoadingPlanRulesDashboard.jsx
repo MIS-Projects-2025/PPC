@@ -1,6 +1,6 @@
 import { Head } from '@inertiajs/react';
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 
 // Tag colors are keyed on the exact `rule_type` strings the backend
 // returns (space-separated, matching RuleExplorerService / the
@@ -235,14 +235,15 @@ function validateFields(fields, values, searchTexts) {
     return errors;
 }
 
-function RuleForm({ machines, type, onClose, onSaved }) {
+function RuleForm({ machines, type, initialValues, onClose, onSaved }) {
     const fields = FIELD_DEFS[type];
 
     const [values, setValues] = useState(() => {
         const initial = {};
-        fields.forEach((f) => (initial[f.name] = ''));
+        fields.forEach((f) => (initial[f.name] = initialValues?.[f.name] ?? ''));
         return initial;
     });
+
     const [searchTexts, setSearchTexts] = useState({});
     const [states, setStates] = useState({});
     const [loadingStates, setLoadingStates] = useState({});
@@ -320,7 +321,7 @@ function RuleForm({ machines, type, onClose, onSaved }) {
                 setWarnings(responseWarnings);
                 return;
             }
-            onSaved();
+            onSaved(data);
         } catch (err) {
             if (err.response?.status === 422) {
                 const serverErrors = err.response.data.errors ?? {};
@@ -442,15 +443,99 @@ export default function Index({ rules: initialRules = [], machines: initialMachi
     const [machineFilter, setMachineFilter] = useState('');
     const [typeFilter, setTypeFilter] = useState('');
     const [rules, setRules] = useState(initialRules);
-
-    console.log("LOG ~ LoadingPlanRulesDashboard.jsx:446 ~ Index ~ rules:", rules);
-    
     const [machines, setMachines] = useState(initialMachines);
     const [loading, setLoading] = useState(false);
     const [deletingId, setDeletingId] = useState(null);
+    const [collapsed, setCollapsed] = useState({});
 
     const [modalOpen, setModalOpen] = useState(false);
     const [ruleType, setRuleType] = useState('setup_state');
+    const [prefill, setPrefill] = useState(null);      // seeds the next RuleForm
+    const [chainPrompt, setChainPrompt] = useState(null); // { machineId, stateId, label }
+
+    const machineIdByNum = useMemo(
+        () => Object.fromEntries(machines.map((m) => [m.machine_num, m.id])),
+        [machines]
+    );
+
+    // Grouped view: capabilities with their linked costs/part rules nested underneath.
+    const { groups, loose } = useMemo(() => {
+        const capabilities = rules.filter((r) => r.rule_type === 'CAPABILITY');
+        const capIds = new Set(capabilities.map((r) => Number(r.rule_id)));
+        const groups = capabilities.map((cap) => ({
+            capability: cap,
+            related: rules.filter(
+                (r) => r.rule_type !== 'CAPABILITY' && r.state_id != null && Number(r.state_id) === Number(cap.rule_id)
+            ),
+        }));
+        const loose = rules.filter(
+            (r) => r.rule_type !== 'CAPABILITY' && !(r.state_id != null && capIds.has(Number(r.state_id)))
+        );
+        return { groups, loose };
+    }, [rules]);
+
+    const types = useMemo(() => [...new Set(rules.map((r) => r.rule_type))].sort(), [rules]);
+    const filtered = useMemo(
+        () => (typeFilter ? rules.filter((r) => r.rule_type === typeFilter) : rules),
+        [rules, typeFilter]
+    );
+
+    const toggleCollapsed = (id) => setCollapsed((c) => ({ ...c, [id]: !c[id] }));
+
+    const openModal = () => {
+        setRuleType('setup_state');
+        setPrefill(null);
+        setChainPrompt(null);
+        setModalOpen(true);
+    };
+
+    const quickAdd = (cap, nextType) => {
+        const machineId = machineIdByNum[cap.machine_num];
+        setPrefill(
+            nextType === 'transition_rule'
+                ? { machine_id: machineId, to_state_id: cap.rule_id }
+                : { _machine_filter: machineId, setup_state_id: cap.rule_id }
+        );
+        setRuleType(nextType);
+        setChainPrompt(null);
+        setModalOpen(true);
+    };
+
+    const handleSaved = (type, response) => {
+        if (type === 'setup_state') {
+            const state = response.state;
+            const machine = machines.find((m) => m.id === state.machine_id);
+            setChainPrompt({
+                machineId: state.machine_id,
+                stateId: state.setup_state_id,
+                label: `${machine?.machine_num ?? state.machine_id} — ${state.package_name ?? 'ANY pkg'} / ${state.body_size ?? 'any size'}`,
+            });
+            loadRules();
+            return;
+        }
+        setModalOpen(false);
+        setChainPrompt(null);
+        setPrefill(null);
+        loadRules();
+    };
+
+    const startChained = (nextType) => {
+        if (!chainPrompt) return;
+        setPrefill(
+            nextType === 'transition_rule'
+                ? { machine_id: chainPrompt.machineId, to_state_id: chainPrompt.stateId }
+                : { _machine_filter: chainPrompt.machineId, setup_state_id: chainPrompt.stateId }
+        );
+        setRuleType(nextType);
+        setChainPrompt(null);
+    };
+
+    const finishChain = () => {
+        setModalOpen(false);
+        setChainPrompt(null);
+        setPrefill(null);
+        loadRules();
+    };
 
     const loadRules = () => {
         setLoading(true);
@@ -472,12 +557,6 @@ export default function Index({ rules: initialRules = [], machines: initialMachi
         return () => clearTimeout(timer);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [machineFilter]);
-
-    const types = useMemo(() => [...new Set(rules.map((r) => r.rule_type))].sort(), [rules]);
-    const filtered = useMemo(
-        () => (typeFilter ? rules.filter((r) => r.rule_type === typeFilter) : rules),
-        [rules, typeFilter]
-    );
 
     const handleDelete = async (rule) => {
         const endpoint = DELETE_ENDPOINTS[rule.rule_type];
@@ -502,11 +581,6 @@ export default function Index({ rules: initialRules = [], machines: initialMachi
         } finally {
             setDeletingId(null);
         }
-    };
-
-    const openModal = () => {
-        setRuleType('setup_state');
-        setModalOpen(true);
     };
 
     return (
@@ -536,13 +610,13 @@ export default function Index({ rules: initialRules = [], machines: initialMachi
                         ))}
                     </select>
 
-                    <button
+                    {/* <button
                         type="button"
                         onClick={openModal}
                         className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
                     >
                         + Add Rule
-                    </button>
+                    </button> */}
 
                     <span className="text-sm text-gray-500">{loading ? 'Loading…' : `${filtered.length} rules`}</span>
                 </div>
@@ -558,40 +632,127 @@ export default function Index({ rules: initialRules = [], machines: initialMachi
                             </tr>
                         </thead>
                         <tbody>
-                            {filtered.length === 0 ? (
-                                <tr>
-                                    <td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">
-                                        No rules found.
-                                    </td>
-                                </tr>
+                            {typeFilter === '' ? (
+                                groups.length === 0 && loose.length === 0 ? (
+                                    <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">No rules found.</td></tr>
+                                ) : (
+                                    <>
+                                        {groups.map(({ capability: cap, related }) => (
+                                            <Fragment key={`cap-${cap.rule_id}`}>
+                                                <tr className="border-b border-gray-100 bg-blue-50/40">
+                                                    <td className="px-3 py-2 text-sm">
+                                                        <button type="button" onClick={() => toggleCollapsed(cap.rule_id)} className="mr-1 text-xs text-gray-500">
+                                                            {collapsed[cap.rule_id] ? '▶' : '▼'}
+                                                        </button>
+                                                        <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${TAG_CLASSES.CAPABILITY}`}>CAPABILITY</span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-sm">{cap.machine_num}</td>
+                                                    <td className="px-3 py-2 text-sm">{cap.rule_in_plain_english}</td>
+                                                    <td className="px-3 py-2 text-sm">
+                                                        <button type="button" onClick={() => handleDelete(cap)} disabled={deletingId === cap.rule_id}
+                                                            className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50">
+                                                            {deletingId === cap.rule_id ? '…' : 'Delete'}
+                                                        </button>
+                                                    </td>
+                                                </tr>
+
+                                                {!collapsed[cap.rule_id] && (
+                                                    related.length === 0 ? (
+                                                        <tr className="border-b border-gray-100">
+                                                            <td />
+                                                            <td colSpan={3} className="px-3 py-2 text-xs italic text-gray-400">
+                                                                No transition costs or part-name rules linked to this state yet —{' '}
+                                                                <button type="button" onClick={() => quickAdd(cap, 'transition_rule')} className="text-blue-600 underline">add a cost</button>
+                                                                {' or '}
+                                                                <button type="button" onClick={() => quickAdd(cap, 'part_rule')} className="text-blue-600 underline">restrict a part</button>.
+                                                            </td>
+                                                        </tr>
+                                                    ) : (
+                                                        related.map((rule) => (
+                                                            <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100">
+                                                                <td className="px-3 py-2 pl-8 text-sm">
+                                                                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'}`}>
+                                                                        {rule.rule_type}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
+                                                                <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
+                                                                <td className="px-3 py-2 text-sm">
+                                                                    {DELETE_ENDPOINTS[rule.rule_type] && (
+                                                                        <button type="button" onClick={() => handleDelete(rule)} disabled={deletingId === rule.rule_id}
+                                                                            className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50">
+                                                                            {deletingId === rule.rule_id ? '…' : 'Delete'}
+                                                                        </button>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        ))
+                                                    )
+                                                )}
+                                            </Fragment>
+                                        ))}
+
+                                        {loose.length > 0 && (
+                                            <tr>
+                                                <td colSpan={4} className="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-500">
+                                                    Machine-level rules (not tied to a specific capability state)
+                                                </td>
+                                            </tr>
+                                        )}
+                                        {loose.map((rule) => (
+                                            <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100">
+                                                <td className="px-3 py-2 text-sm">
+                                                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'}`}>
+                                                        {rule.rule_type}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
+                                                <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
+                                                <td className="px-3 py-2 text-sm">
+                                                    {DELETE_ENDPOINTS[rule.rule_type] && (
+                                                        <button type="button" onClick={() => handleDelete(rule)} disabled={deletingId === rule.rule_id}
+                                                            className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50">
+                                                            {deletingId === rule.rule_id ? '…' : 'Delete'}
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </>
+                                )
                             ) : (
-                                filtered.map((rule) => (
-                                    <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100 last:border-0">
-                                        <td className="px-3 py-2 text-sm">
-                                            <span
-                                                className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${
-                                                    TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'
-                                                }`}
-                                            >
-                                                {rule.rule_type}
-                                            </span>
-                                        </td>
-                                        <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
-                                        <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
-                                        <td className="px-3 py-2 text-sm">
-                                            {DELETE_ENDPOINTS[rule.rule_type] && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleDelete(rule)}
-                                                    disabled={deletingId === rule.rule_id}
-                                                    className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+                                // unchanged flat/filtered rendering from the original file
+                                filtered.length === 0 ? (
+                                    <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">No rules found.</td></tr>
+                                ) : (
+                                    filtered.map((rule) => (
+                                        <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100 last:border-0">
+                                            <td className="px-3 py-2 text-sm">
+                                                <span
+                                                    className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${
+                                                        TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'
+                                                    }`}
                                                 >
-                                                    {deletingId === rule.rule_id ? '…' : 'Delete'}
-                                                </button>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))
+                                                    {rule.rule_type}
+                                                </span>
+                                            </td>
+                                            <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
+                                            <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
+                                            <td className="px-3 py-2 text-sm">
+                                                {DELETE_ENDPOINTS[rule.rule_type] && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleDelete(rule)}
+                                                        disabled={deletingId === rule.rule_id}
+                                                        className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
+                                                    >
+                                                        {deletingId === rule.rule_id ? '…' : 'Delete'}
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )
                             )}
                         </tbody>
                     </table>
@@ -600,39 +761,55 @@ export default function Index({ rules: initialRules = [], machines: initialMachi
 
             {modalOpen && (
                 <div>
-                    <div
-                        className="fixed inset-0 z-[60] bg-black/40"
-                        onMouseDown={(e) => e.target === e.currentTarget && setModalOpen(false)}
-                    />
+                    <div className="fixed inset-0 z-[60] bg-black/40" onMouseDown={(e) => e.target === e.currentTarget && (chainPrompt ? finishChain() : setModalOpen(false))} />
                     <div className="fixed inset-0 z-[70] flex items-center justify-center">
                         <div className="max-h-[80vh] w-[520px] overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
-                            <h3 className="mb-4 text-lg font-semibold">Add Rule</h3>
+                            {chainPrompt ? (
+                                <div className="space-y-3 text-sm">
+                                    <h3 className="text-lg font-semibold">Saved</h3>
+                                    <p>Add rules for <strong>{chainPrompt.label}</strong> now, so it doesn't sit unrouted?</p>
+                                    <div className="flex flex-col gap-2 pt-1">
+                                        <button type="button" onClick={() => startChained('transition_rule')}
+                                            className="rounded border border-gray-300 px-3 py-2 text-left hover:bg-gray-50">
+                                            + Add a transition cost into this state
+                                        </button>
+                                        <button type="button" onClick={() => startChained('part_rule')}
+                                            className="rounded border border-gray-300 px-3 py-2 text-left hover:bg-gray-50">
+                                            + Restrict a part name to this state
+                                        </button>
+                                    </div>
+                                    <div className="flex justify-end pt-3">
+                                        <button type="button" onClick={finishChain} className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700">
+                                            Done
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <h3 className="mb-4 text-lg font-semibold">Add Rule</h3>
+                                    <label className="mb-1 block text-xs font-semibold">Rule Type</label>
+                                    <select
+                                        value={ruleType}
+                                        onChange={(e) => { setRuleType(e.target.value); setPrefill(null); }}
+                                        className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+                                    >
+                                        {Object.entries(RULE_TYPE_LABELS).map(([value, label]) => (
+                                            <option key={value} value={value}>{label}</option>
+                                        ))}
+                                    </select>
 
-                            <label className="mb-1 block text-xs font-semibold">Rule Type</label>
-                            <select
-                                value={ruleType}
-                                onChange={(e) => setRuleType(e.target.value)}
-                                className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-                            >
-                                {Object.entries(RULE_TYPE_LABELS).map(([value, label]) => (
-                                    <option key={value} value={value}>{label}</option>
-                                ))}
-                            </select>
-
-                            <div className="mt-4">
-                                {/* key={ruleType} remounts the form (and its internal state)
-                                    whenever the rule type changes */}
-                                <RuleForm
-                                    key={ruleType}
-                                    machines={machines}
-                                    type={ruleType}
-                                    onClose={() => setModalOpen(false)}
-                                    onSaved={() => {
-                                        setModalOpen(false);
-                                        loadRules();
-                                    }}
-                                />
-                            </div>
+                                    <div className="mt-4">
+                                        <RuleForm
+                                            key={ruleType + (prefill ? '-chained' : '')}
+                                            machines={machines}
+                                            type={ruleType}
+                                            initialValues={prefill}
+                                            onClose={() => { setModalOpen(false); setPrefill(null); }}
+                                            onSaved={(response) => handleSaved(ruleType, response)}
+                                        />
+                                    </div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

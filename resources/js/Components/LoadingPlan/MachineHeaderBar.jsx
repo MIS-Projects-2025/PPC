@@ -15,6 +15,7 @@ export const TableInteractionContext = createContext({
 export function MachineHeaderBar({
     row,
 	rowCount,
+	lotCount,
     isOver,
 	isCollapsed,
 	onToggleCollapse,
@@ -98,11 +99,17 @@ export function MachineHeaderBar({
 				</div>
 
 				<div className="w-65">
-                    <span className="opacity-50 font-extralight mr-2">Rows:</span>
-                    <span key={`rows-${toggleKey}`} className="animate-slide-down inline-block font-mono mr-4">{rowCount?.toLocaleString() ?? 0}</span>
-                    <span className="opacity-50 font-extralight mr-2">total Qty:</span> 
-                    <span key={`qty-${toggleKey}`} className="animate-slide-down inline-block font-mono">{totalQty?.toLocaleString()}</span>
-                </div>
+					<span key={`metrics-${toggleKey}`} className="animate-slide-down inline-block">
+						<span className="opacity-50 font-extralight mr-2">Rows:</span>
+						<span className="font-mono mr-4">{rowCount?.toLocaleString() ?? 0}</span>
+						<span className="opacity-50 font-extralight mr-2">Lots:</span>
+						<span className="font-mono mr-4">{lotCount?.toLocaleString() ?? 0}</span>
+					</span>
+					<span className="opacity-50 font-extralight mr-2">total Qty:</span> 
+					<span key={`qty-${toggleKey}`} className="animate-slide-down inline-block font-mono">
+						{totalQty?.toLocaleString()}
+					</span>
+				</div>
 
 				{/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
 				{!isUnassigned && !isManual && (

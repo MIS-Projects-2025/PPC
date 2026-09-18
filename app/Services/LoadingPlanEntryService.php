@@ -86,16 +86,18 @@ class LoadingPlanEntryService
 
             Log::info('Machine entry export', ['test' => $allEntriesOnMachine->toArray()]);
 
+            $wip = null;
+
             if ($entryType === 'lot') {
                 (new LotScheduleCalculator([$resolvedDate], [$entry->lot_id]))
                     ->loadPackageList()
                     ->recalculateAndRetime($entryId, $machineId);
-            }
 
-            $wip = CustomerDataWip::query()
-                ->where('Lot_Id', $entry->lot_id)
-                ->where('import_date', $entry->scheduled_date)
-                ->firstOrFail();
+                $wip = CustomerDataWip::query()
+                    ->where('Lot_Id', $entry->lot_id)
+                    ->where('import_date', $entry->scheduled_date)
+                    ->firstOrFail();
+            }
 
             $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
 
@@ -318,6 +320,7 @@ class LoadingPlanEntryService
             $nextSeq = ($lockedRows->where('machine_id', $targetMachineId)->max('sequence_order') ?? 0) + self::GAP_SEED;
 
             $updatedEntries = collect();
+            $firstAffectedEntry = null;
 
             $calculator = new LotScheduleCalculator([$date], $allEntries->pluck('lot_id')->all());
             $calculator->loadPackageList();
@@ -332,8 +335,12 @@ class LoadingPlanEntryService
                 ]);
 
                 if ($entry->entry_type === 'lot') {
-                    $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId);
+                    // accu_time only — no forward walk per lot. One walk covers the
+                    // whole batch, done once after both loops below.
+                    $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
                 }
+
+                $firstAffectedEntry ??= $entry;
 
                 $updatedEntries->push($entry->fresh('machineModel'));
                 $nextSeq += self::GAP_SEED;
@@ -350,7 +357,7 @@ class LoadingPlanEntryService
 
             foreach ($unplannedLotIds as $lotId) {
                 $wipItem = $wip->get($lotId);
-                // DD($wipItem);
+
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
                     'lot_id'         => $lotId,
@@ -373,10 +380,19 @@ class LoadingPlanEntryService
                     $lot->save();
                 }
 
-                $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId);
+                $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
+
+                $firstAffectedEntry ??= $entry;
 
                 $updatedEntries->push($entry->fresh('machineModel'));
                 $nextSeq += self::GAP_SEED;
+            }
+
+            // Single forward walk for the whole batch — starts from the earliest row
+            // this call touched (fresh(), since pass 1 above updated its accu_time)
+            // and recomputeTimeStartAndEnd walks every row downstream of it itself.
+            if ($firstAffectedEntry !== null) {
+                $calculator->recomputeTimeStartAndEnd($firstAffectedEntry->fresh(), $targetMachineId);
             }
 
             // 1. Eager load relationships needed by createPlannedLot()
@@ -468,6 +484,11 @@ class LoadingPlanEntryService
             $nextSeqByMachine = $lockedRows->groupBy('machine_id')
                 ->map(fn($rows) => ($rows->max('sequence_order') ?? 0) + self::GAP_SEED);
 
+            // Earliest entry touched per target machine — each machine gets its
+            // own single forward walk after both loops, instead of a walk per
+            // lot re-covering the same downstream chain on that machine.
+            $firstAffectedByMachine = [];
+
             $updated = collect();
             $loadingPlanService = new LoadingPlanService($date);
             $loadingPlanService->initSplitsAndMerges();
@@ -494,8 +515,12 @@ class LoadingPlanEntryService
                 ]);
 
                 if ($entry->entry_type === 'lot') {
-                    $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId);
+                    // accu_time only — the forward walk runs once per machine,
+                    // after both loops below, not once per lot here.
+                    $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
                 }
+
+                $firstAffectedByMachine[$targetMachineId] ??= $entry;
 
                 $refreshedEntry = $entry->fresh(['machineModel', 'lotQuantity']);
                 $updated->push(
@@ -524,9 +549,11 @@ class LoadingPlanEntryService
                     'lock_version'   => 1,
                 ]);
 
-                $refreshedEntry = $entry->fresh(['machineModel', 'lotQuantity']);
-                $calculator->recalculateAndRetime($refreshedEntry, $targetMachineId);
+                $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
 
+                $firstAffectedByMachine[$targetMachineId] ??= $entry;
+
+                $refreshedEntry = $entry->fresh(['machineModel', 'lotQuantity']);
                 $updated->push(
                     $loadingPlanService->createPlannedLot(
                         $wip->get($entry->lot_id),
@@ -535,6 +562,13 @@ class LoadingPlanEntryService
                     )
                 );
                 $nextSeqByMachine[$targetMachineId] = $seq + self::GAP_SEED;
+            }
+
+            // One forward walk per affected target machine, starting from the
+            // earliest entry that landed on it — recomputeTimeStartAndEnd walks
+            // everything downstream on that machine itself.
+            foreach ($firstAffectedByMachine as $machineId => $entry) {
+                $calculator->recomputeTimeStartAndEnd($entry->fresh(), $machineId);
             }
 
             return $updated;
@@ -1151,6 +1185,8 @@ class LoadingPlanEntryService
      */
     private function stageTempSequenceOrders(array $ids): void
     {
+        if (empty($ids)) return;
+
         $cases = [];
         $bindings = [];
 
@@ -1205,6 +1241,7 @@ class LoadingPlanEntryService
             $machineIds = $this->resolveMachineIds([
                 ...collect($rows)->pluck('machine')->filter()->all(),
                 ...$deletedEntries->pluck('machine_id')->filter()->all(),
+                ...array_keys($order),
             ]);
             if (!empty($machineIds)) {
                 $this->lockMachineRows($machineIds, $date);
@@ -1244,19 +1281,40 @@ class LoadingPlanEntryService
             $results = [];
 
             foreach ($rows as $row) {
-                $entry = $row['entry_id'] === null
+                $result = $row['entry_id'] === null
                     ? ($row['entry_type'] === 'block'
                         ? $this->createBlockRow($row, $date)
                         : $this->createLotRow($row, $date))
                     : $this->updateRow($row);
 
-                $dndToEntryId[$row['dnd_id']] = $entry->id;
-                $results[] = $entry;
+                $dndToEntryId[$row['dnd_id']] = $result['id'] ?? null;
+                $results[] = $result;
             }
+
+            $orderEntryIds = collect($order)->flatten()->filter(fn($id) => is_numeric($id))->unique()->values();
+
+            $orderEntries = $orderEntryIds->isEmpty()
+                ? collect()
+                : LoadingPlanEntry::whereKey($orderEntryIds)->get(['id', 'lot_id', 'scheduled_date', 'entry_type']);
+
+            $allLotIds = $orderEntries->where('entry_type', 'lot')->pluck('lot_id')->filter()->unique()->values()->all();
+            $allDates = $orderEntries->pluck('scheduled_date')
+                ->map(fn($d) => $d->toDateString())
+                ->push($date)
+                ->unique()
+                ->values()
+                ->all();
+
+            // One calculator, loaded once, reused for every machine/date-group this
+            // sync touches — replaces a fresh app(LotScheduleCalculator::class, ...)
+            // + loadPackageList() per machine per date-group, which could each fall
+            // back to an unfiltered ~20k-row scan when a group had no lots.
+            $sharedCalc = app(LotScheduleCalculator::class, ['dates' => $allDates, 'lotIds' => $allLotIds])
+                ->loadPackageList();
 
             foreach ($order as $machine => $ids) {
                 $entryIds = collect($ids)->map(fn($id) => $dndToEntryId[$id] ?? $id)->all();
-                $this->resequenceMachine($entryIds, $machine, $date);
+                $this->resequenceMachine($entryIds, $machine, $date, $sharedCalc);
             }
 
             return ['results' => $results];
@@ -1375,16 +1433,57 @@ class LoadingPlanEntryService
      * no before/after anchor resolution needed since every row on the machine
      * is present, not just the ones that moved.
      */
-    private function resequenceMachine(array $entryIds, string $machine, string $date): void
+    private function resequenceMachine(array $entryIds, string $machine, string $date, LotScheduleCalculator $calc): void
     {
         if (empty($entryIds)) return;
 
         $machineId = $this->resolveMachineId($machine);
 
+        // entryIds can span two dates on one machine: leaked entries still
+        // carrying yesterday's scheduled_date, listed first, followed by
+        // today's own entries. sequence_order is unique per
+        // (machine_id, scheduled_date), so each date's rows must be
+        // resequenced within their own date — resolve every id's real date
+        // rather than assuming $date covers all of them.
+        $requestedEntries = LoadingPlanEntry::whereKey($entryIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        $missingIds = collect($entryIds)->diff($requestedEntries->keys());
+        if ($missingIds->isNotEmpty()) {
+            Log::warning('resequenceMachine: entry ids in order payload no longer exist', [
+                'machine' => $machine,
+                'missing_ids' => $missingIds->values()->all(),
+            ]);
+        }
+
+        $idsByDate = collect($entryIds)
+            ->filter(fn($id) => $requestedEntries->has($id))
+            ->groupBy(fn($id) => $requestedEntries->get($id)->scheduled_date->toDateString());
+
+        foreach ($idsByDate as $groupDate => $groupIds) {
+            $this->resequenceMachineForDate($groupIds->values()->all(), $machineId, $machine, $groupDate, $calc);
+        }
+    }
+
+    private function resequenceMachineForDate(array $entryIds, int $machineId, string $machine, string $date, LotScheduleCalculator $calc): void
+    {
+        if (empty($entryIds)) return;
+
         $currentRows = LoadingPlanEntry::where('machine_id', $machineId)
             ->where('scheduled_date', $date)
             ->lockForUpdate()
             ->get();
+
+        if ($currentRows->isEmpty()) {
+            Log::warning('resequenceMachine: no current rows for machine/date, skipping', [
+                'machine' => $machine,
+                'date' => $date,
+                'requested_entry_ids' => $entryIds,
+            ]);
+            return;
+        }
 
         $currentIds = $currentRows->pluck('id')->all();
         $stray = array_diff($currentIds, $entryIds);
@@ -1397,8 +1496,6 @@ class LoadingPlanEntryService
             ]);
         }
 
-        // Stage the full current set, not just $entryIds — guarantees zero
-        // collision even if $entryIds is incomplete.
         $this->stageTempSequenceOrders($currentIds);
 
         $cases = [];
@@ -1408,7 +1505,6 @@ class LoadingPlanEntryService
             $bindings[] = $id;
             $bindings[] = ($i + 1) * self::GAP_SEED;
         }
-        // Strays keep their place at the end rather than vanishing into limbo.
         $nextSeq = (count($entryIds) + 1) * self::GAP_SEED;
         foreach ($stray as $id) {
             $cases[] = "WHEN id = ? THEN ?";
@@ -1422,26 +1518,43 @@ class LoadingPlanEntryService
 
         DB::statement(
             "UPDATE loading_plan_entries
-         SET sequence_order = CASE " . implode(' ', $cases) . " END,
-             machine_id = ?,
-             lock_version = lock_version + 1
-         WHERE id IN ($placeholders)",
+            SET sequence_order = CASE " . implode(' ', $cases) . " END,
+                machine_id = ?,
+                lock_version = lock_version + 1
+            WHERE id IN ($placeholders)",
             [...$bindings, $machineId, ...$allIds]
         );
 
-        $lotIds = LoadingPlanEntry::whereKey($allIds)
-            ->where('entry_type', 'lot')
-            ->pluck('lot_id')->filter()->unique()->values()->all();
+        $rowsById = $currentRows->keyBy('id');
+        $missingFromCurrent = collect($allIds)->diff($rowsById->keys());
 
-        $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList();
-        foreach ($allIds as $id) {
-            if (LoadingPlanEntry::find($id)?->entry_type === 'lot') {
-                $calc->recalculateAndRetime($id, $machineId);
-            }
+        if ($missingFromCurrent->isNotEmpty()) {
+            // ids not in $currentRows are being pulled in from a different
+            // machine (a transfer riding along in this order payload) — fetch
+            // those in one batch too, instead of one-by-one.
+            LoadingPlanEntry::whereKey($missingFromCurrent)->get()
+                ->each(fn($e) => $rowsById->put($e->id, $e));
         }
 
         $restart = $this->findFirstRemainingRow($machineId, $date);
+
+        // Pass 1: per-lot accu_time only (genuinely O(1) work per lot, needs to
+        // run per-lot since each lot's qty/recipe/capacity differ). No forward
+        // walk here — that's pass 2, done once for the whole machine instead of
+        // once per lot re-walking the same downstream chain.
+        foreach ($allIds as $id) {
+            if ($rowsById->get($id)?->entry_type === 'lot') {
+                $calc->recalculateAndRetime($id, $machineId, retime: false);
+            }
+        }
+
+        // Pass 2: one single forward walk from the machine's new first row.
+        // recomputeTimeStartAndEnd already walks the entire downstream chain
+        // itself and stops once times stop changing — one call here covers
+        // every row pass 1 touched.
         if ($restart) {
+            $calc->recomputeTimeStartAndEnd($restart->fresh(), $machineId);
+
             DB::table('machine_day_starts')->updateOrInsert(
                 ['machine_id' => $machineId, 'scheduled_date' => $date],
                 ['day_start_time' => $restart->fresh()->time_start?->format('H:i:s'), 'updated_at' => now()]
@@ -1807,26 +1920,51 @@ class LoadingPlanEntryService
 
         // --- pass 1: resolve continuity anchor per machine (bounded by
         // machine count, not lot count) ---
+        // machine count, not lot count) ---
         $dayStartByMachine = [];
         foreach (array_keys($plan) as $machineId) {
+            // Frozen/in-progress entries that survived the open()->delete() pass
+            // anchor both the time cursor and the sequence counter for today.
+            $frozenToday = LoadingPlanEntry::where('machine_id', $machineId)
+                ->where('scheduled_date', $date)
+                ->orderByDesc('sequence_order')
+                ->first();
+
+            if ($frozenToday && $frozenToday->getRawOriginal('time_end') !== null) {
+                $dayStartByMachine[$machineId] = [
+                    'cursor' => Carbon::parse($frozenToday->getRawOriginal('time_end')),
+                    'isBootstrap' => false,
+                    'seqStart' => $frozenToday->sequence_order + self::GAP_SEED,
+                ];
+                continue;
+            }
+
             $predecessor = LoadingPlanEntry::where('machine_id', $machineId)
                 ->where('scheduled_date', '<', $date)
                 ->orderByDesc('scheduled_date')
                 ->orderByDesc('sequence_order')
                 ->first();
 
-            if ($predecessor && $predecessor->time_end !== null) {
-                $dayStartByMachine[$machineId] = ['cursor' => $predecessor->time_end, 'isBootstrap' => false];
+            if ($predecessor && $predecessor->getRawOriginal('time_end') !== null) {
+                $dayStartByMachine[$machineId] = [
+                    'cursor' => Carbon::parse($predecessor->getRawOriginal('time_end')),
+                    'isBootstrap' => false,
+                    'seqStart' => self::GAP_SEED,
+                ];
                 continue;
             }
 
             $row = DB::table('machine_day_starts')
-                ->where('machine_id', $machineId)->where('scheduled_date', $date)->first();
+                ->where('machine_id', $machineId)
+                ->where('scheduled_date', $date)
+                ->first();
 
             $dayStartByMachine[$machineId] = $row
-                ? ['cursor' => Carbon::parse("{$date} {$row->day_start_time}"), 'isBootstrap' => false]
-                : ['cursor' => Carbon::parse("{$date} 00:00:00"), 'isBootstrap' => true];
+                ? ['cursor' => Carbon::parse("{$date} {$row->day_start_time}"), 'isBootstrap' => false, 'seqStart' => self::GAP_SEED]
+                : ['cursor' => Carbon::parse("{$date} 00:00:00"), 'isBootstrap' => true, 'seqStart' => self::GAP_SEED];
         }
+
+        // dd($dayStartByMachine);
 
         // --- pass 2: build insert rows, computing accu_time/commit/timing
         // entirely in-memory (no DB round-trip per lot) ---
@@ -1835,9 +1973,9 @@ class LoadingPlanEntryService
         $walkMeta = []; // parallel to $entryInsertRows: ['machine_id', 'lot_id'|null]
 
         foreach ($plan as $machineId => $rows) {
-            $seq = self::GAP_SEED;
+            $seq = $dayStartByMachine[$machineId]['seqStart'];   // was: self::GAP_SEED
             $cursor = $dayStartByMachine[$machineId]['cursor'];
-            $machineName = $calc->machineNumFor($machineId); // see NOTE above
+            $machineName = $calc->machineNumFor($machineId);
 
             foreach ($rows as $row) {
                 if ($row['type'] === 'block') {
@@ -1907,6 +2045,13 @@ class LoadingPlanEntryService
 
         Log::info("entryInsertRows");
         Log::info($entryInsertRows);
+
+        $entries = LoadingPlanEntry::where('scheduled_date', $date)
+            ->orderBy('machine_id')
+            ->orderBy('sequence_order')
+            ->get();
+
+        log_entities($entries, "Loading Plan Entries for {$date}");
 
         // --- pass 3: bulk write ---
         LoadingPlanEntry::insert($entryInsertRows);

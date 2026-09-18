@@ -9,14 +9,53 @@ select * from qdn_db.machine_transition_rules where from_state_id = 900;
 select * from qdn_db.machine_capability_part_rules where setup_state_id = 900;
 
 select * from ppc.customer_data_wip where Part_Name like '%ADG884%';
-select * from qdn_db.machine_list where machine_num = '54g6l';
+select * from qdn_db.machine_list where machine_num like '%29at1%';
 
+select * from qdn_db.machine_setup_states where machine_id = 230 limit 9999;
 select * from qdn_db.machine_setup_states limit 9999;
+select * from qdn_db.machine_setup_states where machine_id = 279;
+select * from qdn_db.machine_transition_rules where from_state_id = 32;
+select * from qdn_db.machine_capability_part_rules where setup_state_id = 32;
+select * from qdn_db.machine_capability_part_rules where setup_state_id = 32;
+
+show create table qdn_db.package_list;
+
 select * from qdn_db.machine_transition_rules;
 select * from qdn_db.package_list where devicename = 'DAC8512FSZ';
-select * from qdn_db.package_list where devicename = 'LT8641JUDC#WTRPBF';
-select distinct lead_count from qdn_db.package_list where package_type = 'TSOT';
+select distinct devicename from qdn_db.package_list where package_type = 'LFCSP' limit 9999;
+select distinct devicename from qdn_db.package_list where devicename = 'LTC4286AUKM#TRPBF';
+select distinct devicename from qdn_db.package_list where package_type = 'LFCSP_SS' and lead_count = '48';
 
+select * from qdn_db.machine_focus_group_rules;
+show create table qdn_db.machine_setup_states;
+
+select * from qdn_db.package_list where devicename = 'LT8641JUDC#WTRPBF';
+
+select distinct lead_count from qdn_db.package_list where package_type = 'TSOT';
+show create table loading_plan_entries;
+
+SELECT m.machine_num
+FROM (
+    SELECT '01DYSEC' AS machine_num UNION ALL
+    SELECT '02DIPBR' UNION ALL
+    SELECT '14HSI250' UNION ALL
+    SELECT '02SOLAS' UNION ALL
+    SELECT '03SOLAS' UNION ALL
+    SELECT '04SOLAS' UNION ALL
+    SELECT '05SOLAS' UNION ALL
+    SELECT '01MH3020' UNION ALL
+    SELECT '27HSI250' UNION ALL
+    SELECT '07ISMECA' UNION ALL
+    SELECT '03MLAS' UNION ALL
+    SELECT '01MLAS' UNION ALL
+    SELECT 'FVI' UNION ALL
+    SELECT '02MLAS' UNION ALL
+    SELECT 'KTBP02'
+) AS m
+LEFT JOIN qdn_db.machine_list ml
+    ON ml.machine_num = m.machine_num
+WHERE ml.machine_num IS NULL;
+select * from ppc.machine_day_starts where machine_id = 91;
 ----------------------------------------------------
 ----------------------------------------------------
 SELECT ml.machine_num, ml.id AS machine_id,
