@@ -86,17 +86,19 @@ import { PiOvenDuotone } from "react-icons/pi";
  *     header. Previously Deemo filtered rows by activePackageGroup with
  *     no indication anything was hidden.
  *   - NEW: fixed an id/entry_id mix-up in the bulk handlers (see below).
- *
- * FIX — id vs entry_id: `id` is the react-data-grid / dnd-kit row key
- * (see rowKeyGetter, useDraggable/useDroppable ids below). `entry_id` is
- * the backend primary key, only meaningful once a row has been persisted.
- * They are NOT the same value and a row can have an `id` with no
- * `entry_id` yet (see the `_dndId` seeding logic below). `selectedRows`
- * (react-data-grid's selection Set) is keyed by `id` because that's what
- * rowKeyGetter returns — every bulk handler must test membership with
- * `selectedRows.has(r.id)`, never `r.entry_id`. This file previously got
- * that backwards in all four bulk handlers, which meant bulk tag/status/
- * transfer/delete would silently match nothing. Fixed here.
+ *   - NEW: a synthetic "Unassigned" package tab that aggregates every
+ *     machine === null entry across ALL packages (bake excluded, since
+ *     bake never lives in dataRows to begin with) — see displayRows.
+ *   - NEW: on a real package tab, a machine section is hidden entirely
+ *     once it has nothing but block rows on it (no actual lots) — see
+ *     the lotCount check in displayRows.
+ *   - NEW: Excel-style column headers — click/ctrl-click/shift-click to
+ *     multi-select headers, drag any selected column's resize handle to
+ *     resize the whole selection together, and shrink a column down to
+ *     a thin colored sliver (still visible as a hint) instead of losing
+ *     it entirely. Plus a "Columns" button/modal to toggle the same
+ *     collapsed state by checkbox. See the column-selection block below
+ *     `columns` / `decoratedColumns`.
  *
  * STUBBED FOR NOW: every handler that talks to the backend has a
  * `return;` placed immediately before its `withUpdating(mutate(...))` /
@@ -146,6 +148,17 @@ import { PiOvenDuotone } from "react-icons/pi";
  *     `if (baseTimes)` and skip recompute if it's not provided, so
  *     nothing crashes without it — but time_start edits explicitly
  *     require it and will show a toast instead of silently no-op'ing).
+ *   - NEW (column headers): `makeColumns()` returns react-data-grid
+ *     `Column` objects with a `key`, `name`, and (optionally) its own
+ *     `renderHeaderCell`. `decoratedColumns` below wraps whatever
+ *     `renderHeaderCell` a column already has rather than replacing it,
+ *     so any existing sort/filter UI in a header should still render —
+ *     but I don't have columns.js in this conversation, so please check
+ *     that the wrapping doesn't clash with anything it already does
+ *     (e.g. if it renders its own outer clickable container). Also
+ *     assumes `col.width` is a plain number (react-data-grid also
+ *     accepts percentage strings / "max-content" — if any column here
+ *     uses those, the resize math needs a fallback for it).
  * -----------------------------------------------------------------------
  */
 
@@ -153,6 +166,18 @@ import { PiOvenDuotone } from "react-icons/pi";
 // since scroll math below (which group is "at top") depends on it.
 const ROW_HEIGHT = 35;
 const HEADER_ROW_HEIGHT = 35;
+
+// Column-header multi-select + Excel-style linked-resize (see
+// handleHeaderClick / handleColumnResize below). MIN_COLUMN_WIDTH is the
+// floor a column can be dragged/toggled down to — it's not 0 so there's
+// always a thin colored sliver left as a hint that a column is still
+// there with data in it. COLLAPSE_HINT_THRESHOLD is the width at/under
+// which we treat a column as "collapsed" for styling purposes (lets a
+// column land a few px above MIN_COLUMN_WIDTH from a drag and still get
+// the hinted styling, not just an exact-match at the floor).
+const MIN_COLUMN_WIDTH = 6;
+const COLLAPSE_HINT_THRESHOLD = 28;
+const COLUMN_WIDTHS_STORAGE_KEY = "loadingPlan:columnWidths";
 
 function buildExportGroups(dataRows, machines) {
     return machines
@@ -305,6 +330,30 @@ export default function Deemo({
     const [, setIsDirty] = useState(false);
     const [statusMenu, setStatusMenu] = useState(null);
 
+    // ── Column width overrides (shrink-to-min resize + the "Columns"
+    // visibility modal — see the column-decoration block further down,
+    // right after `columns` is built). Persisted across reloads the same
+    // way collapsedMachines/collapsedOvens do (localStorage), just as a
+    // plain key->width map instead of a Set, since usePersistedSet only
+    // handles Sets.
+    const [columnWidths, setColumnWidths] = useState(() => {
+        if (typeof window === "undefined") return {};
+        try {
+            const raw = window.localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY);
+            return raw ? JSON.parse(raw) : {};
+        } catch {
+            return {};
+        }
+    });
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths));
+        } catch {
+            // ignore write errors (private browsing quota, etc.)
+        }
+    }, [columnWidths]);
+
     const [collapsedMachines, setCollapsedMachines] = usePersistedSet('collapsedMachines');
     const [collapsedOvens, setCollapsedOvens] = usePersistedSet('collapsedOven');
 
@@ -394,10 +443,13 @@ export default function Deemo({
         return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
     }, [serverMachines]);
 
-    const activePackageGroup = useMemo(
-        () => packageGroups[activePackage] || null,
-        [activePackage, packageGroups],
-    );
+    const activePackageGroup = useMemo(() => {
+        // "Unassigned" isn't a real package group — it's a synthetic tab that
+        // aggregates every unassigned-machine lot across ALL packages (see
+        // displayRows below), so it doesn't filter by package at all.
+        if (activePackage === "Unassigned") return null;
+        return packageGroups[activePackage] || null;
+    }, [activePackage, packageGroups]);
 
     // console.log("LOG ~ Deemo.jsx:1001 ~ Deemo ~ activePackageGroup:", activePackageGroup);
 
@@ -705,6 +757,106 @@ export default function Deemo({
         [isUpdating, handleStatusClick, toggleMachineCollapsed, highlightedMatch],
     );
 
+    // ── Column shrink-to-min resize + visibility toggle ───────────────────
+    // Only the real data columns (DATA_COLUMNS) get width overrides / the
+    // collapsed hint — the leading SelectColumn (checkbox) and dragHandle
+    // (grip) columns are structural, not user data, and are left alone.
+    const dataColumnKeys = useMemo(() => new Set(DATA_COLUMNS.map((c) => c.key)), []);
+
+    // Double-click a header to pop that column back to its default width
+    // (handy after shrinking/hiding it down to the MIN_COLUMN_WIDTH sliver).
+    const handleHeaderDoubleClick = useCallback((columnKey) => {
+        setColumnWidths((prev) => {
+            if (!(columnKey in prev)) return prev;
+            const next = { ...prev };
+            delete next[columnKey];
+            return next;
+        });
+    }, []);
+
+    // react-data-grid reports resize as (columnIndex, newWidth) — see
+    // onColumnResize on the main <DataGrid /> below. `idx` indexes into the
+    // SAME array passed as the `columns` prop there (decoratedColumns),
+    // which preserves the order of `columns`, so indexing into `columns`
+    // here is safe.
+    const handleColumnResize = useCallback(
+        (idx, width) => {
+            const col = columns[idx];
+            if (!col?.key || !dataColumnKeys.has(col.key)) return;
+            setColumnWidths((prev) => ({
+                ...prev,
+                [col.key]: Math.max(MIN_COLUMN_WIDTH, width),
+            }));
+        },
+        [columns, dataColumnKeys],
+    );
+
+    // Toggle a column between its default width and the collapsed sliver.
+    // Used by the "Columns" visibility modal below. "Hidden" and "shrunk to
+    // the smallest resize size" are deliberately the same underlying state,
+    // so a column hidden from the modal still shows the same thin hint the
+    // manual-drag-to-shrink path leaves behind — nothing disappears outright.
+    const toggleColumnVisibility = useCallback(
+        (key) => {
+            setColumnWidths((prev) => {
+                const col = columns.find((c) => c.key === key);
+                const currentWidth = prev[key] ?? col?.width ?? 120;
+                const isHidden = currentWidth <= COLLAPSE_HINT_THRESHOLD;
+                const next = { ...prev };
+                if (isHidden) {
+                    delete next[key];
+                } else {
+                    next[key] = MIN_COLUMN_WIDTH;
+                }
+                return next;
+            });
+        },
+        [columns],
+    );
+
+    // Wraps `columns` with the width overrides + collapsed-hint styling
+    // above. This is what actually gets passed to the main <DataGrid />.
+    const decoratedColumns = useMemo(() => {
+        return columns.map((col) => {
+            if (!col.key || !dataColumnKeys.has(col.key)) return col; // leave checkbox/grip columns untouched
+            const width = columnWidths[col.key];
+            const isCollapsed = width !== undefined && width <= COLLAPSE_HINT_THRESHOLD;
+            const OriginalHeader = col.renderHeaderCell;
+
+            return {
+                ...col,
+                width: width ?? col.width,
+                minWidth: MIN_COLUMN_WIDTH,
+                resizable: col.resizable ?? true,
+                headerCellClass: clsx(col.headerCellClass, isCollapsed && "bg-warning/20"),
+                cellClass: (row) =>
+                    clsx(
+                        typeof col.cellClass === "function" ? col.cellClass(row) : col.cellClass,
+                        isCollapsed && "!p-0 overflow-hidden bg-warning/5",
+                    ),
+                renderHeaderCell: (props) => (
+                    <div
+                        className="h-full w-full flex items-center overflow-hidden select-none"
+                        onDoubleClick={() => handleHeaderDoubleClick(col.key)}
+                        title={
+                            isCollapsed
+                                ? `${col.name ?? col.key} — collapsed, double-click to restore`
+                                : undefined
+                        }
+                    >
+                        {isCollapsed ? (
+                            <span className="mx-auto w-1 h-3.5 rounded-full bg-warning" />
+                        ) : OriginalHeader ? (
+                            OriginalHeader(props)
+                        ) : (
+                            <span className="truncate px-1 text-xs">{props.column.name}</span>
+                        )}
+                    </div>
+                ),
+            };
+        });
+    }, [columns, columnWidths, dataColumnKeys, handleHeaderDoubleClick]);
+
     const bakeColumns = useMemo(() => makeBakeColumns(highlightedMatch, toggleOvenCollapsed), [highlightedMatch, toggleOvenCollapsed]);
 
     const machineTotalDoable = useMemo(() => {
@@ -794,13 +946,42 @@ export default function Deemo({
         setSelectedBakeRows(new Set());
     }, [selectedBakeRows]);
 
-    // Standalone source of truth for which sections render. Unassigned +
-    // MANUAL are always shown (pinned first), regardless of whether they
-    // currently hold any rows — same contract as LoadingPlanTable.jsx.
-    // Real machines only render a section once they have rows, same as
-    // before. Previously this flatMapped over `serverMachines` only, so
-    // Unassigned/MANUAL rows never appeared anywhere in the grid.
+    // Standalone source of truth for which sections render.
+    //
+    //  - "Unassigned" package tab: a single synthetic section aggregating
+    //    every machine === null row across ALL packages (bake is excluded
+    //    automatically since bake rows never live in dataRows to begin
+    //    with — they come from the separate `bakeLots` prop).
+    //  - Every other tab: Unassigned + MANUAL are always shown (pinned
+    //    first), regardless of whether they currently hold any rows — same
+    //    contract as LoadingPlanTable.jsx. A real machine section only
+    //    renders once it has at least one actual LOT on it for the active
+    //    package — a machine holding nothing but block rows (setup/config/
+    //    conversion, no lots) is hidden entirely on that tab, the same way
+    //    an empty machine already was.
     const displayRows = useMemo(() => {
+        if (activePackage === "Unassigned") {
+            const rowsForMachine = dataRows.filter((r) => r.machine === null);
+            const isCollapsed = collapsedMachines.has(null);
+            const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
+
+            const headerRow = {
+                id: "header-unassigned-all",
+                __type: "header",
+                machine: null,
+                machineLabel: "Unassigned",
+                platform: undefined,
+                __rowCount: rowsForMachine.length,
+                __lotCount: lotCount,
+                otherPackageCount: 0,
+                __isCollapsed: isCollapsed,
+                isLocked: true,
+            };
+
+            if (isCollapsed) return [headerRow];
+            return [headerRow, ...rowsForMachine.map((r) => ({ ...r, id: r.id, __type: "data" }))];
+        }
+
         return machines.flatMap((m) => {
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
@@ -813,15 +994,13 @@ export default function Deemo({
                 return activeList.includes(r.package_name);
             });
 
-            if (rowsForMachine.length === 0 && !isUnassigned && !isManual) {
+            const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
+
+            if (lotCount === 0 && !isUnassigned && !isManual) {
                 return [];
             }
 
             const isCollapsed = collapsedMachines.has(m);
-
-            const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
-
-            console.log("LOG ~ Deemo.jsx:825 ~ Deemo ~ lotCount:", lotCount);
 
             const headerRow = {
                 id: `header-${m ?? "unassigned"}`,
@@ -841,7 +1020,7 @@ export default function Deemo({
 
             return [headerRow, ...rowsForMachine.map((r) => ({ ...r, id: r.id, __type: "data" }))];
         });
-    }, [machines, dataRows, activePackageGroup, machinePlatform, otherPackageCounts, collapsedMachines]);
+    }, [activePackage, machines, dataRows, activePackageGroup, machinePlatform, otherPackageCounts, collapsedMachines]);
 
     // const [entryHistoryData, setEntryHistoryData] = useState([]);
     // const [entryHistoryLoading, setEntryHistoryLoading] = useState(false);
@@ -1183,6 +1362,23 @@ export default function Deemo({
                                     {isExporting ? "Exporting…" : "Export to Excel"}
                                 </button>
 
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={() =>
+                                        document
+                                            .getElementById("column_visibility_modal")
+                                            ?.showModal()
+                                    }
+                                    title="Show/hide columns"
+                                >
+                                    Columns
+                                    {Object.values(columnWidths).some(
+                                        (w) => w <= COLLAPSE_HINT_THRESHOLD,
+                                    ) && (
+                                        <span className="w-1.5 h-1.5 rounded-full bg-warning ml-1" />
+                                    )}
+                                </button>
+
                                 {status && status !== "not_imported" && (
                                     <button
                                         className="btn btn-sm rounded-box btn-secondary"
@@ -1217,6 +1413,7 @@ export default function Deemo({
                     <div className="flex flex-wrap justify-between gap-2">
                         <ScrollableTabs
                             items={[
+                                "Unassigned",
                                 ...packageGroupNames,
                                 { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> },
                             ]}
@@ -1388,7 +1585,7 @@ export default function Deemo({
                             <div ref={containerRef} className="border-none" style={{ position: "relative" }}>
                                     <DataGrid
                                         ref={gridRef}
-                                        columns={columns}
+                                        columns={decoratedColumns}
                                         rows={displayRows}
                                         renderers={{
                                             renderRow: (key, props) => (
@@ -1396,6 +1593,7 @@ export default function Deemo({
                                             ),
                                         }}
                                         onRowsChange={handleRowsChange}
+                                        onColumnResize={handleColumnResize}
                                         rowKeyGetter={(row) => row.id}
                                         selectedRows={selectedRows}
                                         onSelectedRowsChange={setSelectedRows}
@@ -1675,6 +1873,52 @@ export default function Deemo({
                         >
                             Add Block
                         </button>
+                    </div>
+                </div>
+                <form method="dialog" className="modal-backdrop">
+                    <button>close</button>
+                </form>
+            </dialog>
+
+            {/* ── Column visibility modal ──────────────────────────────────
+                Same underlying mechanism as the drag-to-shrink header
+                behavior above: toggling a column "off" here sets its width
+                to MIN_COLUMN_WIDTH rather than removing it from the grid, so
+                it stays visible as the same thin colored hint. */}
+            <dialog id="column_visibility_modal" className="modal">
+                <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
+                    <h3 className="font-bold text-lg mb-4">Column Visibility</h3>
+                    <div className="flex flex-col gap-1 overflow-y-auto pr-1">
+                        {columns
+                            .filter((col) => dataColumnKeys.has(col.key))
+                            .map((col) => {
+                                const width = columnWidths[col.key];
+                                const isHidden = width !== undefined && width <= COLLAPSE_HINT_THRESHOLD;
+                                return (
+                                    <label
+                                        key={col.key}
+                                        className="label cursor-pointer justify-between gap-3 py-1"
+                                    >
+                                        <span className="label-text text-sm flex items-center gap-1.5">
+                                            {isHidden && (
+                                                <span className="w-1 h-3 rounded-full bg-warning shrink-0" />
+                                            )}
+                                            {col.name ?? col.key}
+                                        </span>
+                                        <input
+                                            type="checkbox"
+                                            className="toggle toggle-sm"
+                                            checked={!isHidden}
+                                            onChange={() => toggleColumnVisibility(col.key)}
+                                        />
+                                    </label>
+                                );
+                            })}
+                    </div>
+                    <div className="modal-action">
+                        <form method="dialog">
+                            <button className="btn btn-ghost btn-sm">Close</button>
+                        </form>
                     </div>
                 </div>
                 <form method="dialog" className="modal-backdrop">
