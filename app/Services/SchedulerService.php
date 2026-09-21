@@ -103,6 +103,7 @@ class SchedulerService
                 'leadcount_min',
                 'leadcount_max',
                 'leadcount_exclude',
+                'lot_type',
                 'process_type',
             ])
             ->whereIn('factory', $factories)
@@ -187,7 +188,8 @@ class SchedulerService
         ?string $bodySize2d,
         ?float $thickness,
         ?int $leadCount,
-        ?string $rampProcessType
+        ?string $rampProcessType,
+        ?string $lotType
     ): bool {
         if ($state->factory !== $factory) {
             return false;
@@ -242,6 +244,11 @@ class SchedulerService
         }
         if ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
             return false;
+        }
+        if ($state->lot_type !== null) {
+            if ($lotType === null || $state->lot_type !== $lotType) {
+                return false;
+            }
         }
 
         return true;
@@ -337,6 +344,7 @@ class SchedulerService
                 'Ramp_Time'    => $packageInfo->allocation,
                 'is_auto_part' => (bool) $packageInfo->is_auto_part,
                 'CR3'          => null, // pickups assumed never RES
+                'Lot_Type'     => null, // pickups assumed never LC — no CustomerDataWip link to check
                 'isExpedite'   => $item['is_expedite'] ?? false,
                 'aboveCT'      => false, // pickups have no CT history to compute this from
                 'CT'           => null,  // no sortable CT value for pickups either
@@ -370,7 +378,8 @@ class SchedulerService
             $thickness,
             $lot->is_auto_part,
             $lot->Lead_Count,
-            $rampProcessType
+            $rampProcessType,
+            $lot->Lot_Type
         );
 
         return (object) [
@@ -652,7 +661,8 @@ class SchedulerService
         ?float $thickness,
         ?bool $isAutoPart,
         ?int $leadCount,
-        ?string $rampProcessType
+        ?string $rampProcessType,
+        ?string $lotType
     ): Collection {
         $overrides = $this->ref['part_name_override_states']->get($partName, collect());
 
@@ -671,7 +681,8 @@ class SchedulerService
             $bodySize2d,
             $thickness,
             $leadCount,
-            $rampProcessType
+            $rampProcessType,
+            $lotType
         ))->filter(fn($state) => $this->passesNewRestrictions($state->machine_id, $factory, $packageName, $focusGroup, $isAutoPart, $partName));;
     }
 
@@ -899,7 +910,8 @@ class SchedulerService
             $thickness,
             $lot->is_auto_part,
             $lot->Lead_Count,
-            $rampProcessType
+            $rampProcessType,
+            $lot->Lot_Type,
         );
 
         $best = null;
@@ -1205,6 +1217,7 @@ class SchedulerService
             'is_auto_part' => $wip->Auto_Part === 'Y',
             'Ramp_Time' => $wip->Ramp_Time,
             'CR3' => $wip->CR3,
+            'Lot_Type' => $wip->Lot_Type,
             'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
             'aboveCT' => $formulas->cycleTimeExceedOverall,
             'CT' => $formulas->ct ?? null,
@@ -1286,7 +1299,8 @@ class SchedulerService
             $thickness,
             $lot->is_auto_part,
             $lot->Lead_Count,
-            $rampProcessType
+            $rampProcessType,
+            $lot->Lot_Type
         )->pluck('machine_id')->unique()->values();
     }
 
