@@ -52,13 +52,29 @@ class LotScheduleCalculator
      * otherwise. Callers that never touch recalculate() should skip calling
      * this entirely — it's the expensive part of this class.
      */
-    public function loadPackageList(): static
+    public function loadPackageList(?array $partNames = null): static
     {
         if ($this->packageListByDeviceName !== null) {
             return $this; // already loaded, no-op
         }
 
-        $partNames = LotQuantity::whereIn('lot_id', $this->lotIds)
+        if ($partNames !== null) {
+            // Explicit scope — skip the LotQuantity-derived lookup entirely.
+            // An empty array means "nothing needed", not "load everything";
+            // only the legacy constructor-derived path below falls through
+            // to an unscoped load when it finds no part names.
+            $this->packageListByDeviceName = empty($partNames)
+                ? collect()
+                : PartName::query()
+                ->select('id', 'devicename', 'recipe', 'allocation')
+                ->whereIn('devicename', $partNames)
+                ->get()
+                ->keyBy('devicename');
+
+            return $this;
+        }
+
+        $derivedPartNames = LotQuantity::whereIn('lot_id', $this->lotIds)
             ->whereIn('scheduled_date', $this->dates)
             ->pluck('part_name')
             ->filter()
@@ -67,8 +83,8 @@ class LotScheduleCalculator
 
         $query = PartName::query()->select('id', 'devicename', 'recipe', 'allocation');
 
-        if (! empty($partNames)) {
-            $query->whereIn('devicename', $partNames);
+        if (! empty($derivedPartNames)) {
+            $query->whereIn('devicename', $derivedPartNames);
         }
 
         $this->packageListByDeviceName = $query->get()->keyBy('devicename');
@@ -254,6 +270,8 @@ class LotScheduleCalculator
             $recipe && $recipe > 0                  => 'ok',
             default                                 => 'no_recipe',
         };
+
+        // get the ramp time from customer data wip
 
         if ($this->isTubeOrTrayAllocation($packageListRow?->allocation)) {
             $commit = (int) floor($effectiveQty * 0.95);

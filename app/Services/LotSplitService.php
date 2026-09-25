@@ -19,7 +19,7 @@ class LotSplitService
     ) {}
 
     public function split(
-        int $parentEntryLotId,
+        int $parentEntryId,
         int $childQty,
         string $targetMachine,
         ?int $beforeEntryId,
@@ -28,7 +28,7 @@ class LotSplitService
         ?string $createdBy,
     ): array {
         return DB::transaction(function () use (
-            $parentEntryLotId,
+            $parentEntryId,
             $childQty,
             $targetMachine,
             $beforeEntryId,
@@ -36,7 +36,9 @@ class LotSplitService
             $customChildLotId,
             $createdBy
         ) {
-            $parentEntry = LoadingPlanEntry::findOrFailNotFinalized($parentEntryLotId);
+
+            $parentEntry = LoadingPlanEntry::findOrFailNotFinalized($parentEntryId);
+            log_entities($parentEntry);
             $date = $parentEntry->scheduled_date;
 
             if (!QdnMachine::where('machine_num', $targetMachine)->exists()) {
@@ -98,13 +100,13 @@ class LotSplitService
                 'child_qty'        => $childQty,
                 'split_percentage' => $percentage,
                 'target_machine'   => $targetMachine,
-                'sequence_order_at_split' => $childEntry->sequence_order,
+                'sequence_order_at_split' => $childEntry['sequence_order'],
                 'created_by'       => $createdBy,
             ]);
 
             $loadingPlanService = new LoadingPlanService($date);
 
-            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry->fresh(), $rootLotId);
+            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry, $rootLotId);
 
             $this->recalculateParentQty($parentEntry);
 
@@ -264,7 +266,7 @@ class LotSplitService
 
             $childEntry = $this->entryService->transferEntry(
                 'lot',
-                $split->child_lot_id,
+                $childEntry->getKey(),
                 $split->target_machine,
                 $beforeEntryId,
                 $afterEntryId,
@@ -272,9 +274,9 @@ class LotSplitService
 
             $loadingPlanService = new LoadingPlanService($date);
 
-            $loadingPlanService->enrichEntryForResponse($childEntry->fresh(), $split->root_lot_id);
+            $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
 
-            $childQuantity = LotQuantity::where('lot_id', $childEntry->lot_id)
+            $childQuantity = LotQuantity::where('lot_id', $childEntry['lot_id'])
                 ->where('scheduled_date', $split->scheduled_date)
                 ->first();
 
@@ -431,7 +433,7 @@ class LotSplitService
             'split_adjustment' => -$activeChildQty,
         ]);
 
-        $calculator = new LotScheduleCalculator([$date], [$parentEntry->lot_id]);
+        $calculator = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$parentEntry->lot_id]]);
         $calculator->loadPackageList();
 
         $calculator->recalculateAndRetime($parentEntry->getKey(), $parentEntry->machine_id);
@@ -441,6 +443,9 @@ class LotSplitService
     {
         $lotId = $entry->lot_id;
         $date = $entry->scheduled_date;
+
+        log_entities($lotId);
+        log_entities($date);
 
         $quantity = LotQuantity::where('lot_id', $lotId)
             ->where('scheduled_date', $date)
@@ -452,8 +457,11 @@ class LotSplitService
         if (!$packageName || !$quantity) {
             $wip = CustomerDataWip::query()
                 ->where('Lot_Id', $lotId)
-                ->orderByDesc('import_date')
+                ->whereDate('import_date', $date)
                 ->first();
+
+            log_entities($wip);
+
 
             if (!$packageName) {
                 $packageName = $wip->Package_Name ?? null;
@@ -495,6 +503,8 @@ class LotSplitService
 
     private function wipQty(LoadingPlanEntry $entry): int
     {
+        log_entities($entry);
+
         $qty = CustomerDataWip::query()
             ->forDate($entry->scheduled_date)
             ->where('Lot_Id', $entry->lot_id)
@@ -507,7 +517,7 @@ class LotSplitService
         //     ->value('Qty');
 
         if ($qty === null) {
-            throw new InvalidSplitException("Could not resolve original quantity for lot [{$lotId}].");
+            throw new InvalidSplitException("Could not resolve original quantity for lot [{$entry->lot_id}].");
         }
 
         return (int) $qty;

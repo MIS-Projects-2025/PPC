@@ -270,7 +270,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             return null;
                         }
 
-                        if (row.entry_type !== "block") {
+                        if (row.entry_type === "block") {
                             return row[col.key];
                         }
 
@@ -299,7 +299,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             return null;
                         }
 
-                        if (row.entry_type !== "block") {
+                        if (row.entry_type === "block") {
                             return row[col.key];
                         }
 
@@ -325,7 +325,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             return null;
                         }
 
-                        if (row.entry_type !== "block") {
+                        if (row.entry_type === "block") {
                             return row[col.key];
                         }
 

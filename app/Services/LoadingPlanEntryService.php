@@ -6,6 +6,8 @@ use App\Exceptions\SequenceExhaustedException;
 use App\Exceptions\BulkStaleWriteException;
 use App\Exceptions\StaleWriteException;
 use App\Exceptions\LoadingPlanDateFinalizedException;
+use App\Exceptions\ActiveMergeParticipantException;
+use App\Exceptions\ActiveSplitChildException;
 use App\Models\LoadingPlanEntry;
 use App\Models\QdnMachine;
 use App\Models\LotQuantity;
@@ -89,14 +91,14 @@ class LoadingPlanEntryService
             $wip = null;
 
             if ($entryType === 'lot') {
-                (new LotScheduleCalculator([$resolvedDate], [$entry->lot_id]))
+                app(LotScheduleCalculator::class, ['dates' => [$resolvedDate], 'lotIds' => [$entry->lot_id]])
                     ->loadPackageList()
                     ->recalculateAndRetime($entryId, $machineId);
 
                 $wip = CustomerDataWip::query()
                     ->where('Lot_Id', $entry->lot_id)
-                    ->where('import_date', $entry->scheduled_date)
-                    ->firstOrFail();
+                    ->whereDate('import_date', $entry->scheduled_date)
+                    ->first();
             }
 
             $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
@@ -109,11 +111,37 @@ class LoadingPlanEntryService
         });
     }
 
-    public function transferEntry(string $entryType, ?int $entryId, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId): array
-    {
-        return DB::transaction(function () use ($entryType, $entryId, $targetMachine, $beforeEntryId, $afterEntryId) {
-            $entry = $this->resolveEntry($entryId);
-            $this->assertNotFinalized($entry);
+    public function transferEntry(
+        string $entryType,
+        ?int $entryId,
+        string $targetMachine,
+        ?int $beforeEntryId,
+        ?int $afterEntryId,
+        ?string $lotId = null,
+        ?string $scheduledDate = null,
+    ): array {
+        return DB::transaction(function () use ($entryType, $entryId, $targetMachine, $beforeEntryId, $afterEntryId, $lotId, $scheduledDate) {
+            if ($entryId === null) {
+                if ($entryType !== 'lot' || !$lotId || !$scheduledDate) {
+                    abort(422, 'lot_id and scheduled_date are required to create an entry for an unassigned WIP.');
+                }
+
+                $wip = CustomerDataWip::query()
+                    ->where('Lot_Id', $lotId)
+                    ->whereDate('import_date', $scheduledDate)
+                    ->firstOrFail();
+
+                $entry = LoadingPlanEntry::create([
+                    'lot_id'         => $lotId,
+                    'scheduled_date' => $scheduledDate,
+                    'machine_id'     => null,
+                    'sequence_order' => null,
+                    'lock_version'   => 0,
+                ]);
+            } else {
+                $entry = $this->resolveEntry($entryId);
+                $this->assertNotFinalized($entry);
+            }
 
             $anchorEntries = collect([$entry]);
             if ($beforeEntryId) {
@@ -127,7 +155,7 @@ class LoadingPlanEntryService
 
             $resolvedDate = $this->assertConsistentDates($anchorEntries);
 
-            $sourceMachineId = $entry->machine_id;
+            $sourceMachineId = $entry->machine_id; // null for the newly-created row — fine
             $targetMachineId = $this->resolveMachineId($targetMachine);
 
             $machinesToLock = collect([$entry->machine_id, $targetMachineId])
@@ -154,9 +182,9 @@ class LoadingPlanEntryService
             ]);
 
             if ($entryType === 'lot') {
-                (new LotScheduleCalculator([$resolvedDate], [$entry->lot_id]))
+                app(LotScheduleCalculator::class, ['dates' => [$resolvedDate], 'lotIds' => [$entry->lot_id]])
                     ->loadPackageList()
-                    ->recalculateAndRetime($entryId, $targetMachineId);
+                    ->recalculateAndRetime($entry->id, $targetMachineId);
 
                 if ($sourceMachineId && $sourceMachineId !== $targetMachineId) {
                     $sourceRestart = $this->findFirstRemainingRow($sourceMachineId, $resolvedDate);
@@ -166,13 +194,11 @@ class LoadingPlanEntryService
                 }
             }
 
-            // Fetch WIP data to pass into planned lot creation
             $wip = CustomerDataWip::query()
                 ->where('Lot_Id', $entry->lot_id)
-                ->where('import_date', $entry->scheduled_date)
-                ->firstOrFail();
+                ->whereDate('import_date', $entry->scheduled_date)
+                ->first();
 
-            // Refresh entry and reload required relationships
             $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
 
             return (new LoadingPlanService($resolvedDate))->createPlannedLot(
@@ -322,7 +348,7 @@ class LoadingPlanEntryService
             $updatedEntries = collect();
             $firstAffectedEntry = null;
 
-            $calculator = new LotScheduleCalculator([$date], $allEntries->pluck('lot_id')->all());
+            $calculator = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $allEntries->pluck('lot_id')->all()]);
             $calculator->loadPackageList();
 
             foreach ($movers as $entry) {
@@ -332,6 +358,8 @@ class LoadingPlanEntryService
                     'machine_id'     => $targetMachineId,
                     'sequence_order' => $nextSeq,
                     'lock_version'   => DB::raw('lock_version + 1'),
+                    'time_start'     => $targetMachineId === null ? null : $entry->time_start,
+                    'time_end'       => $targetMachineId === null ? null : $entry->time_end,
                 ]);
 
                 if ($entry->entry_type === 'lot') {
@@ -391,7 +419,7 @@ class LoadingPlanEntryService
             // Single forward walk for the whole batch — starts from the earliest row
             // this call touched (fresh(), since pass 1 above updated its accu_time)
             // and recomputeTimeStartAndEnd walks every row downstream of it itself.
-            if ($firstAffectedEntry !== null) {
+            if ($firstAffectedEntry !== null && $targetMachineId !== null) {
                 $calculator->recomputeTimeStartAndEnd($firstAffectedEntry->fresh(), $targetMachineId);
             }
 
@@ -493,7 +521,7 @@ class LoadingPlanEntryService
             $loadingPlanService = new LoadingPlanService($date);
             $loadingPlanService->initSplitsAndMerges();
 
-            $calculator = new LotScheduleCalculator([$date], $lotIds);
+            $calculator = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
             $calculator->loadPackageList();
 
             \Log::info('calculator', ['mb_start_for_loop' => memory_get_usage(true) / 1048576]);
@@ -545,8 +573,10 @@ class LoadingPlanEntryService
                     'scheduled_date' => $date,
                     'machine_id'     => $targetMachineId,
                     'package_name'   => $wipItem?->Package_Name ?? null,
-                    'sequence_order' => $seq,
+                    'sequence_order' => $nextSeq,
                     'lock_version'   => 1,
+                    'time_start'     => null,
+                    'time_end'       => null,
                 ]);
 
                 $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
@@ -604,6 +634,8 @@ class LoadingPlanEntryService
                 LoadingPlanEntry::whereKey($unassignedIds)->update([
                     'machine_id'     => null,
                     'sequence_order' => null,
+                    'time_start' => null,
+                    'time_end'   => null,
                     'lock_version'   => DB::raw('lock_version + 1'),
                 ]);
             }
@@ -679,7 +711,7 @@ class LoadingPlanEntryService
             // unplaced lot when $machineId is null — recalculate() still runs
             // (sets commit/recipe_status off qty/recipe), recalculateAndRetime
             // skips the retime step safely per its own null-machine guard
-            (new LotScheduleCalculator([$date], [$lotId]))
+            app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])
                 ->loadPackageList()
                 ->recalculateAndRetime($entry->getKey(), $machineId);
 
@@ -800,17 +832,19 @@ class LoadingPlanEntryService
                 ->get()
                 ->keyBy('id');
 
-            $dates = $existingEntries->pluck('scheduled_date')
-                ->map(fn($d) => $d->toDateString())
-                ->unique();
+            $date = $this->assertConsistentDates($existingEntries);
 
-            if ($dates->count() > 1) {
-                throw new \InvalidArgumentException(
-                    "Bulk edit cannot span multiple scheduled dates — got: " . $dates->implode(', ')
-                );
+            $machineIds = $existingEntries->pluck('machine_id')
+                ->filter()
+                ->unique()
+                ->sort()
+                ->values()
+                ->all();
+
+            if (!empty($machineIds)) {
+                $this->lockMachineRows($machineIds, $date);
             }
 
-            $date = $dates->first();
             $lotIds = $existingEntries->pluck('lot_id')->filter()->unique()->values()->all();
 
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList();
@@ -1250,19 +1284,27 @@ class LoadingPlanEntryService
             foreach ($deletedEntries as $entry) {
                 $this->assertNotFinalized($entry);
 
-                // Guard against the split-child landmine: a plain vanished-row
-                // delete (e.g. an undone auto-gap block) is safe to hard-delete,
-                // but a split child carries a qty invariant on its parent
-                // (LotSplit::child_qty / recalculateParentQty) that only
-                // LotSplitService::revert() knows how to unwind correctly.
                 $isActiveSplitChild = \App\Models\LotSplit::active()
                     ->where('child_lot_id', $entry->lot_id)
                     ->where('scheduled_date', $entry->scheduled_date)
                     ->exists();
 
                 if ($isActiveSplitChild) {
-                    throw new \RuntimeException(
+                    throw new ActiveSplitChildException(
                         "Entry [{$entry->id}] is an active split child — revert the split instead of deleting the row directly."
+                    );
+                }
+
+                $isActiveMergeParticipant = \App\Models\LotMerge::active()
+                    ->where(function ($q) use ($entry) {
+                        $q->where('target_lot_id', $entry->lot_id)->orWhere('source_lot_id', $entry->lot_id);
+                    })
+                    ->where('scheduled_date', $entry->scheduled_date)
+                    ->exists();
+
+                if ($isActiveMergeParticipant) {
+                    throw new ActiveMergeParticipantException(
+                        "Entry [{$entry->id}] is an active merge participant — revert the merge instead of deleting the row directly."
                     );
                 }
 
@@ -1287,7 +1329,7 @@ class LoadingPlanEntryService
                         : $this->createLotRow($row, $date))
                     : $this->updateRow($row);
 
-                $dndToEntryId[$row['dnd_id']] = $result['id'] ?? null;
+                $dndToEntryId[$row['dnd_id']] = $result['entry_id'] ?? null;
                 $results[] = $result;
             }
 
@@ -1332,7 +1374,7 @@ class LoadingPlanEntryService
         // package/part/qty from CustomerDataWip the same way that path does.
         $wipItem = CustomerDataWip::query()
             ->where('Lot_Id', $lotId)
-            ->where('import_date', $date)
+            ->whereDate('import_date', $date)
             ->first();
 
         $entry = LoadingPlanEntry::create([
@@ -1418,7 +1460,7 @@ class LoadingPlanEntryService
 
         $wipItem = CustomerDataWip::query()
             ->where('Lot_Id', $freshEntry->lot_id)
-            ->where('import_date', $freshEntry->scheduled_date)
+            ->whereDate('import_date', $freshEntry->scheduled_date)
             ->first();
 
         return (new LoadingPlanService($freshEntry->scheduled_date))->createPlannedLot(

@@ -25,6 +25,29 @@ class LoadingPlanService
     public readonly Collection $todayLeakedPlannedLotEntries;
     public readonly Collection $todayPlannedLotEntries;
 
+    /**
+     * Keys createPlannedLot needs to find when $entry is passed as an array,
+     * matching this method's own return shape (not the raw LoadingPlanEntry model).
+     */
+    private const REQUIRED_ENTRY_ARRAY_KEYS = [
+        'entry_id',
+        'entry_type',
+        'is_manual_expedite',
+        'block_label',
+        'machine',
+        'scheduled_date',
+        'lot_id',
+        'package_name',
+        'status',
+        'sequence_order',
+        'time_start',
+        'time_end',
+        'remarks',
+        'tag',
+        'lock_version',
+        'accu_time',
+    ];
+
     // should WipRows be the source of truth everywhere, even in lot previous?
     // I'd say yes.
 
@@ -349,15 +372,48 @@ class LoadingPlanService
     }
 
     public function createPlannedLot(
-        // TODO: review entry and wipRow should be the partname base on scheduled_date
-        // if it is the case where planned lot values retained wip details on that date.
-        // but if the business logic is that planned lot needs to be updated with what wip
-        // tells it, then entry and wipRow variable is not necessarily have the same
-        // scheduled_date and import_date
         ?CustomerDataWip $wipRow,
-        ?LoadingPlanEntry $entry,
+        LoadingPlanEntry|array|null $entry,
         ?LotQuantity $quantity = null,
     ): array {
+        $entryIsArray = is_array($entry);
+
+        if ($entryIsArray) {
+            $missingKeys = array_values(array_diff(self::REQUIRED_ENTRY_ARRAY_KEYS, array_keys($entry)));
+
+            if (!empty($missingKeys)) {
+                throw new \InvalidArgumentException(
+                    'createPlannedLot(): $entry array is missing required key(s): ' . implode(', ', $missingKeys)
+                );
+            }
+
+            $entryArray = $entry;
+
+            // Map output-shaped array keys onto the property names the rest of this method reads.
+            // Note: 'machine' and 'scheduled_date' are already resolved/formatted values here
+            // (not raw model attributes), so downstream logic that resolves them from a real
+            // LoadingPlanEntry (finalized_at/machine_snapshot/getMachineName, Carbon parsing) is skipped.
+            $entry = (object) [
+                'id'                 => $entryArray['entry_id'],
+                'entry_type'         => $entryArray['entry_type'],
+                'is_manual_expedite' => $entryArray['is_manual_expedite'],
+                'block_label'        => $entryArray['block_label'],
+                'lot_id'             => $entryArray['lot_id'],
+                'package_name'       => $entryArray['package_name'],
+                'status'             => $entryArray['status'],
+                'sequence_order'     => $entryArray['sequence_order'],
+                'time_start'         => $entryArray['time_start'], // already 'H:i' or null
+                'time_end'           => $entryArray['time_end'],   // already 'H:i' or null
+                'remarks'            => $entryArray['remarks'],
+                'tag'                => $entryArray['tag'],
+                'lock_version'       => $entryArray['lock_version'],
+                'accu_time'          => $entryArray['accu_time'],
+            ];
+
+            $resolvedMachine = $entryArray['machine'];
+            $resolvedScheduledDate = $entryArray['scheduled_date']; // already a 'Y-m-d' string
+        }
+
         $effectiveQty = $quantity?->effectiveQty() ?? $wipRow?->Qty ?? 0;
         $doable = $quantity?->commit;
         $doableStatus = $quantity?->recipe_status ?? 'unknown';
@@ -372,23 +428,30 @@ class LoadingPlanService
 
         $isBlocked = $entry?->entry_type === 'block';
 
-        // $accuTime = ($isBlocked || $entry?->finalized_at)
-        //     ? $entry?->accu_time
-        //     : $this->calc->accuTime($doable, $capacityUph);
-
         $accuTime = $entry?->accu_time ? $entry?->accu_time : $this->calc->accuTime($doable, $capacityUph);
 
-        $machine = $entry?->finalized_at ? $entry->machine_snapshot : $entry?->getMachineName();
+        // Array-shaped $entry already carries a resolved 'machine' value — skip
+        // finalized_at/machine_snapshot/getMachineName(), which only apply to a real model.
+        $machine = $entryIsArray
+            ? $resolvedMachine
+            : ($entry?->finalized_at ? $entry->machine_snapshot : $entry?->getMachineName());
 
-        // LoadingPlanFormulas handles null $wipRow safely internally
-        $formulas = LoadingPlanFormulas::make($wipRow); // TODO: refactor other places that uses this, it might already be done ? ? ?
+        $formulas = LoadingPlanFormulas::make($wipRow);
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
+        // time_start/time_end from the array are already 'H:i' strings; Carbon::parse()
+        // on a bare time string assumes today's date, which is fine since only ->format('H:i')
+        // is read back out below.
         $startTime = $entry?->time_start ? Carbon::parse($entry->time_start) : null;
         $endTime   = $entry?->time_end   ? Carbon::parse($entry->time_end)   : null;
 
-        $scheduledDate = $entry?->scheduled_date?->toDateString() ?? null;
+        // Array-shaped scheduled_date is already a 'Y-m-d' string; a real LoadingPlanEntry
+        // gives a Carbon instance and needs ->toDateString().
+        $scheduledDate = $entryIsArray
+            ? $resolvedScheduledDate
+            : ($entry?->scheduled_date?->toDateString() ?? null);
+
         $isLeaked = $scheduledDate === $this->previousDate;
 
         return [
@@ -400,15 +463,13 @@ class LoadingPlanService
             'is_leaked'                  => $isLeaked,
             'is_manual_expedite'         => $entry?->is_manual_expedite,
             'is_for_bake'                => $formulas->isBakeHighlight,
-            // 'is_scm'
 
             'block_label'                => $entry?->block_label,
             'machine'                    => $machine,
             'scheduled_date'             => $scheduledDate,
 
             // Lot & WIP Identifiers/Specs
-            // 'id'                         => $entry?->id ?? $wipRow?->customer_data_id,
-            'id' => $entry ? 'entry-' . $entry->id : 'wip-' . $wipRow->customer_data_id,
+            'id'                         => $entry ? 'entry-' . $entry->id : 'wip-' . $wipRow->customer_data_id,
             'part_name'                  => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',
             'lead_count'                 => $wipRow?->Lead_Count ?? null,
             'package_name'               => $wipRow?->Package_Name ?? $entry?->package_name ?? null,
@@ -450,16 +511,13 @@ class LoadingPlanService
             'stage_start_time'           => $wipRow?->Stage_Start_Time ?? null,
             'assy_site'                  => $wipRow?->Assy_Site ?? null,
             'bake_time_temp'             => $wipRow?->Bake_Time_Temp ?? null,
+
             // Execution & Timing
             'status'                     => $entry?->status ?? null,
             'sequence_order'             => $entry?->sequence_order,
             'item'                       => $entry?->sequence_order,
             'time_start'                 => $startTime?->format('H:i'),
             'time_end'                   => $endTime?->format('H:i'),
-
-            // Day offset relative to today (-1 = yesterday, 0 = today, +1 = tomorrow)
-            // 'time_start_day_offset'      => $startTime ? (int) Carbon::parse($this->date)->diffInDays($startTime->copy()->startOfDay(), false) : null,
-            // 'time_end_day_offset'        => $endTime   ? (int) Carbon::parse($this->date)->diffInDays($endTime->copy()->startOfDay(), false)   : null,
 
             'remarks'                    => $entry?->remarks ?? null,
             'tag'                        => $entry?->tag ?? null,
@@ -506,26 +564,38 @@ class LoadingPlanService
      * Split children have no WIP row of their own, so these are pulled from
      * the root lot's CustomerDataWip row rather than stored/duplicated.
      *
-     * Mutates $entry in place and returns the LotQuantity row it looked up,
-     * so callers can reuse it if they need anything else off it.
+     * Mutates $entry in place (if it's a model) and returns the combined response array.
      */
-    public function enrichEntryForResponse(LoadingPlanEntry $entry, string $rootLotId): array
+    public function enrichEntryForResponse(LoadingPlanEntry|array $entry, string $rootLotId): array
     {
-        $entryDate = $entry->scheduled_date->toDateString();
+        // Normalize $entry into an array and extract the scheduled date and lot ID
+        $entryArray = $entry instanceof LoadingPlanEntry ? $entry->toArray() : (array) $entry;
 
-        $quantity = LotQuantity::where('lot_id', $entry->lot_id)
+        $scheduledDate = $entry instanceof LoadingPlanEntry
+            ? $entry->scheduled_date
+            : data_get($entryArray, 'scheduled_date');
+
+        $entryDate = $scheduledDate instanceof \Carbon\Carbon
+            ? $scheduledDate->toDateString()
+            : Carbon::parse($scheduledDate)->toDateString();
+
+        $lotId = $entry instanceof LoadingPlanEntry
+            ? $entry->lot_id
+            : data_get($entryArray, 'lot_id');
+
+        $quantity = LotQuantity::where('lot_id', $lotId)
             ->where('scheduled_date', $entryDate)
             ->first();
 
         $rootWip = CustomerDataWip::query()
             ->where('Lot_Id', $rootLotId)
-            ->orderByDesc('import_date')
+            ->whereDate('import_date', $entryDate)
             ->first();
 
+        // Create the planned lot data array using the entry object/array as needed
         $data = $this->createPlannedLot($rootWip, $entry, $quantity);
 
-        // array_merge so $data['id'] (the "entry-123" string) wins,
-        // and it's a plain array now — no cast machinery left to mangle it.
-        return array_merge($entry->toArray(), $data);
+        // array_merge so $data['id'] wins, returning a plain merged array.
+        return array_merge($entryArray, $data);
     }
 }

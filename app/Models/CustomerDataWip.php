@@ -4,10 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CustomerDataWip extends Model
 {
+    use HasFactory;
+
     protected $table = 'customer_data_wip';
     public $timestamps = false;
 
@@ -84,7 +87,7 @@ class CustomerDataWip extends Model
     {
         return is_array($date)
             ? $q->whereIn('import_date', $date)
-            : $q->where('import_date', $date);
+            : $q->whereDate('import_date', $date);
     }
 
     // CT = Date_Loaded - BE_Starttime, in fractional days

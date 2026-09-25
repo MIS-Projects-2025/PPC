@@ -99,6 +99,16 @@ import { PiOvenDuotone } from "react-icons/pi";
  *     it entirely. Plus a "Columns" button/modal to toggle the same
  *     collapsed state by checkbox. See the column-selection block below
  *     `columns` / `decoratedColumns`.
+ *   - NEW: `readOnly` prop. When true, every write path is disabled:
+ *     cell editing, drag-and-drop, status changes, bulk actions,
+ *     add-lot/add-block, split/merge, and the scheduler. Undo/redo,
+ *     selection, and their toolbars are hidden entirely since there's
+ *     nothing to undo or act on. Search, collapse/expand, column
+ *     resize/visibility, viewing entry/split/merge history, and Excel
+ *     export all still work — none of them write anything. See the
+ *     `readOnly` guards sprinkled through this file (search for
+ *     "readOnly") rather than a second component, so this file is the
+ *     single source of truth for both the editable and view-only pages.
  *
  * STUBBED FOR NOW: every handler that talks to the backend has a
  * `return;` placed immediately before its `withUpdating(mutate(...))` /
@@ -159,6 +169,16 @@ import { PiOvenDuotone } from "react-icons/pi";
  *     assumes `col.width` is a plain number (react-data-grid also
  *     accepts percentage strings / "max-content" — if any column here
  *     uses those, the resize math needs a fallback for it).
+ *   - NEW (readOnly): verified against the real columns.js — only
+ *     react-data-grid's built-in checkbox column (key `"select-row"`) is
+ *     stripped out of the grid when `readOnly` is true. The `"dragHandle"`
+ *     column is kept: it also renders MachineHeaderCell for header rows
+ *     and carries the colSpan that makes header rows span the grid, so
+ *     removing it would blank out every machine/oven header. Its
+ *     per-row RowDropTargetCell is harmless without it — no drag can be
+ *     initiated since DndContext is mounted with `sensors={[]}` in this
+ *     mode. Same reasoning applies to the bake table's structural
+ *     `"ovenHeader"` column, which was never in the strip list.
  * -----------------------------------------------------------------------
  */
 
@@ -178,6 +198,25 @@ const HEADER_ROW_HEIGHT = 35;
 const MIN_COLUMN_WIDTH = 6;
 const COLLAPSE_HINT_THRESHOLD = 28;
 const COLUMN_WIDTHS_STORAGE_KEY = "loadingPlan:columnWidths";
+
+// readOnly mode: structural (non-data) columns dropped from the grid
+// entirely, since neither selection nor drag-reorder exist in that mode.
+// See the "NEW (readOnly)" assumption above re: these keys.
+const READONLY_STRIP_KEYS = new Set(["select-row"]);
+// NOT "dragHandle": that column also renders MachineHeaderCell for header
+// rows and carries the colSpan that makes header rows span the grid — it
+// isn't purely a drag affordance. Its per-row RowDropTargetCell is
+// already inert in read-only mode because DndContext is mounted with
+// sensors={[]}, so no drag can ever be initiated; nothing needs removing.
+
+function toReadOnlyColumns(columns) {
+    return columns
+        .filter((col) => !READONLY_STRIP_KEYS.has(col.key))
+        .map((col) => {
+            const { renderEditCell, ...rest } = col;
+            return { ...rest, editable: false };
+        });
+}
 
 function buildExportGroups(dataRows, machines) {
     return machines
@@ -305,9 +344,10 @@ export default function Deemo({
     unknownPackages,
     recipeMismatches,
     schedulerHistory,
+    readOnly = false, // NEW — true disables every write path; see file header
 }) {
     const {
-        present: dataRows,
+        present: { rows: dataRows },
         update,
         undo,
         redo,
@@ -394,15 +434,16 @@ export default function Deemo({
 
     const handleDateChange = (newDate) => {
         setSelectedDate(newDate);
-        router.get(route("loading-plan.index"), {
+        router.get(route(readOnly ? "loading-plan.readonly" : "loading-plan.index"), {
             date: newDate.toISOString().slice(0, 10),
+            ...(readOnly ? { location: selectedLocation } : {}),
         });
     };
 
     const setLocation = (line) => {
         if (line === selectedLocation) return;
         router.get(
-            route("loading-plan.index"),
+            route(readOnly ? "loading-plan.readonly" : "loading-plan.index"),
             { date, location: line },
             { preserveScroll: true, replace: true },
         );
@@ -488,15 +529,17 @@ export default function Deemo({
     const handleStatusClick = useCallback(
         (e, entryId) => {
             e.stopPropagation();
+            if (readOnly) return; // no status-change menu in read-only mode
             if (isUpdating) return;
             const rect = e.currentTarget.getBoundingClientRect();
             setStatusMenu({ entryId, x: rect.left, y: rect.bottom + 4 });
         },
-        [isUpdating],
+        [readOnly, isUpdating],
     );
 
     const handleStatusChange = useCallback(
         (newStatus) => {
+            if (readOnly) return;
             const normalizedStatus = newStatus === "NONE" ? null : newStatus;
             const entryId = statusMenu.entryId;
             // entryId here IS a backend entry_id (see handleStatusClick /
@@ -505,6 +548,8 @@ export default function Deemo({
             // unlike the bulk handlers below.
             const row = dataRows.find((r) => r.entry_id === entryId);
             if (!row) return;
+
+            const prevSnapshot = dataRows; // capture before mutating
 
             update((prev) =>
                 prev.map((r) =>
@@ -536,28 +581,20 @@ export default function Deemo({
                 ),
             )
                 .then((entry) => {
-                    update(
-                        (prev) =>
-                            prev.map((r) =>
-                                r.entry_id === entryId
-                                    ? {
-                                          ...r,
-                                          entry_id: entry.id,
-                                          lock_version: entry.lock_version,
-                                      }
-                                    : r,
-                            ),
-                        true,
-                    );
+                    update((prev) => prev.map((r) =>
+                        r.entry_id === entryId ? { ...r, entry_id: entry.id, lock_version: entry.lock_version } : r
+                    ), true);
                 })
                 .catch((err) => {
                     console.error("Status update failed:", err);
-                    undo();
+                    update(() => prevSnapshot, true); // <- skipHistory, no stack pointer movement
                     toast?.error?.("Couldn't save status change — reverted.");
                 });
         },
-        [statusMenu, update, dataRows, date, undo, withUpdating, mutate, toast],
+        [readOnly, statusMenu, update, dataRows, date, withUpdating, mutate, toast],
     );
+
+    const syncServerFields = useLoadingPlanStore.getState().syncServerFields;
 
     const {
         handleBulkTag,
@@ -572,19 +609,17 @@ export default function Deemo({
         update,
         withUpdating,
         mutate,
-        undo,
         toast,
         setIsDirty,
         clearSelection,
         baseTimes,
         date,
+        syncServerFields
     });
 
     const { handleUndo, handleRedo, dataRowsRef } = useUndoRedoSync({
+        store: useLoadingPlanStore,
         dataRows,
-        undo,
-        redo,
-        getPresent: () => useLoadingPlanStore.getState().present,
         baseTimes,
         date,
         mutate,
@@ -595,6 +630,7 @@ export default function Deemo({
     // ── Add lot / add block ──────────────────────────────────────────────
     const handleAddRow = useCallback(
         (machine, { partName, packageName, qty, beforeEntryId = null, afterEntryId = null } = {}) => {
+            if (readOnly) return Promise.reject(new Error("Read-only view"));
             const trimmedPart = (partName ?? "").trim();
             if (!trimmedPart) return Promise.reject(new Error("Part name is required"));
 
@@ -630,19 +666,21 @@ export default function Deemo({
                     throw err;
                 });
         },
-        [activePackage, packageGroups, baseTimes, date, update, withUpdating, mutate, toast],
+        [readOnly, activePackage, packageGroups, baseTimes, date, update, withUpdating, mutate, toast],
     );
 
     const handleAddBlock = useCallback((machine) => {
+        if (readOnly) return;
         setBlockOption("setup");
         setCustomLabel("");
         setCustomDuration("60");
         setBlockModalMachine(machine);
         document.getElementById("deemo_add_block_modal")?.showModal();
-    }, []);
+    }, [readOnly]);
 
     const saveBlock = useCallback(
         (machine, label, duration, { beforeEntryId = null, afterEntryId = null } = {}) => {
+            if (readOnly) return Promise.reject(new Error("Read-only view"));
             return withUpdating(
                 mutate(route("loading-plan.blocks.store"), {
                     body: {
@@ -669,7 +707,7 @@ export default function Deemo({
                     throw err;
                 });
         },
-        [baseTimes, date, update, withUpdating, mutate, toast],
+        [readOnly, baseTimes, date, update, withUpdating, mutate, toast],
     );
 
     // NOTE: no stub here — this handler never talks to the backend itself
@@ -677,6 +715,7 @@ export default function Deemo({
     // has its own stub right before its mutate call). Blanket-returning
     // here would also stop the modal from closing.
     const handleConfirmBlock = useCallback(() => {
+        if (readOnly) return;
         let label, duration;
         if (blockOption === "custom") {
             label = customLabel.trim();
@@ -690,6 +729,7 @@ export default function Deemo({
         saveBlock(blockModalMachine, label, duration);
         document.getElementById("deemo_add_block_modal")?.close();
     }, [
+        readOnly,
         blockOption,
         customLabel,
         customDuration,
@@ -715,8 +755,8 @@ export default function Deemo({
         revertSplit,
         revertMerge,
         mergeRows,
-        splitRow,
-    } = useSplitMergeOperations({ dataRows, update, withUpdating, mutate, baseTimes, date, toast, setIsDirty });
+        splitRow 
+    } = useSplitMergeOperations({ dataRows, update, withUpdating, mutate, baseTimes, date, toast, setIsDirty, syncServerFields });
 
     const handleShowSplitHistory = useCallback(
         (rootLotId, isParent, isChild) =>
@@ -753,9 +793,13 @@ export default function Deemo({
         return map;
     }, [serverMachines]);
 
-    const columns = useMemo(
+    const rawColumns = useMemo(
         () => makeColumns(isUpdating, handleStatusClick, toggleMachineCollapsed, highlightedMatch),
         [isUpdating, handleStatusClick, toggleMachineCollapsed, highlightedMatch],
+    );
+    const columns = useMemo(
+        () => (readOnly ? toReadOnlyColumns(rawColumns) : rawColumns),
+        [readOnly, rawColumns],
     );
 
     // ── Column shrink-to-min resize + visibility toggle ───────────────────
@@ -858,7 +902,14 @@ export default function Deemo({
         });
     }, [columns, columnWidths, dataColumnKeys, handleHeaderDoubleClick]);
 
-    const bakeColumns = useMemo(() => makeBakeColumns(highlightedMatch, toggleOvenCollapsed), [highlightedMatch, toggleOvenCollapsed]);
+    const rawBakeColumns = useMemo(
+        () => makeBakeColumns(highlightedMatch, toggleOvenCollapsed),
+        [highlightedMatch, toggleOvenCollapsed],
+    );
+    const bakeColumns = useMemo(
+        () => (readOnly ? toReadOnlyColumns(rawBakeColumns) : rawBakeColumns),
+        [readOnly, rawBakeColumns],
+    );
 
     const machineTotalDoable = useMemo(() => {
         const result = {};
@@ -987,9 +1038,10 @@ export default function Deemo({
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
 
+            if (isManual && activePackage !== "MANUAL") return [];
+
             const rowsForMachine = dataRows.filter((r) => {
                 if (r.machine !== m) return false;
-                // if (isUnassigned) return true;
                 if (isBlockRow(r)) return true;
                 const activeList = activePackageGroup ?? [];
                 return activeList.includes(r.package_name);
@@ -1130,6 +1182,7 @@ export default function Deemo({
                 if (search.searchOpen) search.closeSearch();
                 clearSelection();
             }
+            if (readOnly) return; // no undo/redo/select-all in read-only mode
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === "z" && !e.shiftKey) {
                     e.preventDefault();
@@ -1151,7 +1204,7 @@ export default function Deemo({
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [search, handleUndo, handleRedo, clearSelection, dataRowsRef]);
+    }, [readOnly, search, handleUndo, handleRedo, clearSelection, dataRowsRef]);
 
     const handleRowsChange = useCellEditPersistence({
         dataRows,
@@ -1163,6 +1216,7 @@ export default function Deemo({
         mutate,
         toast,
         setIsDirty,
+        syncServerFields
     });
 
     const {
@@ -1186,12 +1240,13 @@ export default function Deemo({
         toast,
         clearSelection,
         setIsDirty,
+        syncServerFields,
     });
 
     const rowClass = useCallback(
         (row) => {
             const rowDropId = `row-${row.id}`;
-            if (hoveredRowId === rowDropId)
+            if (!readOnly && hoveredRowId === rowDropId)
                 return "bg-pink-500 relative drop-target-row";
             if (row.__type === "header")
                 return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
@@ -1199,7 +1254,7 @@ export default function Deemo({
                 return "block-row-bg border-l-4 border-warning/60";
             return undefined;
         },
-        [hoveredRowId, selectedRows],
+        [readOnly, hoveredRowId, selectedRows],
     );
 
     const tableInteractionValue = useMemo(
@@ -1208,11 +1263,12 @@ export default function Deemo({
             machineTotalDoable,
             machineTotalQuantity,
             otherPackageCounts,
-            onAddRow: handleAddRow,
-            onAddBlock: handleAddBlock,
+            onAddRow: readOnly ? undefined : handleAddRow,
+            onAddBlock: readOnly ? undefined : handleAddBlock,
             isUpdating,
         }),
         [
+            readOnly,
             machineCapacity,
             machineTotalDoable,
             machineTotalQuantity,
@@ -1235,13 +1291,14 @@ export default function Deemo({
     } = useRowHoverInsert(displayRows);
 
     const hoveredRowData = displayRows[hoveredRow?.rowIdx] ?? null;
-    const isInsertRowButtonVisible = hoveredRowData && hoveredRowData?.machine !== null && hoveredRowData?.__type === "data" && !isUpdating;
+    const isInsertRowButtonVisible = !readOnly && hoveredRowData && hoveredRowData?.machine !== null && hoveredRowData?.__type === "data" && !isUpdating;
+    const isHistoryButtonVisible = hoveredRowData && hoveredRowData?.__type === "data";
 
     const tableActionsValue = useMemo(
         () => ({
             handleStatusClick,
-            handleShowHistory: handleShowSplitHistory,
-            handleShowMergeHistory,
+            handleShowHistory: readOnly ? () => {} : handleShowSplitHistory,
+            handleShowMergeHistory: readOnly ? () => {} : handleShowMergeHistory,
             // handleCellClick,
             // selectedIds,
             // handleRowSelect,
@@ -1249,6 +1306,7 @@ export default function Deemo({
             // anchorIdRef,
         }),
         [
+            readOnly,
             handleStatusClick,
             handleShowSplitHistory,
             handleShowMergeHistory,
@@ -1272,15 +1330,17 @@ export default function Deemo({
                 onClose={() => historyModalRef.current?.close()}
             />
 
-            <PickupInsertModal
-                ref={pickupInsertModalRef}
-                // lotA={selectedRows[0]}
-                // lotB={selectedRows[1]}
-                // onConfirm={({ targetLotEntryId, sourceLotEntryId }) =>
-                //     onMergeRows({ targetLotEntryId, sourceLotEntryId })
-                // }
-                onClose={() => pickupInsertModalRef.current?.close()}
-            />
+            {!readOnly && (
+                <PickupInsertModal
+                    ref={pickupInsertModalRef}
+                    // lotA={selectedRows[0]}
+                    // lotB={selectedRows[1]}
+                    // onConfirm={({ targetLotEntryId, sourceLotEntryId }) =>
+                    //     onMergeRows({ targetLotEntryId, sourceLotEntryId })
+                    // }
+                    onClose={() => pickupInsertModalRef.current?.close()}
+                />
+            )}
 
             <div className="flex-none pt-4">
                 <div className="flex flex-col">
@@ -1292,21 +1352,26 @@ export default function Deemo({
                                 onChange={handleDateChange}
                                 isNoFuture
                             />
+                            {readOnly && (
+                                <span className="badge badge-ghost badge-sm">Read-only</span>
+                            )}
                             {status && status !== "ok" && (
                                 <div className="flex text-sm py-0 px-2 alert alert-error alert-soft">
                                     <GoAlert size={16} />
                                     <div role="alert">
                                         {getStatusMessage(date, status)}
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            router.get(route("import.index"))
-                                        }
-                                        className="btn p-0 btn-link"
-                                    >
-                                        Go to Import
-                                    </button>
+                                    {!readOnly && (
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                router.get(route("import.index"))
+                                            }
+                                            className="btn p-0 btn-link"
+                                        >
+                                            Go to Import
+                                        </button>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -1317,7 +1382,7 @@ export default function Deemo({
                                     <span className="loading loading-spinner loading-xs" />{" "}
                                     Saving…
                                 </span>
-                            ) : selectedRows.size > 0 ? (
+                            ) : !readOnly && selectedRows.size > 0 ? (
                                 <span className="flex items-center gap-1.5 text-xs text-info whitespace-nowrap">
                                     {selectedRows.size} row
                                     {selectedRows.size !== 1 ? "s" : ""}{" "}
@@ -1331,30 +1396,34 @@ export default function Deemo({
                                 </span>
                             ) : null}
 
-                            <div className="w-px h-4 bg-base-300 mx-1" />
+                            {!readOnly && (
+                                <>
+                                    <div className="w-px h-4 bg-base-300 mx-1" />
 
-                            <button
-                                onClick={handleUndo}
-                                disabled={!canUndo() || isUpdating}
-                                className={clsx(
-                                    "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
-                                    interactiveCursorClasses(!canUndo() || isUpdating),
-                                )}
-                                title="Undo (Ctrl+Z)"
-                            >
-                                ↩ Undo
-                            </button>
-                            <button
-                                onClick={handleRedo}
-                                disabled={!canRedo() || isUpdating}
-                                className={clsx(
-                                    "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
-                                    interactiveCursorClasses(!canRedo() || isUpdating),
-                                )}
-                                title="Redo (Ctrl+Y)"
-                            >
-                                ↪ Redo
-                            </button>
+                                    <button
+                                        onClick={handleUndo}
+                                        disabled={!canUndo() || isUpdating}
+                                        className={clsx(
+                                            "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
+                                            interactiveCursorClasses(!canUndo() || isUpdating),
+                                        )}
+                                        title="Undo (Ctrl+Z)"
+                                    >
+                                        ↩ Undo
+                                    </button>
+                                    <button
+                                        onClick={handleRedo}
+                                        disabled={!canRedo() || isUpdating}
+                                        className={clsx(
+                                            "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
+                                            interactiveCursorClasses(!canRedo() || isUpdating),
+                                        )}
+                                        title="Redo (Ctrl+Y)"
+                                    >
+                                        ↪ Redo
+                                    </button>
+                                </>
+                            )}
 
                             <div className="w-px h-4 bg-base-300 mx-1" />
                             
@@ -1380,16 +1449,18 @@ export default function Deemo({
                                     )}
                                 </button>
 
-                                <button
-                                    className="btn btn-sm"
-                                    onClick={() => document.getElementById("scheduler_run_modal")?.showModal()}
-                                    title="Run scheduler / view history"
-                                >
-                                    Scheduler
-                                    {schedulerHistory?.[0]?.status === "error" && (
-                                        <span className="w-1.5 h-1.5 rounded-full bg-error ml-1" />
-                                    )}
-                                </button>
+                                {!readOnly && (
+                                    <button
+                                        className="btn btn-sm"
+                                        onClick={() => document.getElementById("scheduler_run_modal")?.showModal()}
+                                        title="Run scheduler / view history"
+                                    >
+                                        Scheduler
+                                        {schedulerHistory?.[0]?.status === "error" && (
+                                            <span className="w-1.5 h-1.5 rounded-full bg-error ml-1" />
+                                        )}
+                                    </button>
+                                )}
 
                                 {status && status !== "not_imported" && (
                                     <button
@@ -1484,18 +1555,16 @@ export default function Deemo({
                                 <BsSearch size={16} />
                             </button>
                             
-                            <button
-                                // className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
-                                //     count !== 2 ? "cursor-not-allowed opacity-50" : ""
-                                // }`}
-                                // disabled={count !== 2}
-                                className="btn btn-sm z-50"
-                                onClick={() => {
-                                    pickupInsertModalRef.current?.showModal();
-                                }}
-                            >
-                                Schedule Pickups
-                            </button>
+                            {!readOnly && (
+                                <button
+                                    className="btn btn-sm z-50"
+                                    onClick={() => {
+                                        pickupInsertModalRef.current?.showModal();
+                                    }}
+                                >
+                                    Schedule Pickups
+                                </button>
+                            )}
 
                             {/* {idleMachines.length > 0 && (
                                 <fieldset className="fieldset bg-base-100 border-base-300 rounded-box border py-1 px-2">
@@ -1545,8 +1614,8 @@ export default function Deemo({
                                     columns={bakeColumns}
                                     rows={bakeDisplayRows}
                                     rowKeyGetter={(row) => row.id}
-                                    selectedRows={selectedBakeRows}
-                                    onSelectedRowsChange={setSelectedBakeRows}
+                                    selectedRows={readOnly ? undefined : selectedBakeRows}
+                                    onSelectedRowsChange={readOnly ? undefined : setSelectedBakeRows}
                                     rowClass={(row) =>
                                         row.__type === "header"
                                             ? "text-xs border-t-4 border-yellow-500 flex machine-header-row"
@@ -1588,11 +1657,11 @@ export default function Deemo({
                                 measuring={{
                                     droppable: { strategy: MeasuringStrategy.BeforeDragging },
                                 }}
-                                onDragOver={handleDragOver}
-                                sensors={sensors}
-                                onDragStart={handleDragStart}
-                                onDragEnd={handleDragEnd}
-                                onDragCancel={handleDragCancel}
+                                onDragOver={readOnly ? undefined : handleDragOver}
+                                sensors={readOnly ? [] : sensors}
+                                onDragStart={readOnly ? undefined : handleDragStart}
+                                onDragEnd={readOnly ? undefined : handleDragEnd}
+                                onDragCancel={readOnly ? undefined : handleDragCancel}
                             >
                             <div ref={containerRef} className="border-none" style={{ position: "relative" }}>
                                     <DataGrid
@@ -1604,11 +1673,11 @@ export default function Deemo({
                                                 <DroppableRow key={key} rowIdxByElement={rowIdxByElement} props={props}/>
                                             ),
                                         }}
-                                        onRowsChange={handleRowsChange}
+                                        onRowsChange={readOnly ? undefined : handleRowsChange}
                                         onColumnResize={handleColumnResize}
                                         rowKeyGetter={(row) => row.id}
-                                        selectedRows={selectedRows}
-                                        onSelectedRowsChange={setSelectedRows}
+                                        selectedRows={readOnly ? undefined : selectedRows}
+                                        onSelectedRowsChange={readOnly ? undefined : setSelectedRows}
                                         rowClass={(row) => rowClass(row)}
                                         rowHeight={ROW_HEIGHT}
                                         headerRowHeight={HEADER_ROW_HEIGHT}
@@ -1648,6 +1717,7 @@ export default function Deemo({
                                             />
 
                                             <RowHistoryButton
+                                                isHidden={!isHistoryButtonVisible}
                                                 anchorElement={hoveredRow.element}
                                                 buttonsRef={historyButtonRef}
                                                 onViewHistory={() => {
@@ -1701,7 +1771,7 @@ export default function Deemo({
                             </div>
 
                             <DragOverlay>
-                                {draggedRow ? (
+                                {!readOnly && draggedRow ? (
                                     <div className="bg-base-200 w-[300px] p-2 rounded shadow-lg text-sm font-semibold">
                                         {draggedRow.part_name || "Lot"} -{" "}
                                         {draggedRow.lot_id} - {draggedRow.package_name}
@@ -1712,64 +1782,75 @@ export default function Deemo({
                         )}
                     </div>
 
-                    <BakeSelectionToolbar
-                        selectedIds={selectedBakeRows}
-                        onApprove={handleBakeApprove}
-                        onReprocess={handleBakeReprocess}
-                        onExport={handleBakeExport}
-                        onDelete={handleBakeDelete}
-                        onClearSelection={clearBakeSelection}
-                    />
+                    {!readOnly && (
+                        <BakeSelectionToolbar
+                            selectedIds={selectedBakeRows}
+                            onApprove={handleBakeApprove}
+                            onReprocess={handleBakeReprocess}
+                            onExport={handleBakeExport}
+                            onDelete={handleBakeDelete}
+                            onClearSelection={clearBakeSelection}
+                        />
+                    )}
 
-                    <SelectionToolbar
-                        selectedIds={selectedRows}
-                        machinePlatform={machinePlatform}
-                        allData={dataRows}
-                        machines={machines}
-                        disabled={isUpdating}
-                        onTag={handleBulkTag}
-                        onClearTag={handleBulkClearTag}
-                        onStatusChange={handleBulkStatus}
-                        onBulkFieldUpdate={handleBulkFieldUpdate}
-                        onTransfer={handleBulkTransfer}
-                        onSplitRow={splitRow}
-                        onMergeRows={mergeRows}
-                        onDelete={handleBulkDelete}
-                        onClearSelection={clearSelection}
-                    />
+                    {!readOnly && (
+                        <SelectionToolbar
+                            selectedIds={selectedRows}
+                            machinePlatform={machinePlatform}
+                            allData={dataRows}
+                            machines={machines}
+                            disabled={isUpdating}
+                            onTag={handleBulkTag}
+                            onClearTag={handleBulkClearTag}
+                            onStatusChange={handleBulkStatus}
+                            onBulkFieldUpdate={handleBulkFieldUpdate}
+                            onTransfer={handleBulkTransfer}
+                            onSplitRow={splitRow}
+                            onMergeRows={mergeRows}
+                            onDelete={handleBulkDelete}
+                            onClearSelection={clearSelection}
+                            date={date}
+                        />
+                    )}
 
-                    <SplitHistoryModal
-                        ref={splitHistoryModalRef}
-                        loading={historyLoading}
-                        history={splitHistoryData}
-                        onRevert={handleSplitRevert}
-                        onClose={() => splitHistoryModalRef.current?.close()}
-                        isParent={currentLotRole.isParent}
-                        isChild={currentLotRole.isChild}
-                    />
+                    {!readOnly && (
+                        <SplitHistoryModal
+                            ref={splitHistoryModalRef}
+                            loading={historyLoading}
+                            history={splitHistoryData}
+                            onRevert={handleSplitRevert}
+                            onClose={() => splitHistoryModalRef.current?.close()}
+                            isParent={currentLotRole.isParent}
+                            isChild={currentLotRole.isChild}
+                        />
+                    )}
 
-                    <AddEntryModal
-                        ref={addEntryModalRef}
-                        placement={placementOfNewEntry}
-                        anchorRow={lastHoveredRow}
-                        // onClose={handleCloseAddEntry}
-                        // machine={machine}
-                        date={date}
-                        packageGroups={packageGroups}
-                        activePackage={activePackage}
-                        handleAddRow={handleAddRow}
-                        saveBlock={saveBlock}
-                    />
+                    {!readOnly && (
+                        <AddEntryModal
+                            ref={addEntryModalRef}
+                            placement={placementOfNewEntry}
+                            anchorRow={lastHoveredRow}
+                            // onClose={handleCloseAddEntry}
+                            // machine={machine}
+                            date={date}
+                            packageGroups={packageGroups}
+                            activePackage={activePackage}
+                            handleAddRow={handleAddRow}
+                            saveBlock={saveBlock}
+                        />
+                    )}
 
-                    <MergeHistoryModal
-                        ref={mergeHistoryModalRef}
-                        loading={historyLoading}
-                        history={mergeHistoryData}
-                        onRevert={handleMergeRevert}
-                        onClose={() => mergeHistoryModalRef.current?.close()}
-                        isTarget={currentLotRole.isParent}
-                        isSource={currentLotRole.isChild}
-                    />
+                    {!readOnly && (
+                        <MergeHistoryModal
+                            ref={mergeHistoryModalRef}
+                            loading={historyLoading}
+                            history={mergeHistoryData}
+                            onRevert={handleMergeRevert}
+                            onClose={() => mergeHistoryModalRef.current?.close()}
+                            isTarget={currentLotRole.isParent}
+                            isSource={currentLotRole.isChild}
+                        />
+                    )}
 
                     <DataIntegrityModal
                         partnameMismatches={partnameMismatches}
@@ -1782,7 +1863,7 @@ export default function Deemo({
             </TableActionsContext.Provider>
 
             {/* ── Single-row status dropdown (portal-style, fixed) ── */}
-            {statusMenu && (
+            {!readOnly && statusMenu && (
                 <>
                     <div
                         className="fixed inset-0 z-40"
@@ -1817,167 +1898,175 @@ export default function Deemo({
                 </>
             )}
 
-            <dialog id="deemo_add_block_modal" className="modal">
-                <div className="modal-box bg-base-300">
-                    <h3 className="font-bold text-lg mb-4">Add Time Block</h3>
+            {!readOnly && (
+                <dialog id="deemo_add_block_modal" className="modal">
+                    <div className="modal-box bg-base-300">
+                        <h3 className="font-bold text-lg mb-4">Add Time Block</h3>
 
-                    <div className="join join-vertical w-full mb-3">
-                        {Object.entries(BLOCK_PRESETS).map(([key, preset]) => (
+                        <div className="join join-vertical w-full mb-3">
+                            {Object.entries(BLOCK_PRESETS).map(([key, preset]) => (
+                                <button
+                                    key={key}
+                                    type="button"
+                                    className={clsx(
+                                        "btn justify-between join-item",
+                                        blockOption === key && "btn-primary",
+                                    )}
+                                    onClick={() => setBlockOption(key)}
+                                    disabled={isUpdating}
+                                >
+                                    {preset.label}
+                                    <span className="text-xs opacity-70 ml-1">
+                                        {preset.duration / 60}hr
+                                    </span>
+                                </button>
+                            ))}
                             <button
-                                key={key}
                                 type="button"
                                 className={clsx(
-                                    "btn justify-between join-item",
-                                    blockOption === key && "btn-primary",
+                                    "btn join-item",
+                                    blockOption === "custom" && "btn-primary",
                                 )}
-                                onClick={() => setBlockOption(key)}
+                                onClick={() => setBlockOption("custom")}
                                 disabled={isUpdating}
                             >
-                                {preset.label}
-                                <span className="text-xs opacity-70 ml-1">
-                                    {preset.duration / 60}hr
-                                </span>
+                                Custom
                             </button>
-                        ))}
-                        <button
-                            type="button"
-                            className={clsx(
-                                "btn join-item",
-                                blockOption === "custom" && "btn-primary",
-                            )}
-                            onClick={() => setBlockOption("custom")}
-                            disabled={isUpdating}
+                        </div>
+
+                        <div
+                            className={`join w-full transition-opacity ${blockOption === "custom" ? "opacity-100" : "opacity-0 pointer-events-none"}`}
                         >
-                            Custom
-                        </button>
-                    </div>
+                            <input
+                                type="text"
+                                placeholder="Label"
+                                className="input w-2/3 join-item input-bordered"
+                                value={customLabel}
+                                onChange={(e) => setCustomLabel(e.target.value)}
+                                tabIndex={blockOption === "custom" ? 0 : -1}
+                            />
+                            <input
+                                type="number"
+                                placeholder="Duration in minutes"
+                                className="input join-item input-bordered w-1/3"
+                                value={customDuration}
+                                onChange={(e) => setCustomDuration(e.target.value)}
+                                tabIndex={blockOption === "custom" ? 0 : -1}
+                            />
+                        </div>
 
-                    <div
-                        className={`join w-full transition-opacity ${blockOption === "custom" ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-                    >
-                        <input
-                            type="text"
-                            placeholder="Label"
-                            className="input w-2/3 join-item input-bordered"
-                            value={customLabel}
-                            onChange={(e) => setCustomLabel(e.target.value)}
-                            tabIndex={blockOption === "custom" ? 0 : -1}
-                        />
-                        <input
-                            type="number"
-                            placeholder="Duration in minutes"
-                            className="input join-item input-bordered w-1/3"
-                            value={customDuration}
-                            onChange={(e) => setCustomDuration(e.target.value)}
-                            tabIndex={blockOption === "custom" ? 0 : -1}
-                        />
-                    </div>
-
-                    <div className="modal-action">
-                        <form method="dialog">
-                            <button className="btn btn-ghost mr-2">
-                                Cancel
+                        <div className="modal-action">
+                            <form method="dialog">
+                                <button className="btn btn-ghost mr-2">
+                                    Cancel
+                                </button>
+                            </form>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleConfirmBlock}
+                            >
+                                Add Block
                             </button>
-                        </form>
-                        <button
-                            className="btn btn-primary"
-                            onClick={handleConfirmBlock}
-                        >
-                            Add Block
-                        </button>
+                        </div>
                     </div>
-                </div>
-                <form method="dialog" className="modal-backdrop">
-                    <button>close</button>
-                </form>
-            </dialog>
+                    <form method="dialog" className="modal-backdrop">
+                        <button>close</button>
+                    </form>
+                </dialog>
+            )}
 
             {/* ── Scheduler run modal ──────────────────────────────────
                 Triggers the scheduler run endpoint (POST) and lists recent
                 runs from the deferred schedulerHistory prop. History entries
-                are read-only; the only action here is "Run Scheduler". */}
-            <dialog id="scheduler_run_modal" className="modal">
-                <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
-                    <h3 className="font-bold text-lg mb-2">Scheduler</h3>
+                are read-only; the only action here is "Run Scheduler". Not
+                rendered at all in readOnly mode (its trigger button is also
+                hidden above). */}
+            {!readOnly && (
+                <dialog id="scheduler_run_modal" className="modal">
+                    <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
+                        <h3 className="font-bold text-lg mb-2">Scheduler</h3>
 
-                    <button
-                        className="btn btn-sm btn-primary mb-4 self-start"
-                        disabled={isRunningScheduler}
-                        onClick={() => {
-                            setIsRunningScheduler(true);
-                            router.post(
-                                "/loading-plan/run-scheduler",
-                                { date, location: selectedLocation },
-                                {
-                                    preserveScroll: true,
-                                    onFinish: () => setIsRunningScheduler(false),
-                                },
-                            );
-                        }}
-                    >
-                        {isRunningScheduler ? "Running…" : "Run Scheduler"}
-                    </button>
+                        <button
+                            className="btn btn-sm btn-primary mb-4 self-start"
+                            disabled={isRunningScheduler}
+                            onClick={() => {
+                                setIsRunningScheduler(true);
+                                router.post(
+                                    "/loading-plan/run-scheduler",
+                                    { date, location: selectedLocation },
+                                    {
+                                        preserveScroll: true,
+                                        onFinish: () => setIsRunningScheduler(false),
+                                    },
+                                );
+                            }}
+                        >
+                            {isRunningScheduler ? "Running…" : "Run Scheduler"}
+                        </button>
 
-                    <h4 className="font-semibold text-sm mb-2 text-base-content/70">
-                        Recent runs
-                    </h4>
-                    <div className="flex flex-col gap-1 overflow-y-auto pr-1">
-                        {schedulerHistory === undefined ? (
-                            <span className="text-sm text-base-content/50">Loading…</span>
-                        ) : schedulerHistory.length === 0 ? (
-                            <span className="text-sm text-base-content/50">No runs yet.</span>
-                        ) : (
-                            schedulerHistory.map((run) => (
-                                <div
-                                    key={run.id}
-                                    className="flex items-center justify-between gap-3 py-1 text-sm border-b border-base-content/10 last:border-0"
-                                >
-                                    <span className="flex items-center gap-1.5">
-                                        <span
-                                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                                run.status === "ok"
-                                                    ? "bg-success"
-                                                    : run.status === "error"
-                                                    ? "bg-error"
-                                                    : "bg-warning"
-                                            }`}
-                                        />
-                                        {run.user?.name ?? "System"}
-                                    </span>
-                                    <span className="text-base-content/60">
-                                        {run.status === "ok"
-                                            ? `${run.assigned_count}/${run.pickup_count} assigned`
-                                            : run.status === "skipped"
-                                            ? "nothing to schedule"
-                                            : "failed"}
-                                    </span>
-                                    <span className="text-base-content/40 text-xs">
-                                        {new Date(run.created_at).toLocaleTimeString([], {
-                                            hour: "2-digit",
-                                            minute: "2-digit",
-                                        })}
-                                    </span>
-                                </div>
-                            ))
-                        )}
+                        <h4 className="font-semibold text-sm mb-2 text-base-content/70">
+                            Recent runs
+                        </h4>
+                        <div className="flex flex-col gap-1 overflow-y-auto pr-1">
+                            {schedulerHistory === undefined ? (
+                                <span className="text-sm text-base-content/50">Loading…</span>
+                            ) : schedulerHistory.length === 0 ? (
+                                <span className="text-sm text-base-content/50">No runs yet.</span>
+                            ) : (
+                                schedulerHistory.map((run) => (
+                                    <div
+                                        key={run.id}
+                                        className="flex items-center justify-between gap-3 py-1 text-sm border-b border-base-content/10 last:border-0"
+                                    >
+                                        <span className="flex items-center gap-1.5">
+                                            <span
+                                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                                    run.status === "ok"
+                                                        ? "bg-success"
+                                                        : run.status === "error"
+                                                        ? "bg-error"
+                                                        : "bg-warning"
+                                                }`}
+                                            />
+                                            {run.user?.name ?? "System"}
+                                        </span>
+                                        <span className="text-base-content/60">
+                                            {run.status === "ok"
+                                                ? `${run.assigned_count}/${run.pickup_count} assigned`
+                                                : run.status === "skipped"
+                                                ? "nothing to schedule"
+                                                : "failed"}
+                                        </span>
+                                        <span className="text-base-content/40 text-xs">
+                                            {new Date(run.created_at).toLocaleTimeString([], {
+                                                hour: "2-digit",
+                                                minute: "2-digit",
+                                            })}
+                                        </span>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        <div className="modal-action">
+                            <form method="dialog">
+                                <button className="btn btn-ghost btn-sm">Close</button>
+                            </form>
+                        </div>
                     </div>
-
-                    <div className="modal-action">
-                        <form method="dialog">
-                            <button className="btn btn-ghost btn-sm">Close</button>
-                        </form>
-                    </div>
-                </div>
-                <form method="dialog" className="modal-backdrop">
-                    <button>close</button>
-                </form>
-            </dialog>
+                    <form method="dialog" className="modal-backdrop">
+                        <button>close</button>
+                    </form>
+                </dialog>
+            )}
 
             {/* ── Column visibility modal ──────────────────────────────────
                 Same underlying mechanism as the drag-to-shrink header
                 behavior above: toggling a column "off" here sets its width
                 to MIN_COLUMN_WIDTH rather than removing it from the grid, so
-                it stays visible as the same thin colored hint. */}
+                it stays visible as the same thin colored hint. Kept in
+                readOnly mode too — it's a local view preference, not a
+                mutation of loading-plan data. */}
             <dialog id="column_visibility_modal" className="modal">
                 <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
                     <h3 className="font-bold text-lg mb-4">Column Visibility</h3>

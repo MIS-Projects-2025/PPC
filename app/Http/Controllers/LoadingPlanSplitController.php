@@ -16,7 +16,7 @@ class LoadingPlanSplitController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'parent_entry_lot_id'   => 'required|int',
+            'parent_entry_id'   => 'required|int',
             'child_qty'             => 'required|integer|min:1',
             'target_machine'        => 'required|string',
             'before_entry_id'       => 'nullable|integer',
@@ -26,7 +26,7 @@ class LoadingPlanSplitController extends Controller
 
         try {
             $result = $this->service->split(
-                $data['parent_entry_lot_id'],
+                $data['parent_entry_id'],
                 $data['child_qty'],
                 $data['target_machine'],
                 $data['before_entry_id'] ?? null,
@@ -79,5 +79,12 @@ class LoadingPlanSplitController extends Controller
     public function history(string $rootLotId): JsonResponse
     {
         return response()->json($this->service->historyFor($rootLotId));
+    }
+
+    public function unrevertSplit(int $split, Request $request): JsonResponse
+    {
+        return response()->json(
+            app(LotSplitService::class)->unrevert($split, $request->user()?->id)
+        );
     }
 }

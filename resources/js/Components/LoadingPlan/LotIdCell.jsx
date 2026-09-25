@@ -3,6 +3,8 @@ import React, { useContext } from "react";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
 
 export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
+
+    console.log("LOG ~ LotIdCell.jsx:7 ~ LotIdCell ~ splitInfo:", splitInfo);
     const { handleShowHistory = noop, handleShowMergeHistory = noop } =
         useContext(TableActionsContext);
 

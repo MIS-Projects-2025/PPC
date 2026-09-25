@@ -13,7 +13,12 @@ body_size,
 ramp_time
 from ppc.customer_data_wip where `Part_Name` like '%ADRF%' limit 99999;
 select * from ppc.customer_data_wip limit 100;
+select distinct `Plant` from ppc.customer_data_wip;
 select * from ppc.customer_data_wip where `Part_Name` like '%MAT12AHZ%' limit 1000;
+
+SELECT DISTINCT SUBSTRING(devicename, 1, 2) AS short_devicename
+FROM qdn_db.package_list;
+
 show create table qdn_db.package_list;
 select distinct Auto_Part from ppc.customer_data_wip;
 select * from ppc.customer_data_wip where Part_Name like '%ADG884%';
@@ -24,9 +29,17 @@ select distinct `Package_Name` from ppc.customer_data_wip where Part_Name like '
 select * from ppc.customer_data_wip where Part_Name like '%ADUM3202%';
 select * from ppc.customer_data_wip where Part_Name like '%ADUM32%';
 select * from ppc.customer_data_wip where Part_Name like '%ADUM3210%';
+select * from ppc.customer_data_wip where Part_Name like '%ADUM3210%';
 
 show create table qdn_db.machine_setup_states;
 show create table ppc.customer_data_wip;
+select * from ppc.customer_data_wip where `Lot_Id` = 'G165538.23' and import_date = '2026-09-23';
+
+select * from ppc.lot_splits where child_lot_id = 'G165621.18';
+
+select * from qdn_db.package_list where package_type = 'ddpak';
+select DISTINCT lead_count from qdn_db.package_list where package_type = 'ddpak';
+select * from qdn_db.package_list where package_type = 'ddpak' and lead_count in ('3', '9');
 show create table ppc.focus_group_factory;
 CREATE TABLE `machine_setup_states` (
   `setup_state_id` bigint unsigned NOT NULL AUTO_INCREMENT,
@@ -61,6 +74,37 @@ select * from ppc.customer_data_wip where `Package_Name` = 'QFN' and `Body_Size`
 select distinct `Focus_Group` from ppc.customer_data_wip where `Package_Name` = 'SOT_23_3' and `Lead_Count` = 3;
 select distinct `Ramp_Time` from ppc.customer_data_wip;
 select distinct `Lead_Count` from ppc.customer_data_wip;
+select distinct `Lead_Count` from ppc.customer_data_wip;
+select * from qdn_db.machine_capability_part_rules;
+show create table qdn_db.machine_capability_part_rules;
+select * from qdn_db.machine_list where machine_num = '44g6l';
+select * from qdn_db.machine_transition_axis_rules where machine_id = 91;
+
+
+-- DELETE FROM `qdn_db`.`machine_setup_states`
+-- WHERE `machine_id` = 91;
+
+SELECT i.machine_num AS missing_machine_num
+FROM (
+    SELECT '08G6L' AS machine_num UNION ALL
+    SELECT '09G6L' UNION ALL
+    SELECT '11G6L' UNION ALL
+    SELECT '36G6L' UNION ALL
+    SELECT '48G6L' UNION ALL
+    SELECT '53G6L' UNION ALL
+    SELECT '10AT128' UNION ALL
+    SELECT '15AT128' UNION ALL
+    SELECT '54AT28' UNION ALL
+    SELECT '32G6L' UNION ALL
+    SELECT '15G6L'
+) i
+LEFT JOIN qdn_db.machine_list m ON i.machine_num = m.machine_num
+WHERE m.machine_num IS NULL;
+
+select * from qdn_db.machine_list where machine_num like '%10at128%';
+
+DELETE FROM `qdn_db`.`machine_transition_axis_rules` WHERE `machine_id` = 91;
+
 show create table ppc.f3;
 select * from ppc.f3 limit 1000;
 select * from qdn_db.machine_list where machine_num like '%01V%';

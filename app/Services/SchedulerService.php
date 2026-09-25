@@ -50,27 +50,76 @@ class SchedulerService
     /** Preloaded reference data for the batch currently being processed. */
     private array $ref = [];
     private array $plan = [];
-    protected array $recipeByPartName = [];
     private $fakeEntryId = -1;
 
-    protected function preloadRecipes(array $lots): void
+    protected ?LotScheduleCalculator $calc = null;
+
+    /**
+     * Scopes the shared calculator's package-list load to exactly the part
+     * names this batch needs, instead of loadPackageList()'s fallback of
+     * loading the whole ~20k-row package_list table. Call once per batch
+     * entry point — before any estimateCommit() calls for lots in that batch.
+     */
+    public function preloadPackageList(iterable $lots): void
     {
-        $partNames = array_values(array_unique(array_filter(
-            array_column($lots, 'Part_Name')
-        )));
-
-        if (empty($partNames)) {
-            $this->recipeByPartName = [];
-
-            return;
-        }
-
-        $this->recipeByPartName = PartName::query()
-            ->whereIn('part_name', $partNames)
-            ->pluck('recipe', 'part_name')
+        $partNames = collect($lots)
+            ->map(fn($lot) => $lot->Part_Name ?? null)
             ->filter()
-            ->map(fn($recipe) => (int) $recipe)
+            ->unique()
+            ->values()
             ->all();
+
+        $this->calc = app(LotScheduleCalculator::class);
+        $this->calc->loadPackageList($partNames);
+    }
+
+    protected function calculator(): LotScheduleCalculator
+    {
+        if ($this->calc === null) {
+            // No preloadPackageList() call happened for this batch — falls
+            // back to an unscoped load. Shouldn't happen on the normal
+            // paths; logged so a missing preload call gets noticed instead
+            // of silently eating the full-table cost again.
+            Log::warning('SchedulerService::calculator() built without preloadPackageList() — loading package_list unscoped.');
+            $this->calc = app(LotScheduleCalculator::class);
+            $this->calc->loadPackageList();
+        }
+        return $this->calc;
+    }
+
+    /**
+     * Pure compatibility check for a batch of lots against all candidate
+     * machines — no capacity, no queue position, no transition cost.
+     * $lots must be shaped like resolvePickupLots()/hydrateLotFromEntry()
+     * output (Part_Name, Focus_Group, Package_Name, Body_Size, Lead_Count,
+     * Ramp_Time, Lot_Type, is_auto_part, CR3).
+     *
+     * @return Collection<int, array{compatible_lot_ids: Collection, incompatible_lot_ids: Collection}>
+     *         keyed by machine_id. Only machines that are a candidate for at
+     *         least one lot appear here — the caller fills in "0 for 0" for
+     *         every other active machine (fully incompatible).
+     */
+    public function evaluateTransferCompatibility(Collection $lots): Collection
+    {
+        $this->preloadReferenceData($lots);
+        $this->preloadPackageList($lots);
+
+        $candidateMachineIdsByLot = $lots->mapWithKeys(
+            fn($lot) => [$lot->Lot_Id => $this->candidateMachineIdsForLot($lot)]
+        );
+
+        $allMachineIds = $candidateMachineIdsByLot->flatten()->unique()->values();
+
+        return $allMachineIds->mapWithKeys(function ($machineId) use ($candidateMachineIdsByLot) {
+            [$compatible, $incompatible] = $candidateMachineIdsByLot->partition(
+                fn($ids) => $ids->contains($machineId)
+            );
+
+            return [$machineId => [
+                'compatible_lot_ids'   => $compatible->keys()->values(),
+                'incompatible_lot_ids' => $incompatible->keys()->values(),
+            ]];
+        });
     }
 
     /**
@@ -474,47 +523,28 @@ class SchedulerService
      */
     public function getRemainingCapacityByMachine(Collection $machineIds, Carbon $targetDate): Collection
     {
-        if ($machineIds->isEmpty()) {
-            return collect();
-        }
-
-        $windowStart = $targetDate->copy()->setTime(6, 0, 0);
-        $windowEnd = $targetDate->copy()->addDay()->setTime(4, 0, 0);
-
-        $committedByMachine = LoadingPlanEntry::query()
-            ->whereIn('machine_id', $machineIds)
-            ->where('entry_type', 'lot')
-            ->whereBetween('time_start', [$windowStart, $windowEnd])
-            ->join('lot_quantities', function ($join) {
-                $join->on('lot_quantities.lot_id', '=', 'loading_plan_entries.lot_id')
-                    ->on('lot_quantities.scheduled_date', '=', 'loading_plan_entries.scheduled_date');
-            })
-            ->groupBy('loading_plan_entries.machine_id')
-            ->pluck(DB::raw('SUM(lot_quantities.commit) as total_commit'), 'loading_plan_entries.machine_id');
+        $committedByMachine = $this->getCommittedDoableByMachine($machineIds, $targetDate);
 
         return $machineIds->mapWithKeys(function ($machineId) use ($committedByMachine, $targetDate) {
             $capacityRow = MachineCapacity::effectiveFor($machineId, $targetDate);
-
-            if (!$capacityRow) {
-                return [$machineId => null];
-            }
-
-            $committed = (int) ($committedByMachine[$machineId] ?? 0);
-
-            return [$machineId => $capacityRow->capacity - $committed];
+            return $capacityRow
+                ? [$machineId => $capacityRow->capacity - $committedByMachine[$machineId]]
+                : [$machineId => null];
         });
     }
 
     /** commit = intdiv(qty, recipe). */
     public function estimateCommit(object $lot): ?int
     {
-        $recipe = $this->recipeByPartName[$lot->Part_Name] ?? null;
-
-        if (!$recipe || !$lot->Qty) {
+        if (!$lot->Qty) {
             return null;
         }
 
-        return intdiv((int) $lot->Qty, $recipe);
+        return $this->calculator()->computeMetrics(
+            $lot->Part_Name,
+            (int) $lot->Qty,
+            null // machineName — not needed for commit, only for capacity_uph_snapshot/accu_time
+        )['commit'];
     }
 
     protected function parseBodySize(?string $bodySize): array
@@ -815,6 +845,36 @@ class SchedulerService
 
             $isCr3Dedicated = $ctx->isCr3Dedicated
                 && $this->isDedicatedListMatch($lot->Part_Name, $state->setup_state_id);
+
+            if ($appendOnly) {
+                // no queue scan: the predecessor state is always the anchor
+                $predStateId = $anchorStateByMachine[$state->machine_id] ?? null;
+                $entryCost = $this->transitionCost(
+                    $state->machine_id,
+                    $predStateId,
+                    $state->setup_state_id,
+                    $lot->Part_Name
+                );
+
+                $candidate = [
+                    'machine_id' => $state->machine_id,
+                    'resulting_setup_state_id' => $state->setup_state_id,
+                    'operation_type' => $entryCost['operation_type'],
+                    'est_duration_minutes' => $entryCost['duration'],
+                    'matched_rule_id' => $entryCost['rule_id'],
+                    'insert_after_entry_id' => null,
+                    'insert_before_entry_id' => null,
+                    '_marginal_duration' => $entryCost['duration'],
+                    '_is_free' => $entryCost['duration'] === 0,
+                    '_is_cr3_dedicated' => $isCr3Dedicated,
+                    '_remaining_capacity' => $remainingCapacity,
+                ];
+
+                if ($best === null || $this->isBetterCandidate($candidate, $best)) {
+                    $best = $candidate;
+                }
+                continue;
+            }
 
             $openLots = ($openEntriesByMachine[$state->machine_id] ?? collect())
                 ->where('entry_type', 'lot')
@@ -1117,6 +1177,7 @@ class SchedulerService
     public function commitPickupBatch($pickup, Carbon $targetDate): array
     {
         $gathered = $this->handlePickup($pickup, $targetDate);
+        $this->preloadPackageList($gathered['pickup_lots']);
 
         $results = [
             'placed' => [],
@@ -1196,6 +1257,134 @@ class SchedulerService
         return 3;
     }
 
+    /**
+     * Hydrates a lot for transfer-compatibility purposes, regardless of
+     * whether it originated from WIP (has a CustomerDataWip row) or from a
+     * pickup (only ever had PartName-derived fields + the entry itself).
+     * WIP path is unchanged from hydrateLotFromEntry(). Pickup path mirrors
+     * resolvePickupLots(), reading qty/lot_id/package_name off the entry
+     * instead of a raw pickup payload, and reading Focus_Group/Ramp_Time/
+     * is_auto_part/Lead_Count/Body_Size off PartName like every pickup lot
+     * already does.
+     */
+    protected function hydrateLotForTransfer(LoadingPlanEntry $entry, ?CustomerDataWip $wip): ?object
+    {
+        if ($wip) {
+            return $this->hydrateLotFromEntry($entry, $wip);
+        }
+
+        $partInfo = PartName::findByPartName($entry->part_name);
+
+        if (!$partInfo) {
+            // will not sched
+            return null; // genuinely unresolvable — no WIP, no PartName match
+        }
+
+        $lotQty = $entry->lotQuantity;
+
+        return (object) [
+            'Lot_Id'       => $entry->lot_id,
+            'Part_Name'    => $entry->part_name,
+            'Package_Name' => $entry->package_name ?? $partInfo->package_type,
+            'Qty'          => $lotQty?->effectiveQty() ?? null,
+            'Lead_Count'   => is_numeric($partInfo->lead_count) ? (int) $partInfo->lead_count : null,
+            'Body_Size'    => $partInfo->dimensions,
+            'Focus_Group'  => $partInfo->focus_grp,
+            'Ramp_Time'    => $partInfo->allocation,
+            'is_auto_part' => (bool) $partInfo->is_auto_part,
+            'CR3'          => null, // same assumption resolvePickupLots makes
+            'Lot_Type'     => null, // no CustomerDataWip link to check, same as pickups
+            'isExpedite'   => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
+            'aboveCT'      => false,
+            'CT'           => null,
+        ];
+    }
+
+    public function getCommittedDoableByMachine(Collection $machineIds, Carbon $targetDate): Collection
+    {
+        if ($machineIds->isEmpty()) {
+            return collect();
+        }
+
+        $windowStart = $targetDate->copy()->setTime(6, 0, 0);
+        $windowEnd = $targetDate->copy()->addDay()->setTime(4, 0, 0);
+
+        $committed = LoadingPlanEntry::query()
+            ->whereIn('machine_id', $machineIds)
+            ->where('entry_type', 'lot')
+            ->whereBetween('time_start', [$windowStart, $windowEnd])
+            ->join('lot_quantities', function ($join) {
+                $join->on('lot_quantities.lot_id', '=', 'loading_plan_entries.lot_id')
+                    ->on('lot_quantities.scheduled_date', '=', 'loading_plan_entries.scheduled_date');
+            })
+            ->groupBy('loading_plan_entries.machine_id')
+            ->pluck(DB::raw('SUM(lot_quantities.commit) as total_commit'), 'loading_plan_entries.machine_id');
+
+        return $machineIds->mapWithKeys(fn($id) => [$id => (int) ($committed[$id] ?? 0)]);
+    }
+
+    /**
+     * WIP-only hydration path — for lots that haven't been placed onto the
+     * plan yet (no LoadingPlanEntry at all, e.g. "Unassigned"). Mirrors the
+     * WIP-derived fields hydrateLotFromEntry()/createPlannedLot() use, minus
+     * anything that only exists once a lot has an entry (tag, entry_type).
+     */
+    protected function hydrateLotFromWip(CustomerDataWip $wip): object
+    {
+        return (object) [
+            'Lot_Id'       => $wip->Lot_Id,
+            'Part_Name'    => $wip->Part_Name,
+            'Package_Name' => $wip->Package_Name,
+            'Qty'          => $wip->Qty,
+            'Lead_Count'   => $wip->Lead_Count,
+            'Body_Size'    => $wip->Body_Size,
+            'Focus_Group'  => $wip->Focus_Group,
+            'Ramp_Time'    => $wip->Ramp_Time,
+            'is_auto_part' => $wip->Auto_Part === 'Y',
+            'CR3'          => $wip->CR3,
+            'Lot_Type'     => $wip->Lot_Type,
+            'isExpedite'   => false, // no entry -> no tag to read
+            'aboveCT'      => false,
+            'CT'           => null,
+        ];
+    }
+
+    public function hydrateLotsForTransfer(Collection $lotIds, string $date): Collection
+    {
+        $entries = LoadingPlanEntry::query()
+            ->with('lotQuantity')
+            ->whereIn('lot_id', $lotIds)
+            ->whereDate('scheduled_date', $date)
+            ->where('entry_type', 'lot')
+            ->get();
+
+        Log::info($entries);
+
+        $rootLotIdByEntry = $entries->mapWithKeys(fn($e) => [$e->id => $e->resolveRootLotId()]);
+        $rootLotIds = $rootLotIdByEntry->values()->unique();
+
+        $wips = CustomerDataWip::query()
+            ->forDate($date)
+            ->whereIn('Lot_Id', $rootLotIds)
+            ->get()->keyBy('Lot_Id');
+
+        $entryLots = $entries
+            ->map(fn($entry) => $this->hydrateLotForTransfer($entry, $wips->get($rootLotIdByEntry[$entry->id])))
+            ->filter();
+
+        // lot_ids that had no LoadingPlanEntry at all — unassigned lots
+        $unhandledLotIds = $lotIds->diff($entries->pluck('lot_id')->unique());
+
+        $unassignedWips = CustomerDataWip::query()
+            ->forDate($date)
+            ->whereIn('Lot_Id', $unhandledLotIds)
+            ->get();
+
+        $wipOnlyLots = $unassignedWips->map(fn($wip) => $this->hydrateLotFromWip($wip));
+
+        return $entryLots->concat($wipOnlyLots)->values();
+    }
+
     protected function hydrateLotFromEntry(LoadingPlanEntry $entry, ?CustomerDataWip $wip): ?object
     {
         $lotQty = $entry->lotQuantity;
@@ -1242,11 +1431,20 @@ class SchedulerService
         $ordered = $items->sortByDesc(fn($item) => $item->CT ?? -INF)->values();
 
         foreach ($ordered as $lot) {
-            $choice = $this->rankCandidatesForLot(
+            $ctx = $this->buildLotContext($lot);
+
+            if ($ctx === null) {
+                $results['unassigned']->push($lot);
+                continue;
+            }
+
+            $choice = $this->rankWithContext(
                 $lot,
+                $ctx,
                 $openEntriesByMachine,
                 $anchorStateByMachine,
-                $remainingCapacityByMachine
+                $remainingCapacityByMachine,
+                appendOnly: true
             );
 
             if ($choice === null) {
@@ -1280,7 +1478,7 @@ class SchedulerService
         }
     }
 
-    protected function candidateMachineIdsForLot(object $lot): Collection
+    public function candidateMachineIdsForLot(object $lot): Collection
     {
         $factory = $this->resolveFactory($lot->Focus_Group);
         if ($factory === null) {
@@ -1403,10 +1601,18 @@ class SchedulerService
             unset($cacheByIdx[$bestIdx], $candidateMachinesByIdx[$bestIdx], $contextByIdx[$bestIdx]);
             $placedCount++;
 
+            $anchorBefore  = $anchorStateByMachine[$machineId] ?? null;
+            // ... commit placement, update anchor/capacity ...
+            $anchorChanged = $anchorBefore !== $bestChoice['resulting_setup_state_id'];
+
             // --- invalidate only lots whose candidate set includes $machineId ---
             foreach ($candidateMachinesByIdx as $idx => $machineIds) {
                 if (!$machineIds->contains($machineId)) {
                     continue;
+                }
+
+                if (!$anchorChanged && $cacheByIdx[$idx]['machine_id'] !== $machineId) {
+                    continue; // exact: m only got worse, cached best is elsewhere
                 }
 
                 $choice = $this->rankWithContext(
@@ -1465,14 +1671,13 @@ class SchedulerService
      */
     public function rebuildForPickupArrival($pickup, Carbon $targetDate): array
     {
-        $this->preloadRecipes($pickup);
         [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
         log_entities($pickupLots);
         $results = ['placed' => [], 'unassigned' => collect(), 'unmatched_part_names' => $unmatchedPartNames];
 
         $this->preloadReferenceData($pickupLots);
         $candidateMachineIds = $this->getCandidateMachineIds($pickupLots);
-        log_entities($candidateMachineIds);
+
         if ($candidateMachineIds->isEmpty() && $pickupLots->isEmpty()) {
             return $results;
         }
@@ -1538,6 +1743,7 @@ class SchedulerService
             $entries = LoadingPlanEntry::query()
                 ->with('lotQuantity')
                 ->whereIn('machine_id', $candidateMachineIds)
+                ->whereDate('scheduled_date', $targetDate)
                 ->open()
                 ->where('entry_type', 'lot')
                 ->get();
@@ -1815,11 +2021,7 @@ class SchedulerService
 
             $start = $logTimer('Delete existing open entries');
 
-            $deletedCount = LoadingPlanEntry::query()
-                ->whereDate('scheduled_date', $targetDate)
-                ->whereIn('machine_id', $candidateMachineIds)
-                ->open()
-                ->delete();
+            $deletedCount = LoadingPlanEntry::whereIn('id', $entries->pluck('id'))->delete();
 
             $logTimer(
                 'Delete existing open entries',
@@ -1892,6 +2094,17 @@ class SchedulerService
     |--------------------------------------------------------------------------
     */
 
+            $dupes = $entries->groupBy('lot_id')->filter(fn($g) => $g->count() > 1);
+            Log::info('dup entries', $dupes->take(5)->map(fn($g) => $g->map(fn($e) => [
+                'id' => $e->id,
+                'machine' => $e->machine_id,
+                'date' => $e->scheduled_date->toDateString(),
+                'seq' => $e->sequence_order,
+            ])->all())->all());
+            Log::info('pickup/existing overlap', [
+                'count' => $pickupLots->pluck('Lot_Id')->intersect($existingLots->pluck('Lot_Id'))->count(),
+            ]);
+
             $start = $logTimer('Merge existingLots + pickupLots');
 
             // $pool = $existingLots->merge($pickupLots);
@@ -1913,6 +2126,8 @@ class SchedulerService
                     return $group->first();
                 })
                 ->values();
+
+            $this->preloadPackageList($pool);
 
             $logTimer(
                 'Merge existingLots + pickupLots',

@@ -6,12 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 use App\Services\LotScheduleCalculator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Awobaz\Compoships\Compoships;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Carbon\Carbon;
 
 class LoadingPlanEntry extends Model
 {
+    use HasFactory;
     use Compoships;
     protected $table = 'loading_plan_entries';
 
@@ -103,18 +105,6 @@ class LoadingPlanEntry extends Model
             ->whereColumn('scheduled_date', 'loading_plan_entries.scheduled_date')
             ->active();
     }
-
-    // capacity_uph_snapshot is now stored in lot_quantities, so this method is no longer used.
-    // protected static function booted()
-    // {
-    //     static::saving(function (LoadingPlanEntry $entry) {
-    //         if ($entry->getOriginal('finalized_at') !== null && $entry->isDirty('capacity_uph_snapshot')) {
-    //             throw new \RuntimeException(
-    //                 "Cannot modify capacity_uph_snapshot on entry {$entry->id}: already finalized at {$entry->getOriginal('finalized_at')}"
-    //             );
-    //         }
-    //     });
-    // }
 
     /**
      * Resolve the root WIP lot_id this entry ultimately traces back to.

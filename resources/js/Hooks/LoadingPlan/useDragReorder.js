@@ -15,6 +15,7 @@ export function useDragReorder({
     toast,
     clearSelection,
     setIsDirty,
+    syncServerFields, // <- new
 }) {
     const [activeId, setActiveId] = useState(null);
     const [hoveredRowId, setHoveredRowId] = useState(null);
@@ -31,9 +32,6 @@ export function useDragReorder({
         [clearSelection],
     );
 
-    // FIX (carried over): onDragCancel referenced this in the original but
-    // it never existed — cancelling a drag (e.g. Escape mid-drag) would
-    // throw a ReferenceError.
     const handleDragCancel = useCallback(() => {
         setActiveId(null);
         setHoveredRowId(null);
@@ -52,15 +50,8 @@ export function useDragReorder({
             if (!over) return;
 
             const overId = String(over.id);
-            // These are the grid's row `id` (see rowKeyGetter,
-            // useDraggable/useDroppable ids), NOT the backend `entry_id`.
-            // `entry_id` is only pulled in once we build the persist
-            // payload further down.
             const draggedRowId = active.id;
 
-            // FIX (carried over): this used to compare a number
-            // (active.id) against a string (String(over.id)) and could
-            // never actually match.
             if (String(draggedRowId) === overId.replace("row-", "")) return;
 
             let pending = null;
@@ -110,8 +101,6 @@ export function useDragReorder({
                     return prev;
                 }
 
-
-                console.log("LOG ~ useDragReorder.js:114 ~ useDragReorder ~ baseTimes:", baseTimes);
                 if (baseTimes) {
                     recomputeMachine(next, toMachine, baseTimes, date);
                     if (isTransfer) recomputeMachine(next, fromMachine, baseTimes, date);
@@ -131,8 +120,6 @@ export function useDragReorder({
             if (!pending) return;
 
             const { toMachine, isTransfer, moved, finalRows } = pending;
-            // Unassigned has no persisted order — nothing to save for a
-            // pure Unassigned-to-Unassigned reorder.
             if (toMachine === null && !isTransfer) return;
             const isBlock = isBlockRow(moved);
             if (isBlock && !moved.id) return;
@@ -146,52 +133,58 @@ export function useDragReorder({
             const persist = withUpdating(
                 isTransfer
                     ? mutate(route("loading-plan.transfer"), {
-                          body: {
-                              entry_type: isBlock ? "block" : "lot",
-                              entry_id: moved.entry_id,
-                              target_machine: toMachine,
-                              before_entry_id: beforeEntryId,
-                              after_entry_id: afterEntryId,
-                          },
-                      })
+                        body: {
+                            entry_type: isBlock ? "block" : "lot",
+                            entry_id: moved.entry_id,
+                            lot_id: moved.entry_id ? undefined : moved.lot_id,
+                            scheduled_date: moved.entry_id ? undefined : date,
+                            target_machine: toMachine,
+                            before_entry_id: beforeEntryId,
+                            after_entry_id: afterEntryId,
+                        },
+                    })
                     : mutate(route("loading-plan.move"), {
-                          body: {
-                              entry_type: isBlock ? "block" : "lot",
-                              entry_id: moved.entry_id,
-                              before_entry_id: beforeEntryId,
-                              after_entry_id: afterEntryId,
-                              machine: toMachine,
-                          },
-                      }),
+                        body: {
+                            entry_type: isBlock ? "block" : "lot",
+                            entry_id: moved.entry_id,
+                            before_entry_id: beforeEntryId,
+                            after_entry_id: afterEntryId,
+                            machine: toMachine,
+                        },
+                    }),
             );
 
             persist
                 .then((entry) => {
-                    update(
-                        (prev) =>
-                            prev.map((r) =>
-                                r.id === moved.id
-                                    ? { ...r, 
-                                        time_start: entry.time_start, 
-                                        time_end: entry.time_end, 
-                                        sequence_order: entry.sequence_order, 
-                                        lock_version: entry.lock_version }
-                                    : r,
-                            ),
-                        true,
-                    );
+                    // was update(..., true) — present-only. Now propagates
+                    // lock_version (and the other server-computed fields)
+                    // into every past/future snapshot holding this row, so
+                    // a later undo doesn't resurrect a stale lock_version.
+                    syncServerFields?.([
+                        {
+                            dndId: moved._dndId,
+                            fields: {
+                                time_start: entry.time_start,
+                                time_end: entry.time_end,
+                                sequence_order: entry.sequence_order,
+                                lock_version: entry.lock_version,
+                            },
+                        },
+                    ]);
                 })
                 .catch((err) => {
-                    // NOTE (carried over): the original didn't call undo()
-                    // here on failure, only logged + toasted — so a failed
-                    // move/transfer currently leaves the optimistic local
-                    // state in place even though the server rejected it.
-                    // Preserved as-is; flag if that was unintentional.
+                    // NOTE (carried over): still no rollback on failure here —
+                    // preserved as-is per the original comment. Flag separately
+                    // if you want this to restore the pre-drag snapshot too;
+                    // it's the same missing-rollback pattern fixed elsewhere
+                    // in this conversation (bulk transfer, status change, etc.)
+                    // but this file's own comment suggested it might be
+                    // intentional, so left untouched pending your call.
                     console.error("Failed to persist move/transfer:", err?.message);
                     toast?.error?.(err?.message);
                 });
         },
-        [update, baseTimes, date, onReorder, onLotTransfer, withUpdating, mutate, toast, setIsDirty],
+        [update, baseTimes, date, onReorder, onLotTransfer, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const draggedRow = useMemo(

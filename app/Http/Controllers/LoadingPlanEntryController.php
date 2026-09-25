@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Exceptions\StaleWriteException;
 use App\Exceptions\BulkStaleWriteException;
 use App\Exceptions\LoadingPlanDateFinalizedException;
+use App\Exceptions\ActiveSplitChildException;
+use App\Exceptions\ActiveMergeParticipantException;
 use App\Services\LoadingPlanEntryService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -49,10 +51,18 @@ class LoadingPlanEntryController extends Controller
         $data = $request->validate([
             'entry_type'      => 'required|in:lot,block',
             'entry_id'        => 'required_if:entry_type,block|nullable|integer',
+            'lot_id'          => 'nullable|string',
+            'scheduled_date'  => 'nullable|date',
             'target_machine'  => 'nullable|string',
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
         ]);
+
+        if ($data['entry_type'] === 'lot' && empty($data['entry_id'])) {
+            if (empty($data['lot_id']) || empty($data['scheduled_date'])) {
+                abort(422, 'lot_id and scheduled_date are both required when transferring an entry that has no entry_id yet.');
+            }
+        }
 
         // Unassigned isn't a real machine — order doesn't apply there, so this
         // is an unassign, not a transfer. deleteEntry() (non-force) already
@@ -62,7 +72,7 @@ class LoadingPlanEntryController extends Controller
                 $data['entry_id'] ?? null,
             );
 
-            $this->service->deleteEntry($entry->id, $entry->getMachineName(), $data['scheduled_date']);
+            $this->service->deleteEntry($entry->id, $entry->getMachineName());
 
             return response()->json($entry->fresh());
         }
@@ -73,6 +83,8 @@ class LoadingPlanEntryController extends Controller
             $data['target_machine'],
             $data['before_entry_id'] ?? null,
             $data['after_entry_id'] ?? null,
+            $data['lot_id'] ?? null,
+            $data['scheduled_date'] ?? null,
         );
 
         return response()->json($entry);
@@ -81,22 +93,32 @@ class LoadingPlanEntryController extends Controller
     public function bulkTransfer(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'lot_ids'          => 'nullable|array',
-            'lot_ids.*'        => 'string',
-            'block_entry_ids'  => 'nullable|array',
-            'block_entry_ids.*' => 'integer',
-            'target_machine'   => 'nullable|string',
-            'scheduled_date'   => 'required|date',
+            'lot_ids'            => 'nullable|array',
+            'lot_ids.*'          => 'string',
+            'block_entry_ids'    => 'nullable|array',
+            'block_entry_ids.*'  => 'integer',
+            'target_machine'     => 'nullable|string',
+            'scheduled_date'     => 'required|date',
         ]);
 
-        $updated = $this->service->bulkTransfer(
-            $data['lot_ids'] ?? [],
-            $data['block_entry_ids'] ?? [],
-            $data['target_machine'],
-            $data['scheduled_date'],
-        );
+        try {
+            $updated = $this->service->bulkTransfer(
+                $data['lot_ids'] ?? [],
+                $data['block_entry_ids'] ?? [],
+                $data['target_machine'],
+                $data['scheduled_date'],
+            );
 
-        return response()->json($updated);
+            return response()->json($updated);
+        } catch (BulkStaleWriteException $e) {
+            return response()->json([
+                'error'     => 'stale',
+                'message'   => $e->getMessage(),
+                'conflicts' => $e->conflicts,
+            ], 409);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        }
     }
 
     public function addBlock(Request $request): JsonResponse
@@ -152,7 +174,7 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $this->service->deleteEntry($id, $data['machine'] ?? null, $data['scheduled_date']);
+        $this->service->deleteEntry($id, $data['machine'] ?? null);
 
         return response()->json(['id' => $id]);
     }
@@ -165,9 +187,19 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $result = $this->service->bulkDelete($data['ids']);
+        try {
+            $result = $this->service->bulkDelete($data['ids']);
 
-        return response()->json($result);
+            return response()->json($result);
+        } catch (BulkStaleWriteException $e) {
+            return response()->json([
+                'error'     => 'stale',
+                'message'   => $e->getMessage(),
+                'conflicts' => $e->conflicts,
+            ], 409);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        }
     }
 
     // ---- Field-only edits (optimistic locking) -------------------------
@@ -255,6 +287,11 @@ class LoadingPlanEntryController extends Controller
         try {
             $result = $this->service->syncRows($data['rows'], $data['order'] ?? [], $data['deleted'] ?? [], $data['scheduled_date']);
             return response()->json($result);
+        } catch (ActiveSplitChildException | ActiveMergeParticipantException $e) {
+            return response()->json([
+                'error'   => 'active_split_or_merge',
+                'message' => $e->getMessage(),
+            ], 422);
         } catch (StaleWriteException $e) {
             return response()->json([
                 'error'   => 'stale_write',

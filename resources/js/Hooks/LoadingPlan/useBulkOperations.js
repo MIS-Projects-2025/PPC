@@ -2,41 +2,25 @@ import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { useCallback } from "react";
 
-/**
- * Bulk-selection handlers wired to SelectionToolbar.
- *
- * FIX (carried over from the original): `selectedRows` is react-data-grid's
- * selection Set, keyed by whatever rowKeyGetter returns — which is
- * `row.id` (see rowKeyGetter on <DataGrid> in index.jsx), NOT
- * `row.entry_id`. Every handler here tests membership with
- * `selectedRows.has(r.id)`; `r.entry_id` is only pulled in once building
- * the outgoing API payload for rows that are already selected.
- *
- * handleBulkTag / handleBulkClearTag / handleBulkStatus / handleBulkFieldUpdate
- * all hit the same `loading-plan.bulk-update` endpoint with the same
- * optimistic-update -> persist -> reconcile-by-id-or-lot_id -> undo-on-error
- * shape, so they share `runFieldUpdate` below instead of each repeating it.
- * handleBulkTransfer / handleBulkDelete have different payload shapes and
- * their own machine-recompute + immediate-clearSelection behavior, so they
- * stay as their own functions.
- */
 export function useBulkOperations({
     dataRows,
     selectedRows,
     update,
     withUpdating,
     mutate,
-    undo,
     toast,
     setIsDirty,
     clearSelection,
     baseTimes,
     date,
+    syncServerFields,
 }) {
     const runFieldUpdate = useCallback(
         ({ filter, fields, applyLocal, conflictLabel, afterSuccess }) => {
             const targets = dataRows.filter(filter);
             if (targets.length === 0) return;
+
+            const prevSnapshot = dataRows;
 
             update((prev) => prev.map((r) => (filter(r) ? applyLocal(r) : r)));
             setIsDirty(true);
@@ -53,23 +37,18 @@ export function useBulkOperations({
                 }),
             )
                 .then(({ entries }) => {
-                    update(
-                        (prev) =>
-                            prev.map((r) => {
-                                const match = entries?.find(
-                                    (e) => e.id === r.entry_id || e.lot_id === r.lot_id,
-                                );
-                                return match
-                                    ? { ...r, entry_id: match.id, lock_version: match.lock_version }
-                                    : r;
-                            }),
-                        true,
-                    );
+                    const patches = targets
+                        .map((r) => {
+                            const match = entries?.find((e) => e.id === r.entry_id || e.lot_id === r.lot_id);
+                            return match ? { dndId: r._dndId, fields: { entry_id: match.id, lock_version: match.lock_version } } : null;
+                        })
+                        .filter(Boolean);
+                    syncServerFields?.(patches);
                     afterSuccess?.();
                 })
                 .catch((err) => {
                     console.error(`Bulk ${conflictLabel} update failed:`, err);
-                    undo();
+                    update(() => prevSnapshot, true);
                     if (err.status === 409) {
                         const conflicts = err.data?.conflicts ?? [];
                         toast?.error?.(
@@ -82,13 +61,13 @@ export function useBulkOperations({
                     }
                 });
         },
-        [dataRows, update, withUpdating, mutate, undo, toast, setIsDirty],
+        [dataRows, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkTag = useCallback(
         (tag) =>
             runFieldUpdate({
-                filter: (r) => selectedRows.has(r.id),
+                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
                 fields: { tag },
                 applyLocal: (r) => ({ ...r, tag }),
                 conflictLabel: "tag",
@@ -96,15 +75,13 @@ export function useBulkOperations({
         [runFieldUpdate, selectedRows],
     );
 
-    // Same request shape as handleBulkTag — "clear" is just tag: null,
-    // through the same bulk-update payload.
     const handleBulkClearTag = useCallback(() => handleBulkTag(null), [handleBulkTag]);
 
     const handleBulkStatus = useCallback(
         (newStatus) => {
             const normalizedStatus = newStatus === "NONE" ? null : newStatus;
             runFieldUpdate({
-                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r),
+                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
                 fields: { status: normalizedStatus },
                 applyLocal: (r) => ({ ...r, status: normalizedStatus }),
                 conflictLabel: "status",
@@ -116,7 +93,7 @@ export function useBulkOperations({
     const handleBulkFieldUpdate = useCallback(
         (field, value) => {
             runFieldUpdate({
-                filter: (r) => selectedRows.has(r.id) && r[field] !== value,
+                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
                 fields: { [field]: value },
                 applyLocal: (r) => ({ ...r, [field]: value }),
                 conflictLabel: field,
@@ -132,15 +109,20 @@ export function useBulkOperations({
             const lotIds = selected.filter((r) => !isBlockRow(r) && r.lot_id).map((r) => r.lot_id);
             const blockEntryIds = selected.filter((r) => isBlockRow(r) && r.entry_id).map((r) => r.entry_id);
 
+            const prevSnapshot = dataRows;
+
             const affectedMachines = new Set();
             update((prev) => {
                 const next = prev.map((r) => {
                     if (!selectedRows.has(r.id)) return { ...r };
+                    console.log('transferring', r.id, 'from', r.machine, 'to', targetMachine);
                     affectedMachines.add(r.machine);
                     affectedMachines.add(targetMachine);
                     return { ...r, machine: targetMachine };
                 });
+                console.log('before recompute', next.filter(r => selectedRows.has(r.id)));
                 if (baseTimes) affectedMachines.forEach((m) => recomputeMachine(next, m, baseTimes, date));
+                console.log('after recompute', next.filter(r => selectedRows.has(r.id)));
                 return next;
             });
             setIsDirty(true);
@@ -159,35 +141,40 @@ export function useBulkOperations({
                 }),
             )
                 .then((updatedEntries) => {
-                    update(
-                        (prev) =>
-                            prev.map((r) => {
-                                const match = updatedEntries?.find((e) =>
-                                    e.id === r.id,
-                                );
-                                return match ? { ...r, ...match } : r;
-                            }),
-                        true,
-                    );
+                    const patches = selected
+                        .map((r) => {
+                            const match = isBlockRow(r)
+                                ? updatedEntries?.find((e) => e.entry_id === r.entry_id)
+                                : updatedEntries?.find((e) => e.lot_id === r.lot_id);
+                            return match ? { dndId: r._dndId, fields: { ...match } } : null;
+                        })
+                        .filter(Boolean);
+                    syncServerFields?.(patches);
                 })
                 .catch((err) => {
                     console.error("Bulk transfer failed:", err);
-                    toast?.error?.(err?.message);
+                    update(() => {
+                        const restored = prevSnapshot.map((r) => ({ ...r }));
+                        if (baseTimes) affectedMachines.forEach((m) => recomputeMachine(restored, m, baseTimes, date));
+                        return restored;
+                    }, true);
+                    toast?.error?.(err?.message ?? "Couldn't transfer the selected rows — reverted.");
                 });
         },
-        [selectedRows, update, dataRows, baseTimes, date, clearSelection, withUpdating, mutate, toast, setIsDirty],
+        [selectedRows, update, dataRows, baseTimes, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkDelete = useCallback(() => {
         const targets = dataRows.filter((r) => selectedRows.has(r.id) && r.entry_id);
         const entryIds = targets.map((r) => r.entry_id);
+        const prevSnapshot = dataRows;
 
         update((prev) => {
             const affectedMachines = new Set();
             const next = prev
                 .map((r) => {
                     if (!selectedRows.has(r.id)) return r;
-                    if (isBlockRow(r)) return r; // blocks get removed below
+                    if (isBlockRow(r)) return r;
                     affectedMachines.add(r.machine);
                     return { ...r, machine: null, sequence_order: null };
                 })
@@ -204,21 +191,20 @@ export function useBulkOperations({
 
         withUpdating(mutate(route("loading-plan.bulk-delete"), { body: { ids: entryIds, scheduled_date: date } }))
             .then(({ unassigned }) => {
-                update(
-                    (prev) =>
-                        prev.map((r) => {
-                            const match = unassigned?.find((e) => e.id === r.entry_id);
-                            return match ? { ...r, lock_version: match.lock_version } : r;
-                        }),
-                    true,
-                );
+                const patches = targets
+                    .map((r) => {
+                        const match = unassigned?.find((e) => e.id === r.entry_id);
+                        return match ? { dndId: r._dndId, fields: { lock_version: match.lock_version } } : null;
+                    })
+                    .filter(Boolean);
+                syncServerFields?.(patches);
             })
             .catch((err) => {
                 console.error("Bulk delete failed:", err);
-                undo();
+                update(() => prevSnapshot, true);
                 toast?.error?.("Couldn't delete/unassign — reverted.");
             });
-    }, [selectedRows, update, dataRows, baseTimes, date, clearSelection, undo, withUpdating, mutate, toast, setIsDirty]);
+    }, [selectedRows, update, dataRows, baseTimes, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
 
     return {
         handleBulkTag,

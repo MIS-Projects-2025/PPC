@@ -43,7 +43,7 @@ return [
         ],
 
         'mysql' => [
-            'driver' => 'mysql',
+            'driver'   => env('DB_CONNECTION', 'mysql'),
             'url' => env('DB_URL'),
             'host' => env('DB_HOST', '127.0.0.1'),
             'port' => env('DB_PORT', '3306'),
@@ -63,7 +63,7 @@ return [
         ],
 
         'qdn_db' => [
-            'driver' => 'mysql',
+            'driver'   => env('QDN_DB_CONNECTION', 'mysql'),
             'url' => env('QDN_DB_URL'),
             'host' => env('QDN_DB_HOST', '192.168.20.20'),
             'port' => env('QDN_DB_PORT', '6446'),

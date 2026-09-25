@@ -4,6 +4,12 @@ import dayjs from "dayjs"; // or whatever date lib is already available
 
 const GAP_LABEL = "Gap";
 
+export function machineBaseDateTime(baseTimes, machine, referenceDate) {
+    return baseTimes[machine]
+        ? dayjs(baseTimes[machine], "YYYY-MM-DD HH:mm:ss")
+        : dayjs(`${referenceDate} 06:00:00`, "YYYY-MM-DD HH:mm:ss");
+}
+
 export function applyTimeStartEdit(
     rows,
     dndId,
@@ -26,16 +32,21 @@ export function applyTimeStartEdit(
 
     const referencePoint = rowAbove
         ? dayjs(referenceDate)
-              .add(rowAbove.time_end_day_offset ?? 0, "day")
-              .hour(Number(rowAbove.time_end.split(":")[0]))
-              .minute(Number(rowAbove.time_end.split(":")[1]))
-        : dayjs(baseTimes[machine]);
+            .add(rowAbove.time_end_day_offset ?? 0, "day")
+            .hour(Number(rowAbove.time_end.split(":")[0]))
+            .minute(Number(rowAbove.time_end.split(":")[1]))
+        : machineBaseDateTime(baseTimes, machine, referenceDate);
 
     // Anchor the user's typed "HH:mm" to the SAME calendar day the edited
     // row's own time_start currently falls on — not the page's viewed date.
     // This is what makes editing a leaked (yesterday) row interpret "22:00"
     // as yesterday's 22:00, not today's.
-    const editedRowDayOffset = editedRow.time_start_day_offset ?? 0;
+    const referenceDayOffset = rowAbove
+        ? (rowAbove.time_end_day_offset ?? 0)
+        : dayjs(baseTimes[machine]).startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+
+    const editedRowDayOffset = editedRow.time_start_day_offset ?? referenceDayOffset;
+
     const [h, m] = newTimeStartStr.split(":").map(Number);
     const newStart = dayjs(referenceDate)
         .add(editedRowDayOffset, "day")
@@ -93,9 +104,7 @@ export function recomputeMachine(rows, machine, baseTimes, referenceDate) {
         .filter((r) => r.machine === machine)
         .sort((a, b) => a.sequence_order - b.sequence_order);
 
-    const baseDateTime = baseTimes[machine]
-        ? dayjs(baseTimes[machine], "YYYY-MM-DD HH:mm:ss")
-        : dayjs(`${referenceDate} 06:00:00`, "YYYY-MM-DD HH:mm:ss");
+    const baseDateTime = machineBaseDateTime(baseTimes, machine, referenceDate);
 
     machineRows.reduce((cursor, row) => {
         const dur = Number(row.accu_time) || 0;

@@ -75,4 +75,11 @@ class LoadingPlanMergeController extends Controller
     {
         return response()->json($this->mergeService->historyFor($targetLotId));
     }
+
+    public function unrevertMerge(int $merge, Request $request): JsonResponse
+    {
+        return response()->json(
+            app(LotMergeService::class)->unrevert($merge, $request->user()?->id)
+        );
+    }
 }

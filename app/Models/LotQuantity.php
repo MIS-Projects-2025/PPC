@@ -4,9 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Awobaz\Compoships\Compoships;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class LotQuantity extends Model
 {
+    use HasFactory;
     use Compoships;
 
     protected $table = 'lot_quantities';
