@@ -132,13 +132,18 @@ class LoadingPlanController extends Controller
         $result = $loadingPlanService->initEntries();
         $mark('initEntries (1st call)');
 
+        $groups = app(\App\Services\PackageGroups::class);
+        $groupMap = $groups->reverseMap();
+
         $packages = $result
             ->filter(fn($row) => !$row['is_block'])
             ->pluck('package_name')
             ->filter()->unique()
             ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
-            ->map(fn($pkg) => PackageGroups::groupOf($pkg))
+            ->map(fn($pkg) => $groupMap[$pkg] ?? $pkg)
             ->unique()->sort()->values();
+        $mark('build packages list');
+
         $mark('build packages list');
 
         $wipRows = $loadingPlanService->todayWipRows
@@ -161,7 +166,7 @@ class LoadingPlanController extends Controller
             'date'              => $date,
             'machines'          => $activeMachines,
             'packageGroupNames' => $packages,
-            'packageGroups'     => PackageGroups::GROUPS,
+            'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
             'status'            => $status,
             'bakeLots'          => $bakeLots,

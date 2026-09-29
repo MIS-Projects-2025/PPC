@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::table('machine_capability_configs', function (Blueprint $table) {
             if (Schema::connection('qdn_db')->hasTable('machine_list')) {
                 $table->foreign('machine_id')
-                    ->references('id')->on('qdn_db.machine_list')
+                    ->references('id')->on(config('database.connections.qdn_db.database').'.machine_list')
                     ->onDelete('cascade')->onUpdate('no action');
             }
         });

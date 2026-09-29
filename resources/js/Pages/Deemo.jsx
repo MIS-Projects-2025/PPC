@@ -44,13 +44,14 @@ import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
 import { autoUpdate, offset, useFloating } from "@floating-ui/react";
-import { Deferred, router } from "@inertiajs/react";
+import { Deferred, Link, router } from '@inertiajs/react';
 import clsx from "clsx";
 import { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DataGrid } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import { createPortal } from "react-dom";
-import { BsSearch } from "react-icons/bs";
+import { BsGear, BsSearch } from "react-icons/bs";
+import { FaGear } from "react-icons/fa6";
 import { GoAlert } from "react-icons/go";
 import { PiOvenDuotone } from "react-icons/pi";
 /**
@@ -1428,6 +1429,10 @@ export default function Deemo({
                             <div className="w-px h-4 bg-base-300 mx-1" />
                             
                             <div className="flex gap-2">
+                                <Link href="/loading-plan/settings" className="btn btn-sm">
+                                    <BsGear size={16} /> <span>Settings</span>
+                                </Link>
+
                                 <button className="btn btn-sm" onClick={handleExport} disabled={isExporting}>
                                     {isExporting ? "Exporting…" : "Export to Excel"}
                                 </button>

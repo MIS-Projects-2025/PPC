@@ -283,11 +283,18 @@ class LotSplitService
             $split->update(['reverted_at' => null, 'reverted_by' => null]);
 
             $this->recalculateParentQty($parentEntry);
+
             $parentEntry = $parentEntry->fresh();
 
             $parentQuantity = LotQuantity::where('lot_id', $parentEntry->lot_id)
                 ->where('scheduled_date', $split->scheduled_date)
                 ->first();
+
+            if ($parentQuantity && $parentQuantity->effectiveQty() < 0) {
+                throw new InvalidSplitException(
+                    "Parent lot [{$parentEntry->lot_id}] no longer has enough quantity to restore this split — undo whatever was merged or edited afterwards first."
+                );
+            }
 
             $parentSplitInfo = [
                 'isParent'  => true,

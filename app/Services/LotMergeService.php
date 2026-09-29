@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\LoadingPlanEntry;
 use App\Models\LotMerge;
+use App\Models\LotSplit;
 use App\Models\LotQuantity;
 use App\Exceptions\InvalidMergeException;
 use App\Traits\ValidatesLoadingPlanEntries;
@@ -28,6 +29,7 @@ class LotMergeService
 
             // Derive and validate that both entries share the exact same scheduled date
             $date = $this->assertConsistentDates([$entryA, $entryB]);
+            $this->assertNotSplitParentAndChild($entryA->lot_id, $entryB->lot_id, $date);
 
             $this->assertDateNotFinalized($date);
 
@@ -128,6 +130,8 @@ class LotMergeService
                 ]);
             }
 
+            $this->assertNoNegativeQuantity($targetQuantity, $sourceQuantity);
+
             $merge->update(['reverted_at' => now(), 'reverted_by' => $revertedBy]);
 
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
@@ -189,6 +193,8 @@ class LotMergeService
             $sourceQuantity->update([
                 'merge_adjustment' => $sourceQuantity->merge_adjustment - $merge->transferred_qty,
             ]);
+
+            $this->assertNoNegativeQuantity($targetQuantity, $sourceQuantity);
 
             $merge->update(['reverted_at' => null, 'reverted_by' => null]);
 

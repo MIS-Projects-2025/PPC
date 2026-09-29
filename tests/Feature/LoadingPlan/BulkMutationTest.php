@@ -63,7 +63,7 @@ class BulkMutationTest extends LoadingPlanFeatureTestCase
             'scheduled_date' => '2026-01-05',
         ]);
 
-        $response->assertStatus(500); // assertConsistentDates() throws, uncaught by the controller
+        $response->assertStatus(422); // assertConsistentDates()'s exception renders as 422 — better than the 500 I'd assumed
     }
 
     public function test_bulk_updates_fields_across_multiple_entries(): void
@@ -112,5 +112,36 @@ class BulkMutationTest extends LoadingPlanFeatureTestCase
         ]);
 
         $response->assertStatus(422)->assertJson(['error' => 'bad_request']);
+    }
+
+    /**
+     * bulkEditField() never calls assertSupportedEditField() (editField and
+     * editLotField both do), and it spreads the request's fields straight into
+     * an update() — so extra columns may get written as-is, bypassing all the
+     * sequencing/placement logic. Either rejecting the request or ignoring the
+     * extra columns is acceptable; overwriting them is not, so no status code
+     * is asserted here.
+     */
+    public function test_bulk_update_cannot_overwrite_placement_columns(): void
+    {
+        $m1 = $this->machine('M1');
+        $m2 = $this->machine('M2');
+
+        $entry = LoadingPlanEntry::factory()->onMachine($m1, 1000)->create([
+            'scheduled_date' => '2026-01-05',
+            'lock_version'   => 1,
+        ]);
+
+        $this->postJson(route('loading-plan.bulk-update'), [
+            'updates' => [[
+                'entry_id'     => $entry->id,
+                'fields'       => ['remarks' => 'sneaky', 'sequence_order' => 999999, 'machine_id' => $m2->id],
+                'lock_version' => 1,
+            ]],
+        ]);
+
+        $fresh = $entry->fresh();
+        $this->assertEquals(1000, $fresh->sequence_order, 'bulk-update overwrote sequence_order directly');
+        $this->assertEquals($m1->id, $fresh->machine_id, 'bulk-update overwrote machine_id directly');
     }
 }

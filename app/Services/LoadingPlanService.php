@@ -140,8 +140,8 @@ class LoadingPlanService
         $this->date = $dateObj->toDateString();
         $this->previousDate = $previousDate ?? $dateObj->copy()->subDay()->toDateString();
 
-        $this->calc = new LotScheduleCalculator([
-            'dates' => [$this->previousDate, $this->date],
+        $this->calc = app(LotScheduleCalculator::class, [
+            'dates'  => [$this->previousDate, $this->date],
             'lotIds' => [],
         ]);
     }

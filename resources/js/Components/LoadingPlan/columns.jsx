@@ -274,10 +274,14 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             return row[col.key];
                         }
 
+                        if (row.machine === null) {
+                            return row[col.key];
+                        }
+
                         return (
                             <button
                                 type="button"
-                                className="btn btn-ghost btn-xs px-1"
+                                className="btn btn-ghost btn-xs px-1 btn-block flex-1"
                                 onClick={(e) => onStatusClick?.(e, row.entry_id)}
                                 disabled={isUpdating}
                             >

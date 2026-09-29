@@ -850,6 +850,8 @@ class LoadingPlanEntryService
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList();
 
             foreach ($updates as $u) {
+                $this->assertSupportedEditField($u['fields']);
+
                 $entryId = $u['entry_id'];
                 $fields = $u['fields'];
                 $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
@@ -880,6 +882,12 @@ class LoadingPlanEntryService
 
                     if (array_key_exists('qty', $fields)) {
                         $lotQuantity->qty_base = $fields['qty'];
+                    }
+
+                    if ($lotQuantity->effectiveQty() < 0) {
+                        throw new \InvalidArgumentException(
+                            "Lot [{$existing->lot_id}] can't go below what's already been split out or merged away."
+                        );
                     }
 
                     $lotQuantity->save();
@@ -987,12 +995,31 @@ class LoadingPlanEntryService
         int|string $machine,
         string $date
     ): float {
-        $sorted = $machineRows->sortBy('sequence_order')->values();
+        [$before, $after] = $this->resolveBounds($machineRows, $beforeEntryId, $afterEntryId);
+
+        try {
+            return $this->computeSequenceOrder($before, $after, $machine, $date);
+        } catch (SequenceExhaustedException) {
+            $machineId = $this->resolveMachineId($machine);
+            $rebalanced = $this->rebalance($machineId, $date);
+
+            // same resolution as the first pass, against the re-spaced rows,
+            // so a single-anchor request still gets its other neighbour filled in
+            [$before, $after] = $this->resolveBounds($rebalanced, $beforeEntryId, $afterEntryId);
+
+            return $this->computeSequenceOrder($before, $after, $machine, $date);
+        }
+    }
+
+    private function resolveBounds(Collection $rows, ?int $beforeEntryId, ?int $afterEntryId): array
+    {
+        $sorted = $rows->sortBy('sequence_order')->values();
 
         [$before, $after] = $this->resolveNeighborOrders($sorted, $beforeEntryId, $afterEntryId);
 
+        // no anchors at all: append after the current last row
         if ($before === null && $after === null) {
-            $currentMax = $machineRows->max('sequence_order');
+            $currentMax = $rows->max('sequence_order');
             if ($currentMax !== null) {
                 $before = $currentMax;
             }
@@ -1002,24 +1029,7 @@ class LoadingPlanEntryService
             [$before, $after] = [$after, $before];
         }
 
-        try {
-            return $this->computeSequenceOrder($before, $after, $machine, $date);
-        } catch (SequenceExhaustedException) {
-            $machineId = $this->resolveMachineId($machine);
-            $rebalanced = $this->rebalance($machineId, $date);
-
-            $before = $beforeEntryId ? $rebalanced->firstWhere('id', $beforeEntryId)?->sequence_order : null;
-            $after = $afterEntryId ? $rebalanced->firstWhere('id', $afterEntryId)?->sequence_order : null;
-
-            if ($before === null && $after === null) {
-                $currentMax = $rebalanced->max('sequence_order');
-                if ($currentMax !== null) {
-                    $before = $currentMax;
-                }
-            }
-
-            return $this->computeSequenceOrder($before, $after, $machine, $date);
-        }
+        return [$before, $after];
     }
 
     private function resolveNeighborOrders(Collection $sortedRows, ?int $beforeEntryId, ?int $afterEntryId): array

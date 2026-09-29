@@ -14,13 +14,13 @@ return new class extends Migration
         Schema::table('loading_plan_entries', function (Blueprint $table) {
             if (Schema::connection('qdn_db')->hasTable('machine_transition_rules')) {
                 $table->foreign(['matched_rule_id'])
-                    ->references(['rule_id'])->on('machine_transition_rules')
+                    ->references(['rule_id'])->on(config('database.connections.qdn_db.database').'.machine_transition_rules')
                     ->onUpdate('no action')->onDelete('set null');
             }
 
             if (Schema::connection('qdn_db')->hasTable('machine_setup_states')) {
                 $table->foreign(['resulting_setup_state_id'])
-                    ->references(['setup_state_id'])->on('machine_setup_states')
+                    ->references(['setup_state_id'])->on(config('database.connections.qdn_db.database').'.machine_setup_states')
                     ->onUpdate('no action')->onDelete('set null');
             }
         });

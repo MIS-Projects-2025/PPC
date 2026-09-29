@@ -5,6 +5,7 @@ namespace Tests\Feature\LoadingPlan;
 use App\Models\LoadingPlanEntry;
 use App\Models\LotMerge;
 use App\Models\LotQuantity;
+use App\Models\LotSplit;
 
 class MergeMutationTest extends LoadingPlanFeatureTestCase
 {
@@ -106,5 +107,91 @@ class MergeMutationTest extends LoadingPlanFeatureTestCase
         $this->assertNull($merge->fresh()->reverted_at);
         $this->assertEquals(500, LotQuantity::where('lot_id', 'LOT-G')->first()->merge_adjustment);
         $this->assertEquals(-500, LotQuantity::where('lot_id', 'LOT-H')->first()->merge_adjustment);
+    }
+
+    public function test_rejects_merging_a_split_parent_with_its_child(): void
+    {
+        [$parent, $child] = $this->makeSplitFamily('LOT-P', ['LOT-P.2']);
+
+        $this->postJson(route('loading-plan.merges.store'), [
+            'entry_id_a' => $parent->id,
+            'entry_id_b' => $child['LOT-P.2']->id,
+        ])->assertStatus(422)->assertJson(['error' => 'invalid_merge']);
+
+        $this->assertDatabaseCount('lot_merges', 0);
+    }
+
+    public function test_rejects_merging_a_split_child_with_its_parent_regardless_of_order(): void
+    {
+        [$parent, $child] = $this->makeSplitFamily('LOT-Q', ['LOT-Q.2']);
+
+        // child as entry_id_a this time
+        $this->postJson(route('loading-plan.merges.store'), [
+            'entry_id_a' => $child['LOT-Q.2']->id,
+            'entry_id_b' => $parent->id,
+        ])->assertStatus(422)->assertJson(['error' => 'invalid_merge']);
+
+        $this->assertDatabaseCount('lot_merges', 0);
+    }
+
+    public function test_allows_merging_two_siblings_split_from_the_same_parent(): void
+    {
+        // Consolidating fragments onto one machine is a legitimate use of
+        // merge — only the direct parent/child pairing is blocked.
+        [, $children] = $this->makeSplitFamily('LOT-R', ['LOT-R.2', 'LOT-R.3']);
+
+        $this->postJson(route('loading-plan.merges.store'), [
+            'entry_id_a' => $children['LOT-R.2']->id,
+            'entry_id_b' => $children['LOT-R.3']->id,
+        ])->assertCreated();
+    }
+
+    public function test_a_reverted_split_does_not_block_merging_its_former_parent_and_child(): void
+    {
+        [$parent, $child] = $this->makeSplitFamily('LOT-S', ['LOT-S.2']);
+
+        LotSplit::where('parent_lot_id', 'LOT-S')->update(['reverted_at' => now()]);
+
+        $this->postJson(route('loading-plan.merges.store'), [
+            'entry_id_a' => $parent->id,
+            'entry_id_b' => $child['LOT-S.2']->id,
+        ])->assertCreated();
+    }
+
+    /**
+     * Builds a parent lot plus one active split (and child entry/quantity)
+     * per given child lot id. Returns [parentEntry, [childLotId => entry]].
+     */
+    private function makeSplitFamily(string $parentLotId, array $childLotIds): array
+    {
+        $date = '2026-01-05';
+
+        $parent = LoadingPlanEntry::factory()->create(['lot_id' => $parentLotId, 'scheduled_date' => $date]);
+        LotQuantity::factory()->create([
+            'lot_id' => $parentLotId,
+            'scheduled_date' => $date,
+            'part_name' => 'PART-A',
+            'qty_base' => 1000,
+        ]);
+
+        $children = [];
+        foreach ($childLotIds as $childLotId) {
+            $children[$childLotId] = LoadingPlanEntry::factory()->create(['lot_id' => $childLotId, 'scheduled_date' => $date]);
+            LotQuantity::factory()->create([
+                'lot_id' => $childLotId,
+                'scheduled_date' => $date,
+                'part_name' => 'PART-A',
+                'qty_base' => 200,
+            ]);
+            LotSplit::factory()->create([
+                'parent_lot_id'  => $parentLotId,
+                'child_lot_id'   => $childLotId,
+                'root_lot_id'    => $parentLotId,
+                'scheduled_date' => $date,
+                'child_qty'      => 200,
+            ]);
+        }
+
+        return [$parent, $children];
     }
 }

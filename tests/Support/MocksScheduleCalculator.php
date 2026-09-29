@@ -40,6 +40,8 @@ trait MocksScheduleCalculator
         $mock->shouldReceive('recomputeTimeStartAndEnd')->andReturnNull()->byDefault();
         $mock->shouldReceive('findPredecessor')->andReturnNull()->byDefault();
         $mock->shouldReceive('machineNumFor')->andReturn('M1')->byDefault();
+        $mock->shouldReceive('accuTime')->andReturn(10)->byDefault();
+        $mock->shouldReceive('capacityUph')->andReturn(100)->byDefault();
         $mock->shouldReceive('computeMetrics')->andReturn([
             'accu_time'             => 10,
             'recipe_used'           => null,
@@ -49,7 +51,7 @@ trait MocksScheduleCalculator
             'capacity_uph_snapshot' => null,
         ])->byDefault();
 
-        $this->app->bind(LotScheduleCalculator::class, fn () => $mock);
+        $this->app->bind(LotScheduleCalculator::class, fn() => $mock);
 
         return $this->scheduleCalculatorMock = $mock;
     }

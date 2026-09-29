@@ -13,7 +13,7 @@ export function StatusBadge({ status }) {
         STATUS_STYLES[status] ?? "bg-base-content/10 text-base-content/50";
     return (
         <span
-            className={`flex px-1 rounded-lg items-center text-left text-[11px] font-medium w-full h-full whitespace-nowrap ${cls}`}
+            className={`flex px-1 items-center text-left text-[11px] font-medium w-full h-full whitespace-nowrap ${cls}`}
         >
             {status}
         </span>

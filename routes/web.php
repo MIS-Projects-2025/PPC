@@ -21,6 +21,9 @@ use App\Http\Controllers\{
     PackageCapacityController,
     PackageController,
     PackageGroupController,
+    LoadingPlanSettingsController,
+    LoadingPlanPackageGroupController,
+    MachineCapacityController,
     PartNameController,
     PickupController,
     PlPackageMasterController,
@@ -80,6 +83,26 @@ Route::prefix('rules')->group(function () {
 });
 
 Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
+    Route::get('settings/{section?}', [LoadingPlanSettingsController::class, 'index'])
+        ->whereIn('section', LoadingPlanSettingsController::SECTIONS)
+        ->name('settings');
+
+    Route::prefix('package-groups')->name('package-groups.')->group(function () {
+        Route::get('grouped', [LoadingPlanPackageGroupController::class, 'grouped'])->name('grouped');
+        Route::get('resolve', [LoadingPlanPackageGroupController::class, 'resolve'])->name('resolve');
+    });
+
+    Route::apiResource('package-groups', LoadingPlanPackageGroupController::class)
+        ->parameters(['package-groups' => 'packageGroup']);
+
+    Route::prefix('machine-capacities')->name('machine-capacities.')->group(function () {
+        Route::get('current/{machineId}', [MachineCapacityController::class, 'current'])->name('current');
+    });
+
+    Route::apiResource('machine-capacities', MachineCapacityController::class)
+        ->parameters(['machine-capacities' => 'id'])
+        ->names('machine-capacities');
+
     Route::post('run-scheduler', [LoadingPlanController::class, 'runScheduler'])
         ->name('run-scheduler');
 

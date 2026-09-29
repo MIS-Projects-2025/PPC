@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::table('machine_dedicated_parts', function (Blueprint $table) {
             if (Schema::connection('qdn_db')->hasTable('machine_list')) {
-                $table->foreign(['machine_id'])->references(['id'])->on('machine_list')->onUpdate('no action')->onDelete('cascade');
+                $table->foreign(['machine_id'])->references(['id'])->on(config('database.connections.qdn_db.database').'.machine_list')->onUpdate('no action')->onDelete('cascade');
             }
         });
     }

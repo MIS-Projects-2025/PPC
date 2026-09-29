@@ -172,6 +172,6 @@ class SplitMutationTest extends LoadingPlanFeatureTestCase
 
         $response = $this->postJson(route('loading-plan.splits.unrevert', $split->id));
 
-        $response->assertStatus(500); // unrevertSplit doesn't catch InvalidSplitException — worth fixing in the controller
+        $response->assertStatus(422); // unrevertSplit doesn't catch InvalidSplitException — worth fixing in the controller
     }
 }

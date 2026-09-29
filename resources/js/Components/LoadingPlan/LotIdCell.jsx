@@ -1,6 +1,5 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import React, { useContext } from "react";
-import { GoGitMerge, GoRepoForked } from "react-icons/go";
 
 export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
 
@@ -65,12 +64,9 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
             title={
                 isParent ? "This lot was split" : "This lot came from a split"
             }
-            className="inline-flex items-center gap-0.5 shrink-0 rounded px-0.5 py-0.5 text-base-content/40 hover:text-primary hover:bg-base-content/10 transition-colors"
+            className="inline-flex items-center shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold text-base-content/50 hover:text-primary hover:bg-base-content/10 transition-colors"
         >
-            <GoRepoForked size={16} className={isChild ? "rotate-180" : ""} />
-            <span className="text-[10px] font-semibold leading-none">
-                {isParent ? "P" : "C"}
-            </span>
+            SPLIT
         </button>
     );
 }
@@ -94,12 +90,9 @@ function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
                     ? "This lot absorbed another lot's quantity"
                     : `This lot was merged into ${mergedInto ?? "another lot"}`
             }
-            className="inline-flex items-center gap-0.5 shrink-0 rounded px-0.5 py-0.5 text-base-content/40 hover:text-secondary hover:bg-base-content/10 transition-colors"
+            className="inline-flex items-center shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold text-base-content/50 hover:text-secondary hover:bg-base-content/10 transition-colors"
         >
-            <GoGitMerge size={16} className={isSource ? "rotate-180" : ""} />
-            <span className="text-[10px] font-semibold leading-none">
-                {isTarget ? "T" : "S"}
-            </span>
+            MERGE
         </button>
     );
 }

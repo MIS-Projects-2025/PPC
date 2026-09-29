@@ -83,8 +83,31 @@ class LoadingPlanSplitController extends Controller
 
     public function unrevertSplit(int $split, Request $request): JsonResponse
     {
-        return response()->json(
-            app(LotSplitService::class)->unrevert($split, $request->user()?->id)
-        );
+        try {
+            $result = app(LotSplitService::class)->unrevert($split, $request->user()?->id);
+
+            return response()->json($result);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json([
+                'error'          => 'finalized',
+                'message'        => $e->getMessage(),
+                'scheduled_date' => $e->scheduledDate,
+            ], 422);
+        } catch (InvalidSplitException $e) {
+            return response()->json([
+                'error'   => 'invalid_split',
+                'message' => $e->getMessage(),
+            ], 422);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'error'   => 'not_found',
+                'message' => 'That split does not exist or is not in a state where this can be done.',
+            ], 404);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'error'   => 'server_error',
+                'message' => 'Could not revert this split.',
+            ], 500);
+        }
     }
 }

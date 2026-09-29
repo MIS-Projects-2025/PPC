@@ -21,6 +21,14 @@ FROM qdn_db.package_list;
 
 show create table qdn_db.package_list;
 select distinct Auto_Part from ppc.customer_data_wip;
+select * from ppc.customer_data_wip where import_date = '2026-09-28';
+select * from ppc.customer_data_wip where `Date_Loaded` = '2026-09-23 07:40:00';
+SELECT * 
+FROM ppc.customer_data_wip 
+WHERE `Date_Loaded` >= '2026-09-28 07:40:00' 
+  AND `Date_Loaded` < '2026-09-28 07:41:00';
+select distinct import_date from ppc.customer_data_wip;
+select * from ppc.customer_data_wip limit 99;
 select * from ppc.customer_data_wip where Part_Name like '%ADG884%';
 select * from ppc.customer_data_wip where Part_Name like '%ADUM4137%';
 select distinct `Package_Name` from ppc.customer_data_wip where Part_Name like '%ADUM4137%';
@@ -77,7 +85,8 @@ select distinct `Lead_Count` from ppc.customer_data_wip;
 select distinct `Lead_Count` from ppc.customer_data_wip;
 select * from qdn_db.machine_capability_part_rules;
 show create table qdn_db.machine_capability_part_rules;
-select * from qdn_db.machine_list where machine_num = '44g6l';
+select * from qdn_db.machine_list where machine_num like '%29hsi%';
+select * from qdn_db.machine_list where model like '%29hsi%';
 select * from qdn_db.machine_transition_axis_rules where machine_id = 91;
 
 
@@ -86,17 +95,41 @@ select * from qdn_db.machine_transition_axis_rules where machine_id = 91;
 
 SELECT i.machine_num AS missing_machine_num
 FROM (
-    SELECT '08G6L' AS machine_num UNION ALL
-    SELECT '09G6L' UNION ALL
-    SELECT '11G6L' UNION ALL
-    SELECT '36G6L' UNION ALL
-    SELECT '48G6L' UNION ALL
-    SELECT '53G6L' UNION ALL
-    SELECT '10AT128' UNION ALL
-    SELECT '15AT128' UNION ALL
-    SELECT '54AT28' UNION ALL
-    SELECT '32G6L' UNION ALL
-    SELECT '15G6L'
+    select '02MTNR' as machine_num union all
+    select '01ST60' union all
+    select '56AT28' union all
+    select '12HEXA' union all
+    select '05ST60' union all
+    select '08ST60' union all
+    select '09ST60' union all
+    select 'HEXA046' union all
+    select 'AT268056' union all
+    select '10ST60' union all
+    select '06ST60' union all
+    select 'AT268053' union all
+    select '19HSI250' union all
+    select '26HSI250' union all
+    select '22HSI250' union all
+    select '20HSI250' union all
+    select '36HSI250' union all
+    select '18HSI250' union all
+    select '13HSI250' union all
+    select '04HSI200' union all
+    select '23HSI250' union all
+    select '11HSI400i' union all
+    select '02HSI400T' union all
+    select '12HSI400i' union all
+    select '09HSI400T' union all
+    select '10HSI400T' union all
+    select '05HSI400T' union all
+    select '13HSI400i' union all
+    select '38HSI400i' union all
+    select '39HSI400i' union all
+    select '06HSI400T' union all
+    select '29HSI250' union all
+    select '29HSI400T' union all
+    select '07HSI400T' union all
+    select '14HSI400i'
 ) i
 LEFT JOIN qdn_db.machine_list m ON i.machine_num = m.machine_num
 WHERE m.machine_num IS NULL;
