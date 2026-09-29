@@ -46,6 +46,7 @@ class LoadingPlanService
         'tag',
         'lock_version',
         'accu_time',
+        'is_pickup'
     ];
 
     // should WipRows be the source of truth everywhere, even in lot previous?
@@ -376,42 +377,46 @@ class LoadingPlanService
         LoadingPlanEntry|array|null $entry,
         ?LotQuantity $quantity = null,
     ): array {
+        /*
+        * Normalize $entry into an object so the rest of this method can
+        * consistently use ->property regardless of whether the caller
+        * supplied a LoadingPlanEntry model or an array.
+        *
+        * This is important because response-shaped arrays contain fields
+        * such as is_pickup, is_block, machine, scheduled_date, etc.
+        */
         $entryIsArray = is_array($entry);
 
+        $resolvedMachine = null;
+        $resolvedScheduledDate = null;
+
         if ($entryIsArray) {
-            $missingKeys = array_values(array_diff(self::REQUIRED_ENTRY_ARRAY_KEYS, array_keys($entry)));
-
-            if (!empty($missingKeys)) {
-                throw new \InvalidArgumentException(
-                    'createPlannedLot(): $entry array is missing required key(s): ' . implode(', ', $missingKeys)
-                );
-            }
-
+            /*
+            * Keep the complete array instead of manually rebuilding only
+            * selected fields. This prevents fields such as is_pickup from
+            * being accidentally dropped.
+            */
             $entryArray = $entry;
 
-            // Map output-shaped array keys onto the property names the rest of this method reads.
-            // Note: 'machine' and 'scheduled_date' are already resolved/formatted values here
-            // (not raw model attributes), so downstream logic that resolves them from a real
-            // LoadingPlanEntry (finalized_at/machine_snapshot/getMachineName, Carbon parsing) is skipped.
-            $entry = (object) [
-                'id'                 => $entryArray['entry_id'],
-                'entry_type'         => $entryArray['entry_type'],
-                'is_manual_expedite' => $entryArray['is_manual_expedite'],
-                'block_label'        => $entryArray['block_label'],
-                'lot_id'             => $entryArray['lot_id'],
-                'package_name'       => $entryArray['package_name'],
-                'status'             => $entryArray['status'],
-                'sequence_order'     => $entryArray['sequence_order'],
-                'time_start'         => $entryArray['time_start'], // already 'H:i' or null
-                'time_end'           => $entryArray['time_end'],   // already 'H:i' or null
-                'remarks'            => $entryArray['remarks'],
-                'tag'                => $entryArray['tag'],
-                'lock_version'       => $entryArray['lock_version'],
-                'accu_time'          => $entryArray['accu_time'],
-            ];
+            $resolvedMachine = $entryArray['machine'] ?? null;
+            $resolvedScheduledDate = $entryArray['scheduled_date'] ?? null;
 
-            $resolvedMachine = $entryArray['machine'];
-            $resolvedScheduledDate = $entryArray['scheduled_date']; // already a 'Y-m-d' string
+            /*
+            * Convert the complete array to an object.
+            *
+            * This means all existing fields are preserved:
+            *
+            * $entry->is_pickup
+            * $entry->is_block
+            * $entry->is_leaked
+            * $entry->is_manual_expedite
+            * $entry->machine
+            * $entry->scheduled_date
+            * $entry->lot_id
+            * $entry->sequence_order
+            * etc.
+            */
+            $entry = (object) $entryArray;
         }
 
         $effectiveQty = $quantity?->effectiveQty() ?? $wipRow?->Qty ?? 0;
@@ -428,26 +433,40 @@ class LoadingPlanService
 
         $isBlocked = $entry?->entry_type === 'block';
 
-        $accuTime = $entry?->accu_time ? $entry?->accu_time : $this->calc->accuTime($doable, $capacityUph);
+        $accuTime = $entry?->accu_time
+            ? $entry->accu_time
+            : $this->calc->accuTime($doable, $capacityUph);
 
-        // Array-shaped $entry already carries a resolved 'machine' value — skip
-        // finalized_at/machine_snapshot/getMachineName(), which only apply to a real model.
+        /*
+        * Array-shaped entries already contain the resolved machine name.
+        * Real LoadingPlanEntry models still use the existing model logic.
+        */
         $machine = $entryIsArray
             ? $resolvedMachine
-            : ($entry?->finalized_at ? $entry->machine_snapshot : $entry?->getMachineName());
+            : ($entry?->finalized_at
+                ? $entry->machine_snapshot
+                : $entry?->getMachineName());
 
         $formulas = LoadingPlanFormulas::make($wipRow);
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
-        // time_start/time_end from the array are already 'H:i' strings; Carbon::parse()
-        // on a bare time string assumes today's date, which is fine since only ->format('H:i')
-        // is read back out below.
-        $startTime = $entry?->time_start ? Carbon::parse($entry->time_start) : null;
-        $endTime   = $entry?->time_end   ? Carbon::parse($entry->time_end)   : null;
+        /*
+        * Array-shaped entries already contain H:i strings.
+        * LoadingPlanEntry models may contain Carbon values.
+        */
+        $startTime = $entry?->time_start
+            ? Carbon::parse($entry->time_start)
+            : null;
 
-        // Array-shaped scheduled_date is already a 'Y-m-d' string; a real LoadingPlanEntry
-        // gives a Carbon instance and needs ->toDateString().
+        $endTime = $entry?->time_end
+            ? Carbon::parse($entry->time_end)
+            : null;
+
+        /*
+        * Array-shaped scheduled_date is already a Y-m-d string.
+        * A real LoadingPlanEntry uses a Carbon instance.
+        */
         $scheduledDate = $entryIsArray
             ? $resolvedScheduledDate
             : ($entry?->scheduled_date?->toDateString() ?? null);
@@ -463,6 +482,10 @@ class LoadingPlanService
             'is_leaked'                  => $isLeaked,
             'is_manual_expedite'         => $entry?->is_manual_expedite,
             'is_for_bake'                => $formulas->isBakeHighlight,
+
+            // IMPORTANT:
+            // This now works for both an array input and a LoadingPlanEntry model
+            // because arrays were normalized to an object above.
             'is_pickup'                  => $entry?->is_pickup,
 
             'block_label'                => $entry?->block_label,
@@ -470,10 +493,20 @@ class LoadingPlanService
             'scheduled_date'             => $scheduledDate,
 
             // Lot & WIP Identifiers/Specs
-            'id'                         => $entry ? 'entry-' . $entry->id : 'wip-' . $wipRow->customer_data_id,
-            'part_name'                  => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',
+            'id'                         => $entry
+                ? 'entry-' . $entry->id
+                : 'wip-' . $wipRow->customer_data_id,
+
+            'part_name'                  => $wipRow?->Part_Name
+                ?? $quantity?->part_name
+                ?? '',
+
             'lead_count'                 => $wipRow?->Lead_Count ?? null,
-            'package_name'               => $wipRow?->Package_Name ?? $entry?->package_name ?? null,
+
+            'package_name'               => $wipRow?->Package_Name
+                ?? $entry?->package_name
+                ?? null,
+
             'lot_id'                     => $lotId,
             'station'                    => $wipRow?->Station ?? null,
             'lot_type'                   => $wipRow?->Lot_Type ?? null,
@@ -491,9 +524,22 @@ class LoadingPlanService
             'bake_count'                 => $wipRow?->Bake_Count ?? null,
             'test_lot_id'                => $wipRow?->Test_Lot_Id ?? null,
             'backend_leadtime'           => $wipRow?->Backend_Leadtime ?? null,
-            'date_loaded'                => transform($wipRow?->Date_Loaded, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
-            'be_starttime'               => transform($wipRow?->BE_Starttime, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
-            'start_time'                 => transform($wipRow?->Start_Time, fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')),
+
+            'date_loaded'                => transform(
+                $wipRow?->Date_Loaded,
+                fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')
+            ),
+
+            'be_starttime'               => transform(
+                $wipRow?->BE_Starttime,
+                fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')
+            ),
+
+            'start_time'                 => transform(
+                $wipRow?->Start_Time,
+                fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')
+            ),
+
             'part_type'                  => $wipRow?->Part_Type ?? null,
             'part_class'                 => $wipRow?->Part_Class ?? null,
             'date_code'                  => $wipRow?->Date_Code ?? null,
@@ -525,11 +571,11 @@ class LoadingPlanService
             'lock_version'               => $entry?->lock_version ?? null,
 
             // Capacity & Recipe Metadata
-            'accu_time'                  => $accuTime,
-            'doable_recipe_source'       => $doableRecipeSource,
-            'qty'                        => $effectiveQty,
-            'doable'                     => $doable,
-            'doable_status'              => $doableStatus,
+            'accu_time'                 => $accuTime,
+            'doable_recipe_source'      => $doableRecipeSource,
+            'qty'                       => $effectiveQty,
+            'doable'                    => $doable,
+            'doable_status'             => $doableStatus,
             'capacity_uph'               => $capacityUph,
 
             // Formula Calculated Metrics
@@ -539,8 +585,19 @@ class LoadingPlanService
             'cycle_time_exceed_residual' => $formulas->cycleTimeExceedResidual,
 
             // Split & Merge Metadata
-            'split_info' => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent ?? null, $this->splitsByChild ?? null, $scheduledDate),
-            'merge_info' => LotMergeService::buildMergeMeta($lotId, $this->mergesByTarget ?? null, $this->mergesBySource ?? null, $scheduledDate),
+            'split_info' => LotSplitService::buildSplitMeta(
+                $lotId,
+                $this->splitsByParent ?? null,
+                $this->splitsByChild ?? null,
+                $scheduledDate
+            ),
+
+            'merge_info' => LotMergeService::buildMergeMeta(
+                $lotId,
+                $this->mergesByTarget ?? null,
+                $this->mergesBySource ?? null,
+                $scheduledDate
+            ),
         ];
     }
 
