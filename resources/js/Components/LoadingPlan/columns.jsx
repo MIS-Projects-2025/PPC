@@ -65,6 +65,7 @@ export const BAKE_COLUMNS = [
 export const DATA_COLUMNS = [
     { key: "id", editable: false, name: "id" },
     { key: "entry_id", editable: false, name: "Entry ID" },
+    { key: "machine", editable: false, name: "Machine", width: 110 },
     { key: "part_name", editable: false, name: "Part Name" },
     { key: "lead_count", editable: false, name: "Lead Count" },
     { key: "package_name", editable: false, name: "Package Name" },
@@ -380,6 +381,10 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         return null; // blank every other cell for a block row
+                    }
+
+                    if (col.key === "machine") {
+                        return row.machine ?? "Unassigned";
                     }
 
                     return row[col.key];
