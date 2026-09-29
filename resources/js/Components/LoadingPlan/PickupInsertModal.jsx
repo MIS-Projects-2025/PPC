@@ -24,12 +24,10 @@ const REQUIRED_FIELDS = [
     { key: "lotId", label: "LotId" },
     { key: "qty", label: "Qty" },
     { key: "package", label: "Package" },
-    { key: "lc", label: "LC" },
-    { key: "bodySize", label: "Body Size" },
 ];
 
 // Fields the backend PartName lookup can fill in automatically.
-const API_FILLABLE_FIELDS = ["lc", "package", "bodySize"];
+const API_FILLABLE_FIELDS = ["package"];
 
 // ---------------------------------------------------------------------------
 // Header-row detection
@@ -45,8 +43,6 @@ const HEADER_SYNONYMS = {
     lotId: ["lotid", "lot id", "lot no", "lot number", "lot"],
     qty: ["qty", "quantity", "pcs", "qtypcs"],
     package: ["package", "pkg", "package type", "packagetype"],
-    lc: ["lc", "lead count", "leadcount", "pin count", "pincount"],
-    bodySize: ["bodysize", "body size", "dimensions", "dimension", "size"],
 };
 
 function normalizeHeader(s) {
@@ -183,14 +179,6 @@ function scorePackage(values) {
     return matches.length / vals.length;
 }
 
-function scoreBodySize(values) {
-    const vals = nonEmptyValues(values);
-    if (!vals.length) return 0;
-    const re = /^\d+(\.\d+)?\s*[xX]\s*\d+(\.\d+)?$/;
-    const matches = vals.filter((v) => re.test(String(v).trim()));
-    return matches.length / vals.length;
-}
-
 // Returns { [columnKey]: fieldKey } for the columns it's confident about.
 // Columns not present in the result should be treated as "ignore".
 function predictColumnMapping(columns, rows) {
@@ -237,9 +225,6 @@ function predictColumnMapping(columns, rows) {
     const packageKey = pickBest(scorePackage, 0.5);
     if (packageKey) mapping[packageKey] = "package";
 
-    const bodySizeKey = pickBest(scoreBodySize, 0.3);
-    if (bodySizeKey) mapping[bodySizeKey] = "bodySize";
-
     // Qty: the numeric column immediately to the right of LotId, in both
     // sample layouts qty always trails the lot id directly.
     let qtyKey = null;
@@ -266,21 +251,6 @@ function predictColumnMapping(columns, rows) {
     if (qtyKey) {
         used.add(qtyKey);
         mapping[qtyKey] = "qty";
-    }
-
-    // LC: the numeric column immediately to the right of Package. Anything
-    // further right (e.g. a "number of boxes" column) is left unmapped.
-    let lcKey = null;
-    if (packageKey) {
-        const idx = columns.findIndex((c) => c.key === packageKey);
-        const next = columns[idx + 1];
-        if (next && !used.has(next.key) && !indexCols.has(next.key) && isNumericColumn(colValues[next.key])) {
-            lcKey = next.key;
-        }
-    }
-    if (lcKey) {
-        used.add(lcKey);
-        mapping[lcKey] = "lc";
     }
 
     return mapping;
@@ -950,7 +920,7 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
         [rowActionsColumn, columnsWithSwap, expediteRows, isAllExpedite, toggleExpediteRow, toggleExpediteAll],
     );
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         const mappedCols = columns.filter(
             (c) => mapping[c.key] && mapping[c.key] !== "ignore",
         );
@@ -975,9 +945,17 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                 return record;
             });
         
-        // console.log("expedite", expediteRows);
-        console.log("Submitting", payload);
-        // ... send `payload` to your API here
+        try {
+            const { data } = await axios.post(route('loading-plan.schedule-pickup'), {
+                date: new Date().toISOString().split('T')[0],
+                pickups: payload,
+            });
+            console.log('Scheduled', data);
+            onClose(); // or however you want to close/reset on success
+        } catch (err) {
+            console.error('Pickup submit failed', err);
+            // surface err.response?.data to the user — validation errors, unmatched_part_names, etc.
+        }
     };
 
     return (

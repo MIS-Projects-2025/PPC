@@ -47,4 +47,11 @@ class PartName extends Model
 
         return static::query()->where('devicename', $partName)->first();
     }
+
+    public static function qualifiedTable(): string
+    {
+        $model = new static;
+
+        return $model->getConnection()->getDatabaseName() . '.' . $model->getTable();
+    }
 }

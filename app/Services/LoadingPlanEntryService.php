@@ -573,7 +573,7 @@ class LoadingPlanEntryService
                     'scheduled_date' => $date,
                     'machine_id'     => $targetMachineId,
                     'package_name'   => $wipItem?->Package_Name ?? null,
-                    'sequence_order' => $nextSeq,
+                    'sequence_order' => $seq,
                     'lock_version'   => 1,
                     'time_start'     => null,
                     'time_end'       => null,
@@ -681,7 +681,7 @@ class LoadingPlanEntryService
                 $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
             }
 
-            $allowedEntryFields = ['package_name', 'lot_id']; // extend as needed — see editLotField discussion on allowlisting $fields
+            $allowedEntryFields = ['package_name', 'lot_id', 'is_pickup']; // extend as needed — see editLotField discussion on allowlisting $fields
             $entryFields = collect($fields)->only($allowedEntryFields)->all();
 
             $entry = LoadingPlanEntry::create([
@@ -2043,6 +2043,7 @@ class LoadingPlanEntryService
                         'sequence_order' => $seq,
                         'status' => null,
                         'block_label' => $row['label'],
+                        'is_pickup' => false,
                         'accu_time' => $row['duration'],
                         'time_start' => $timeStart,
                         'time_end' => $timeEnd,
@@ -2066,6 +2067,7 @@ class LoadingPlanEntryService
                         'sequence_order' => $seq,
                         'status' => 'NONE',
                         'block_label' => null,
+                        'is_pickup' => $row['is_pickup'] ?? false,
                         'accu_time' => $metrics['accu_time'],
                         'time_start' => $timeStart,
                         'time_end' => $timeEnd,

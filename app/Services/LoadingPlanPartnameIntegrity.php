@@ -4,7 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use App\Models\LotQuantity;
+use App\Models\PartName;
 
 class LoadingPlanPartnameIntegrity
 {
@@ -22,7 +22,7 @@ class LoadingPlanPartnameIntegrity
             return collect();
         }
 
-        return DB::table('qdn_db.package_list')
+        return PartName::query()
             ->whereIn('devicename', $partNames)
             ->get()
             ->keyBy('devicename');

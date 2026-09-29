@@ -70,7 +70,7 @@ class LoadingPlanPackageGroupController extends Controller
                 'required',
                 'string',
                 'max:50',
-                Rule::unique('qdn_db.package_groups', 'package_name')->ignore($current?->id),
+                Rule::unique(LoadingPlanPackageGroup::class, 'package_name')->ignore($current?->id),
             ],
         ];
     }

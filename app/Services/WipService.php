@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\F3;
 use App\Models\CustomerDataWip;
+use App\Models\PartName;
 use App\Repositories\AnalogCalendarRepository;
 use App\Repositories\F1F2WipRepository;
 use App\Repositories\F1F2OutRepository;
@@ -471,10 +472,9 @@ class WipService
       case 'PL6':
         $query = DB::table('ppc_pickupdb')
           ->selectRaw('ppc_pickupdb.PACKAGE AS PACKAGE, SUM(QTY) AS total_wip, COUNT(DISTINCT LOTID) AS total_lots')
-          ->join('qdn_db.package_list as partname', 'ppc_pickupdb.PARTNAME', '=', 'partname.devicename')
-          // ->whereBetween('ppc_pickupdb.DATE_CREATED', [$startDate, $endDate]);
-          ->where('ppc_pickupdb.DATE_CREATED', ">=", $startDate)
-          ->where('ppc_pickupdb.DATE_CREATED', "<", $endDate);
+          ->join(PartName::qualifiedTable() . ' as partname', 'ppc_pickupdb.PARTNAME', '=', 'partname.devicename')
+          ->where('ppc_pickupdb.DATE_CREATED', '>=', $startDate)
+          ->where('ppc_pickupdb.DATE_CREATED', '<', $endDate);
 
         if ($chartStatus === 'F2' || $chartStatus === 'F3') {
           $query->where('partname.Factory', strtoupper($chartStatus));

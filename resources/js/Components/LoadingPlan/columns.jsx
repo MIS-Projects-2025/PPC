@@ -310,6 +310,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         return (
                             <LotIdCell
                                 lotId={row.lot_id}
+                                isPickup={row.is_pickup}
                                 splitInfo={row.split_info}
                                 mergeInfo={row.merge_info}
                                 isPlannedYesterday={row.is_leaked}

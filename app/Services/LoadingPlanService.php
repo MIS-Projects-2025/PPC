@@ -463,6 +463,7 @@ class LoadingPlanService
             'is_leaked'                  => $isLeaked,
             'is_manual_expedite'         => $entry?->is_manual_expedite,
             'is_for_bake'                => $formulas->isBakeHighlight,
+            'is_pickup'                  => $entry?->is_pickup,
 
             'block_label'                => $entry?->block_label,
             'machine'                    => $machine,
