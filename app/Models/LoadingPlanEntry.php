@@ -39,10 +39,12 @@ class LoadingPlanEntry extends Model
         'resulting_setup_state_id',
         'operation_type',
         'matched_rule_id',
+        'is_pickup'
     ];
 
     protected $casts = [
         'scheduled_date' => 'date',
+        'is_pickup'      => 'boolean',
         'sequence_order' => 'float',
         'finalized_at'   => 'datetime',
         'time_start'     => 'datetime',

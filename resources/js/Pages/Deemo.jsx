@@ -321,6 +321,8 @@ function RowHistoryButton({ isHidden, anchorElement, onViewHistory, buttonsRef }
     );
 }
 
+const ALL_PACKAGES_TAB = "ALL PACKAGE";
+
 // ---------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------
@@ -490,7 +492,7 @@ export default function Deemo({
         // "Unassigned" isn't a real package group — it's a synthetic tab that
         // aggregates every unassigned-machine lot across ALL packages (see
         // displayRows below), so it doesn't filter by package at all.
-        if (activePackage === "Unassigned") return null;
+        if (activePackage === "Unassigned" || activePackage === ALL_PACKAGES_TAB) return null;
         return packageGroups[activePackage] || null;
     }, [activePackage, packageGroups]);
 
@@ -637,6 +639,9 @@ export default function Deemo({
 
             const groupPkgs = packagesInGroup(activePackage, packageGroups);
             const resolvedPackage = packageName || groupPkgs[0] || activePackage;
+            if (activePackage === ALL_PACKAGES_TAB && !packageName) {
+                return Promise.reject(new Error("Pick a package for the new lot"));
+            }
 
             return withUpdating(
                 mutate(route("loading-plan.manual-lots.store"), {
@@ -939,6 +944,7 @@ export default function Deemo({
     // package filter entirely (see displayRows below), so it's never
     // counted here — same contract as LoadingPlanTable.jsx.
     const otherPackageCounts = useMemo(() => {
+        if (activePackage === ALL_PACKAGES_TAB) return {};
         const activeList = activePackageGroup ?? [];
         const result = {};
         dataRows.forEach((r) => {
@@ -947,7 +953,7 @@ export default function Deemo({
             result[r.machine] = (result[r.machine] ?? 0) + 1;
         });
         return result;
-    }, [dataRows, activePackageGroup]);
+    }, [dataRows, activePackageGroup, activePackage]);
 
     const bakeOvens = useMemo(() => {
         const set = new Set((bakeLots ?? []).map((r) => r.oven_num));
@@ -1038,11 +1044,13 @@ export default function Deemo({
         return machines.flatMap((m) => {
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
+            const isAll = activePackage === ALL_PACKAGES_TAB;
 
-            if (isManual && activePackage !== "MANUAL") return [];
+            if (isManual && activePackage !== "MANUAL" && !isAll) return [];
 
             const rowsForMachine = dataRows.filter((r) => {
                 if (r.machine !== m) return false;
+                if (isAll) return true;
                 if (isBlockRow(r)) return true;
                 const activeList = activePackageGroup ?? [];
                 return activeList.includes(r.package_name);
@@ -1502,6 +1510,7 @@ export default function Deemo({
                         <ScrollableTabs
                             items={[
                                 "Unassigned",
+                                ALL_PACKAGES_TAB,
                                 ...packageGroupNames,
                                 { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> },
                             ]}

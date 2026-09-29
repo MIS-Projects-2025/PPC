@@ -32,7 +32,7 @@ class PartNameController extends Controller
                 'required',
                 'string',
                 'max:45',
-                Rule::unique('qdn_db.package_list', 'devicename')->ignore($id),
+                Rule::unique(PartName::class, 'devicename')->ignore($id),
             ],
             'focus_grp' => 'required|string|max:95',
             'areas' => 'required|string|max:45',

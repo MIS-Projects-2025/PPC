@@ -12,6 +12,7 @@ use App\Helpers\SqlDebugHelper;
 use App\Helpers\MergeAndAggregate;
 use Carbon\Carbon;
 use App\Models\PickUp;
+use App\Models\PartName;
 use App\Models\F3Pickup;
 use App\Services\BulkUpserter;
 
@@ -31,7 +32,6 @@ class PickUpRepository
   }
 
   private const TABLE_NAME = 'ppc_pickupdb';
-  private const PART_NAME_TABLE = 'qdn_db.package_list';
 
   public function getTotalQuantity($startDate, $endDate)
   {
@@ -40,7 +40,7 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) {
         $q->select('devicename')
-          ->from(self::PART_NAME_TABLE)
+          ->from(PartName::qualifiedTable())
           ->whereIn('productline', ['PL1', 'PL6']);
       })
       ->sum('pickup.QTY');
@@ -55,7 +55,7 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) use ($factory) {
         $q->select('devicename')
-          ->from(self::PART_NAME_TABLE)
+          ->from(PartName::qualifiedTable())
           ->where('areas', $factory)
           ->whereIn('productline', ['PL1', 'PL6']);
       });
@@ -72,7 +72,7 @@ class PickUpRepository
       ->where('pickup.DATE_CREATED', '<', $endDate)
       ->whereIn('pickup.PARTNAME', function ($q) use ($factory) {
         $q->select('devicename')
-          ->from(self::PART_NAME_TABLE)
+          ->from(PartName::qualifiedTable())
           ->where('areas', $factory);
       })
       ->whereExists(function ($q) use ($pl) {
@@ -86,7 +86,7 @@ class PickUpRepository
     //   ->where('pickup.DATE_CREATED', '<', $endDate)
     //   ->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
     //     $q->select('Partname')
-    //       ->from(self::PART_NAME_TABLE)
+    //       ->from(PartName::qualifiedTable())
     //       ->where('Factory', $factory)
     //       ->where('PL', $pl);
     //   });
@@ -127,7 +127,7 @@ class PickUpRepository
     if (in_array($chartStatus, ['F1', 'F2'])) {
       $query->whereIn('pickup.PARTNAME', function ($q) use ($chartStatus) {
         $q->select('devicename')
-          ->from(self::PART_NAME_TABLE)
+          ->from(PartName::qualifiedTable())
           ->where('areas', $chartStatus);
       });
     } elseif ($chartStatus === 'F3') {
@@ -135,7 +135,7 @@ class PickUpRepository
     } elseif (in_array($chartStatus, ['PL1', 'PL6'])) {
       $query->whereIn('pickup.PARTNAME', function ($q) use ($chartStatus) {
         $q->select('devicename')
-          ->from(self::PART_NAME_TABLE)
+          ->from(PartName::qualifiedTable())
           ->where('productline', $chartStatus);
       });
     }
@@ -155,7 +155,7 @@ class PickUpRepository
 
     $query->whereIn('pickup.PARTNAME', function ($q) use ($factory, $pl) {
       $q->select('devicename')
-        ->from(self::PART_NAME_TABLE)
+        ->from(PartName::qualifiedTable())
         ->where('areas', $factory);
       if ($pl) {
         $q->where('productline', strtoupper($pl));

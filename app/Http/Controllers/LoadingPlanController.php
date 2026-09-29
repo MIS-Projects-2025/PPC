@@ -86,6 +86,33 @@ class LoadingPlanController extends Controller
         return $response;
     }
 
+    public function schedulePickup(Request $request, SchedulerService $scheduler)
+    {
+        $validated = $request->validate([
+            'date' => 'required|date',
+            'pickups' => 'required|array|min:1',
+            'pickups.*.lotId' => 'required|string',
+            'pickups.*.partname' => 'required|string',
+            'pickups.*.qty' => 'required|integer|min:1',
+            'pickups.*.package' => 'nullable|string',
+            'pickups.*.isExpedite' => 'boolean',
+        ]);
+
+        // resolvePickupLots() reads part_name/lot_id/package_name/qty/is_expedite —
+        // translate the modal's camelCase keys to that shape here
+        $pickup = collect($validated['pickups'])->map(fn($row) => [
+            'part_name'    => $row['partname'],
+            'lot_id'       => $row['lotId'],
+            'qty'          => $row['qty'],
+            'package_name' => $row['package'] ?? null,
+            'is_expedite'  => $row['isExpedite'] ?? false,
+        ]);
+
+        $result = $scheduler->rebuildForPickupArrival($pickup, Carbon::parse($validated['date']));
+
+        return response()->json($result);
+    }
+
     /**
      * Shared read path for both index() and readOnly(): resolves date /
      * location, builds the package list, active machines, bake lots, and

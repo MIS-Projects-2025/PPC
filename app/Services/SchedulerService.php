@@ -385,8 +385,8 @@ class SchedulerService
                 'Lot_Id'       => $item['lot_id'],
                 'Package_Name' => $item['package_name'] ?? null,
                 'Qty'          => $item['qty'] ?? null,
-                'Lead_Count'   => $item['lead_count'] ?? null,
-                'Body_Size'    => $item['body_size'] ?? null,
+                'Lead_Count'   => $packageInfo->lead_count,
+                'Body_Size'    => $packageInfo->dimensions,
                 // real PartName columns are devicename/focus_grp/allocation —
                 // fixed from focus_group/ramp_time, which don't exist on that model
                 'Focus_Group'  => $packageInfo->focus_grp,
@@ -397,6 +397,7 @@ class SchedulerService
                 'isExpedite'   => $item['is_expedite'] ?? false,
                 'aboveCT'      => false, // pickups have no CT history to compute this from
                 'CT'           => null,  // no sortable CT value for pickups either
+                'is_pickup'    => true,
             ]);
         }
 
@@ -1152,6 +1153,7 @@ class SchedulerService
                 'qty' => $lot->Qty,
                 'resulting_setup_state_id' => $choice['resulting_setup_state_id'],
                 'matched_rule_id' => $choice['matched_rule_id'],
+                'is_pickup' => $lot->is_pickup ?? false,
             ],
             $beforeId,
             $afterId
@@ -1297,6 +1299,7 @@ class SchedulerService
             'isExpedite'   => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
             'aboveCT'      => false,
             'CT'           => null,
+            'is_pickup'    => false,
         ];
     }
 
@@ -1389,6 +1392,36 @@ class SchedulerService
     {
         $lotQty = $entry->lotQuantity;
 
+        if ($entry->is_pickup) {
+            if (!$lotQty) {
+                return null;
+            }
+
+            $partInfo = PartName::findByPartName($lotQty->part_name);
+
+            if (!$partInfo) {
+                return null;
+            }
+
+            return (object) [
+                'Lot_Id' => $entry->lot_id,
+                'Part_Name' => $lotQty->part_name,
+                'Package_Name' => $entry->package_name,
+                'Qty' => $lotQty->effectiveQty() ?? $lotQty->qty_base,
+                'Lead_Count' => $partInfo->lead_count,
+                'Body_Size' => $partInfo->dimensions,
+                'Focus_Group' => $partInfo->focus_grp,
+                'is_auto_part' => (bool) $partInfo->is_auto_part,
+                'Ramp_Time' => $partInfo->allocation,
+                'CR3' => null,
+                'Lot_Type' => null,
+                'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
+                'aboveCT' => false,
+                'CT' => null,
+                'is_pickup' => false,
+            ];
+        }
+
         if (!$wip) {
             return null;
         }
@@ -1410,6 +1443,7 @@ class SchedulerService
             'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
             'aboveCT' => $formulas->cycleTimeExceedOverall,
             'CT' => $formulas->ct ?? null,
+            'is_pickup' => false,
         ];
     }
 
@@ -1469,6 +1503,7 @@ class SchedulerService
                 'package_name' => $lot->Package_Name,
                 'part_name' => $lot->Part_Name,
                 'qty' => $lot->Qty,
+                'is_pickup' => $lot->is_pickup ?? false,
             ];
 
             $anchorStateByMachine[$machineId] = $choice['resulting_setup_state_id'];
@@ -1587,6 +1622,7 @@ class SchedulerService
                 'package_name' => $lot->Package_Name,
                 'part_name' => $lot->Part_Name,
                 'qty' => $lot->Qty,
+                'is_pickup' => $lot->is_pickup ?? false,
             ];
             $anchorStateByMachine[$machineId] = $bestChoice['resulting_setup_state_id'];
             $remainingCapacityByMachine[$machineId] =

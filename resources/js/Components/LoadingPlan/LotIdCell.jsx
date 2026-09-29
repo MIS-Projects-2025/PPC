@@ -1,7 +1,9 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import React, { useContext } from "react";
 
-export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
+export function LotIdCell({ lotId, isPickup, splitInfo, mergeInfo, isPlannedYesterday }) {
+
+    console.log("LOG ~ LotIdCell.jsx:6 ~ LotIdCell ~ isPickup:", isPickup);
 
     console.log("LOG ~ LotIdCell.jsx:7 ~ LotIdCell ~ splitInfo:", splitInfo);
     const { handleShowHistory = noop, handleShowMergeHistory = noop } =
@@ -15,6 +17,11 @@ export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
                         past
                     </span>
                 )}
+                {isPickup && (
+                    <span className="text-xs font-semibold rounded-md bg-accent/50 px-1 mr-1">
+                        PICKUP
+                    </span>
+                )}
                 {lotId}
             </span>
         );
@@ -26,6 +33,11 @@ export function LotIdCell({ lotId, splitInfo, mergeInfo, isPlannedYesterday }) {
                 {isPlannedYesterday && (
                     <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
                         past
+                    </span>
+                )}
+                {isPickup && (
+                    <span className="text-xs rounded-md bg-accent/50 px-1 mr-1">
+                        PICKUP
                     </span>
                 )}
                 <span className="truncate">{lotId}</span>

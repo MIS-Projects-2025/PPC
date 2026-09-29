@@ -109,6 +109,8 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::get('view', [LoadingPlanController::class, 'readOnly'])
         ->name('readonly');
 
+    Route::post('schedule-pickup', [LoadingPlanController::class, 'schedulePickup'])->name('schedule-pickup');
+
     Route::post('transfer-candidates', [LoadingPlanController::class, 'transferCandidates'])->name('transfer-candidates');
 
     Route::post('move', [LoadingPlanEntryController::class, 'move'])->name('move');
