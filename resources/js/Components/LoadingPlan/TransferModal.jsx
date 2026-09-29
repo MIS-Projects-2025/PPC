@@ -1,27 +1,50 @@
-import { forwardRef, useContext, useState } from "react";
-import { TableInteractionContext } from "./MachineSectionBody";
+import { useMutation } from "@/Hooks/useMutation";
+import { forwardRef, useEffect, useState } from "react";
 import MachineSelectionGrid from "./MachineSelectionGrid";
 
 const TransferModal = forwardRef(function TransferModal(
-    { machines, machinePlatform, selectedMachines, onSelect, onClose },
+    { machines, machinePlatform, selectedMachines, transferLotIds, date, open, onSelect, onClose },
     ref,
 ) {
-    const {
-        machineCapacity
-    } = useContext(TableInteractionContext);
-
-    // it needs new param, the lots to be transferred
-    // so that we can calculate the potential total doable if user decides to transfer them into the machines.
-    // we need to show a bar-looking where the current total cap of the machine and the added one are different.
-    // we need to sort the machine such that the machine that is still open-cap despite previewing that the added doable
-    // and the current total cap does not exceed the machine capacity yet,
-    // at the bottom of the list are those who will exceed it's capacity if the new doable is added to them.
-    
-    // 
-
-    console.log("LOG ~ TransferModal.jsx:13 ~ TransferModal ~ machineCapacity:", machineCapacity);
-
     const [pendingMachine, setPendingMachine] = useState(undefined);
+    const [candidates, setCandidates] = useState(null); // null = not loaded yet
+
+    const { mutate, isLoading, errorMessage } = useMutation();
+
+    // Fetch compatibility/capacity preview whenever the set of lots being
+    // transferred changes (i.e. right before the modal is shown).
+    // Fetch compatibility/capacity preview only when the modal actually
+    // opens — not on every selection edit while it's closed. Re-fetches
+    // each time it opens (not just once) since capacity can have moved
+    // since the last time it was open.
+    useEffect(() => {
+        if (!open) return;
+
+        if (!transferLotIds || transferLotIds.length === 0) {
+            setCandidates(null);
+            return;
+        }
+
+        mutate("/loading-plan/transfer-candidates", {
+            body: { lot_ids: transferLotIds, date },
+            mutationKey: "transfer-candidates",
+            cancelPrevious: true, // supersede a stale in-flight fetch if transferLotIds changes again before it resolves
+        })
+            .then((result) => {
+                // index by machine (machine_num) for O(1) lookup in the grid
+                const byMachine = {};
+                result.forEach((row) => {
+                    byMachine[row.machine] = row;
+                });
+                setCandidates(byMachine);
+            })
+            .catch((err) => {
+                if (err.name === "AbortError") return; // superseded by a newer request, not a real failure
+                console.error("transfer-candidates failed:", err);
+            });
+        // no cleanup/cancel call needed here — cancelPrevious handles supersession,
+        // and useMutation's own unmount effect aborts any still-in-flight request
+    }, [open]);
 
     const isDisabled = (m) =>
         selectedMachines.size === 1 && selectedMachines.has(m);
@@ -43,6 +66,12 @@ const TransferModal = forwardRef(function TransferModal(
             <div className="modal-box bg-base-300 w-11/12 max-w-3xl max-h-[80vh] flex flex-col">
                 <h3 className="font-bold text-lg mb-3">Transfer to…</h3>
 
+                {errorMessage && (
+                    <div className="alert alert-error text-xs py-2 mb-2">
+                        {errorMessage}
+                    </div>
+                )}
+
                 <div className="overflow-y-auto flex-1">
                     <MachineSelectionGrid
                         machines={machines}
@@ -50,14 +79,13 @@ const TransferModal = forwardRef(function TransferModal(
                         selectedMachine={pendingMachine}
                         onSelect={setPendingMachine}
                         isDisabled={isDisabled}
+                        transferCandidates={candidates}
+                        transferLoading={isLoading}
                     />
                 </div>
 
                 <div className="modal-action">
-                    <button
-                        className="btn btn-ghost cursor-pointer"
-                        onClick={handleClose}
-                    >
+                    <button className="btn btn-ghost cursor-pointer" onClick={handleClose}>
                         Cancel
                     </button>
                     <button

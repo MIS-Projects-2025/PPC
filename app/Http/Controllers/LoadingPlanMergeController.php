@@ -75,4 +75,24 @@ class LoadingPlanMergeController extends Controller
     {
         return response()->json($this->mergeService->historyFor($targetLotId));
     }
+
+    public function unrevertMerge(int $merge, Request $request): JsonResponse
+    {
+        try {
+            $result = app(LotMergeService::class)->unrevert($merge, $request->user()?->id);
+
+            return response()->json($result);
+        } catch (InvalidMergeException $e) {
+            return response()->json([
+                'error'   => 'invalid_merge',
+                'message' => $e->getMessage(),
+            ], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json([
+                'error'          => 'finalized',
+                'message'        => $e->getMessage(),
+                'scheduled_date' => $e->scheduledDate,
+            ], 422);
+        }
+    }
 }

@@ -266,14 +266,22 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
                         
-                        if (row.__type === "header" || row.entry_type !== "lot") {
+                        if (row.__type === "header") {
                             return null;
+                        }
+
+                        if (row.entry_type === "block") {
+                            return row[col.key];
+                        }
+
+                        if (row.machine === null) {
+                            return row[col.key];
                         }
 
                         return (
                             <button
                                 type="button"
-                                className="btn btn-ghost btn-xs px-1"
+                                className="btn btn-ghost btn-xs px-1 btn-block flex-1"
                                 onClick={(e) => onStatusClick?.(e, row.entry_id)}
                                 disabled={isUpdating}
                             >
@@ -291,8 +299,12 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     renderCell({ row }) {
                         console.log("HEHE ~ columns.jsx:264 ~ makeColumns ~ row:", row);
                         
-                        if (row.__type === "header" || row.entry_type !== "lot") {
+                        if (row.__type === "header") {
                             return null;
+                        }
+
+                        if (row.entry_type === "block") {
+                            return row[col.key];
                         }
 
                         return (
@@ -313,8 +325,12 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
 
-                        if (row.__type === "header" || row.entry_type !== "lot") {
+                        if (row.__type === "header") {
                             return null;
+                        }
+
+                        if (row.entry_type === "block") {
+                            return row[col.key];
                         }
 
                         return (

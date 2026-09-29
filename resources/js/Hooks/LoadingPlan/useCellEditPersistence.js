@@ -4,17 +4,26 @@ import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import toSnakeCase from "@/Utils/toSnakeCase";
 import { useCallback } from "react";
 
-export function useCellEditPersistence({ dataRows, displayRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty }) {
+export function useCellEditPersistence({
+    dataRows,
+    displayRows,
+    baseTimes,
+    date,
+    update,
+    withUpdating,
+    mutate,
+    toast,
+    setIsDirty,
+    syncServerFields, // <- new param
+}) {
     return useCallback(
         (updatedRows, { indexes, column }) => {
-            // Filter out edits attempted on non-data rows (header rows are
-            // part of the same virtualized row list react-data-grid sees).
             const validChangedIndexes = indexes.filter((index) => displayRows[index]?.__type === "data");
             if (validChangedIndexes.length === 0) return;
 
             const sanitizedRows = updatedRows.map((row, idx) => {
                 if (indexes.includes(idx) && row.__type !== "data") {
-                    return displayRows[idx]; // Revert back to previous state
+                    return displayRows[idx];
                 }
                 return row;
             });
@@ -22,10 +31,6 @@ export function useCellEditPersistence({ dataRows, displayRows, baseTimes, date,
             const firstChangedDataIdx = indexes.find((idx) => displayRows[idx]?.__type === "data");
             const changedRow = sanitizedRows[firstChangedDataIdx];
             const field = column.key;
-            // FIX (carried over): match on `id` (the grid's row key — see
-            // rowKeyGetter on <DataGrid>), not `entry_id`. A row can exist
-            // in the grid with an `id` before it has a real backend
-            // `entry_id`.
             const prevRow = dataRows.find((r) => r.id === changedRow.id);
             if (!prevRow) return;
 
@@ -56,7 +61,7 @@ export function useCellEditPersistence({ dataRows, displayRows, baseTimes, date,
                 update(() => withGap);
                 setIsDirty(true);
 
-                withUpdating(syncDeemoToServer(prevSnapshot, withGap, date, mutate, update, toast));
+                withUpdating(syncDeemoToServer(prevSnapshot, withGap, date, mutate, update, toast, [], syncServerFields));
                 return;
             }
 
@@ -84,32 +89,22 @@ export function useCellEditPersistence({ dataRows, displayRows, baseTimes, date,
                 ),
             )
                 .then((entry) => {
-                    update(
-                        (prev) =>
-                            prev.map((r) =>
-                                r.id === changedRow.id
-                                    ? { ...r, entry_id: entry.id, lock_version: entry.lock_version }
-                                    : r,
-                            ),
-                        true,
-                    );
+                    syncServerFields?.([
+                        { dndId: prevRow._dndId, fields: { entry_id: entry.id, lock_version: entry.lock_version } },
+                    ]);
                 })
                 .catch((err) => {
                     if (err.status === 409) {
                         const current = err.data?.current;
-                        update(
-                            (prev) =>
-                                prev.map((r) =>
-                                    r.id === changedRow.id
-                                        ? {
-                                              ...r,
-                                              [field]: current?.[backendField] ?? r[field],
-                                              lock_version: current?.lock_version ?? r.lock_version,
-                                          }
-                                        : r,
-                                ),
-                            true,
-                        );
+                        syncServerFields?.([
+                            {
+                                dndId: prevRow._dndId,
+                                fields: {
+                                    [field]: current?.[backendField] ?? prevRow[field],
+                                    lock_version: current?.lock_version ?? prevRow.lock_version,
+                                },
+                            },
+                        ]);
                         toast?.error?.("Someone else updated this lot — showing their latest value.");
                     } else if (err.status === 422) {
                         const firstError = Object.values(err.data?.errors ?? {})[0]?.[0];
@@ -120,6 +115,6 @@ export function useCellEditPersistence({ dataRows, displayRows, baseTimes, date,
                     }
                 });
         },
-        [dataRows, displayRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty],
+        [dataRows, displayRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 }

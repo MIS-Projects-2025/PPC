@@ -16,7 +16,7 @@ class LoadingPlanSplitController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'parent_entry_lot_id'   => 'required|int',
+            'parent_entry_id'   => 'required|int',
             'child_qty'             => 'required|integer|min:1',
             'target_machine'        => 'required|string',
             'before_entry_id'       => 'nullable|integer',
@@ -26,7 +26,7 @@ class LoadingPlanSplitController extends Controller
 
         try {
             $result = $this->service->split(
-                $data['parent_entry_lot_id'],
+                $data['parent_entry_id'],
                 $data['child_qty'],
                 $data['target_machine'],
                 $data['before_entry_id'] ?? null,
@@ -79,5 +79,35 @@ class LoadingPlanSplitController extends Controller
     public function history(string $rootLotId): JsonResponse
     {
         return response()->json($this->service->historyFor($rootLotId));
+    }
+
+    public function unrevertSplit(int $split, Request $request): JsonResponse
+    {
+        try {
+            $result = app(LotSplitService::class)->unrevert($split, $request->user()?->id);
+
+            return response()->json($result);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json([
+                'error'          => 'finalized',
+                'message'        => $e->getMessage(),
+                'scheduled_date' => $e->scheduledDate,
+            ], 422);
+        } catch (InvalidSplitException $e) {
+            return response()->json([
+                'error'   => 'invalid_split',
+                'message' => $e->getMessage(),
+            ], 422);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'error'   => 'not_found',
+                'message' => 'That split does not exist or is not in a state where this can be done.',
+            ], 404);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'error'   => 'server_error',
+                'message' => 'Could not revert this split.',
+            ], 500);
+        }
     }
 }

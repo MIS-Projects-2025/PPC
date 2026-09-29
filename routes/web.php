@@ -21,6 +21,9 @@ use App\Http\Controllers\{
     PackageCapacityController,
     PackageController,
     PackageGroupController,
+    LoadingPlanSettingsController,
+    LoadingPlanPackageGroupController,
+    MachineCapacityController,
     PartNameController,
     PickupController,
     PlPackageMasterController,
@@ -80,6 +83,34 @@ Route::prefix('rules')->group(function () {
 });
 
 Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
+    Route::get('settings/{section?}', [LoadingPlanSettingsController::class, 'index'])
+        ->whereIn('section', LoadingPlanSettingsController::SECTIONS)
+        ->name('settings');
+
+    Route::prefix('package-groups')->name('package-groups.')->group(function () {
+        Route::get('grouped', [LoadingPlanPackageGroupController::class, 'grouped'])->name('grouped');
+        Route::get('resolve', [LoadingPlanPackageGroupController::class, 'resolve'])->name('resolve');
+    });
+
+    Route::apiResource('package-groups', LoadingPlanPackageGroupController::class)
+        ->parameters(['package-groups' => 'packageGroup']);
+
+    Route::prefix('machine-capacities')->name('machine-capacities.')->group(function () {
+        Route::get('current/{machineId}', [MachineCapacityController::class, 'current'])->name('current');
+    });
+
+    Route::apiResource('machine-capacities', MachineCapacityController::class)
+        ->parameters(['machine-capacities' => 'id'])
+        ->names('machine-capacities');
+
+    Route::post('run-scheduler', [LoadingPlanController::class, 'runScheduler'])
+        ->name('run-scheduler');
+
+    Route::get('view', [LoadingPlanController::class, 'readOnly'])
+        ->name('readonly');
+
+    Route::post('transfer-candidates', [LoadingPlanController::class, 'transferCandidates'])->name('transfer-candidates');
+
     Route::post('move', [LoadingPlanEntryController::class, 'move'])->name('move');
     Route::post('transfer', [LoadingPlanEntryController::class, 'transfer'])->name('transfer');
     Route::post('bulk-transfer', [LoadingPlanEntryController::class, 'bulkTransfer'])->name('bulk-transfer');
@@ -103,12 +134,14 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
         Route::post('/', [LoadingPlanSplitController::class, 'store'])->name('store');
         Route::delete('{splitId}', [LoadingPlanSplitController::class, 'destroy'])->name('destroy');
         Route::get('{rootLotId}/history', [LoadingPlanSplitController::class, 'history'])->name('history');
+        Route::post('{splitId}/unrevert', [LoadingPlanSplitController::class, 'unrevertSplit'])->name('unrevert');
     });
 
     Route::prefix('merges')->name('merges.')->group(function () {
         Route::post('/', [LoadingPlanMergeController::class, 'store'])->name('store');
         Route::delete('{mergeId}', [LoadingPlanMergeController::class, 'destroy'])->name('destroy');
         Route::get('{targetLotId}/history', [LoadingPlanMergeController::class, 'history'])->name('history');
+        Route::post('{mergeId}/unrevert', [LoadingPlanMergeController::class, 'unrevertMerge'])->name('unrevert');
     });
 });
 

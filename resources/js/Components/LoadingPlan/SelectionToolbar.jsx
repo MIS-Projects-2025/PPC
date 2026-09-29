@@ -22,7 +22,11 @@ export default function SelectionToolbar({
     onMergeRows,
     onDelete,
     onClearSelection,
+    date,
 }) {
+    console.log("LOG ~ SelectionToolbar.jsx:27 ~ SelectionToolbar ~ allData:", allData);
+    console.log("LOG ~ SelectionToolbar.jsx:27 ~ SelectionToolbar ~ selectedIds:", selectedIds);
+    
     // console.log("🚀 ~ SelectionToolbar ~ allData:", allData);
     // console.log("🚀 ~ SelectionToolbar ~ selectedIds:", selectedIds);
     // console.log(
@@ -40,7 +44,7 @@ export default function SelectionToolbar({
     const selectedMachines = useMemo(() => {
         const s = new Set();
         allData.forEach((r) => {
-            if (selectedIds.has(r._dndId)) s.add(r.machine);
+            if (selectedIds.has(r.id)) s.add(r.machine);
         });
         return s;
     }, [selectedIds, allData]);
@@ -64,6 +68,16 @@ export default function SelectionToolbar({
     const selectedRows = useMemo(
         () => allData.filter((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
+    );
+
+    const isSelectedRowsUnassigned = useMemo(
+        () => selectedRows.some((r) => r.machine === null),
+        [selectedRows],
+    );
+
+    const transferLotIds = useMemo(
+        () => selectedRows.map((r) => r.lot_id).filter(Boolean),
+        [selectedRows],
     );
 
     if (count === 0) {
@@ -92,7 +106,7 @@ export default function SelectionToolbar({
                         className="btn btn-sm text-xs font-medium"
                         popoverTarget="tag-expedite-popover"
                         style={{ anchorName: "--tag-expedite-anchor" }}
-                        disabled={disabled}
+                        disabled={disabled || isSelectedRowsUnassigned}
                     >
                         Bulk Actions ▾
                     </button>
@@ -189,9 +203,9 @@ export default function SelectionToolbar({
                     >
                         <button
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
-                                count > 1 ? "cursor-not-allowed opacity-50" : ""
+                                count > 1 || isSelectedRowsUnassigned ? "cursor-not-allowed opacity-50" : ""
                             }`}
-                            disabled={count !== 1}
+                            disabled={count !== 1 || isSelectedRowsUnassigned}
                             onClick={() => {
                                 splitModalRef.current?.showModal();
                             }}
@@ -210,11 +224,11 @@ export default function SelectionToolbar({
                     >
                         <button
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
-                                count !== 2
+                                count !== 2 || isSelectedRowsUnassigned
                                     ? "cursor-not-allowed opacity-50"
                                     : ""
                             }`}
-                            disabled={count !== 2}
+                            disabled={count !== 2 || isSelectedRowsUnassigned}
                             onClick={() => {
                                 mergeModalRef.current?.showModal();
                             }}
@@ -232,7 +246,7 @@ export default function SelectionToolbar({
                                 setTransferOpen(false);
                             }}
                             className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1"
-                            disabled={disabled}
+                            disabled={disabled || isSelectedRowsUnassigned}
                         >
                             Set status
                             <svg
@@ -306,7 +320,7 @@ export default function SelectionToolbar({
                         <button
                             onClick={onDelete}
                             className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
-                            disabled={disabled}
+                            disabled={disabled || isSelectedRowsUnassigned}
                         >
                             <FaTrash />
                         </button>
@@ -339,7 +353,13 @@ export default function SelectionToolbar({
                 machines={machines}
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
-                onClose={() => setTransferOpen(false)}
+                transferLotIds={transferLotIds}
+                date={date}
+                open={transferOpen}
+                onClose={() => {
+                    transferModalRef.current?.close();
+                    setTransferOpen(false);
+                }}
                 onSelect={onTransfer}
             />
 
@@ -367,7 +387,7 @@ export default function SelectionToolbar({
                     targetMachine,
                 }) =>
                     onSplitRow({
-                        parentEntryLotId: selectedRow?.entry_id,
+                        parentEntryId: selectedRow?.entry_id,
                         childLotId,
                         childQty,
                         parentQty,

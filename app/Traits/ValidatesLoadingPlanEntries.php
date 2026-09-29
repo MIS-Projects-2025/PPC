@@ -3,7 +3,10 @@
 namespace App\Traits;
 
 use App\Exceptions\LoadingPlanDateFinalizedException;
+use App\Exceptions\InvalidMergeException;
 use App\Models\LoadingPlanEntry;
+use App\Models\LotQuantity;
+use App\Models\LotSplit;
 use DateTimeInterface;
 use Illuminate\Support\Collection;
 
@@ -16,6 +19,34 @@ trait ValidatesLoadingPlanEntries
     {
         if ($entry && $entry->finalized_at !== null) {
             throw new LoadingPlanDateFinalizedException($entry->scheduled_date, $entry->id);
+        }
+    }
+
+    private function assertNoNegativeQuantity(?LotQuantity ...$quantities): void
+    {
+        foreach ($quantities as $quantity) {
+            if ($quantity && $quantity->effectiveQty() < 0) {
+                throw new InvalidMergeException(
+                    "This would leave lot [{$quantity->lot_id}] with negative quantity — undo whatever was split or merged from it afterwards first."
+                );
+            }
+        }
+    }
+
+    private function assertNotSplitParentAndChild(string $lotA, string $lotB, string $date): void
+    {
+        $related = LotSplit::active()
+            ->where('scheduled_date', $date)
+            ->where(function ($q) use ($lotA, $lotB) {
+                $q->where(fn($q2) => $q2->where('parent_lot_id', $lotA)->where('child_lot_id', $lotB))
+                    ->orWhere(fn($q2) => $q2->where('parent_lot_id', $lotB)->where('child_lot_id', $lotA));
+            })
+            ->exists();
+
+        if ($related) {
+            throw new InvalidMergeException(
+                "Cannot merge [{$lotA}] and [{$lotB}] — one was split from the other. Revert the split instead."
+            );
         }
     }
 

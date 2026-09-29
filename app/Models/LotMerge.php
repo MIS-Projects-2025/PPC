@@ -3,9 +3,11 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class LotMerge extends Model
 {
+    use HasFactory;
     protected $fillable = [
         'target_lot_id',
         'source_lot_id',

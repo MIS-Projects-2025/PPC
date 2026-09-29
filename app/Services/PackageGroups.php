@@ -2,88 +2,85 @@
 
 namespace App\Services;
 
+use App\Models\LoadingPlanPackageGroup;
+use App\Repositories\LoadingPlanPackageGroupRepository;
+use Illuminate\Support\Facades\Cache;
+
 class PackageGroups
 {
-    public const GROUPS = [
-        'RN' => ['QSOP', 'QSOP_EP', 'SOIC_N', 'SOIC_N_EP'],
-        'SOT' => [
-            'SOT-223',
-            'SOT_23',
-            'SOT_23_3',
-            'SOT_89',
-            'SOT-23',
-        ],
-        'PLCC' => ['PLCC'],
-        'TO' => ['TO', 'TO220', 'TO-220', 'TO-46', 'TO46', 'TO92', 'TO-92'],
-        'RU' => ['TSSOP', 'TSSOP_4.4', 'TSSOP_4.4_EP', 'TSSOP_6.1', 'TSSOP-W'],
-        'RM' => ['MINI_SO', 'MINI_SO_EP'],
-        'SSOP' => ['SSOP', 'SSOP-W'],
-        'DDPAK' => ['DDPAK'],
-        'MANUAL' => [
-            'JLCC',
-            'LDCC',
-            'MCML',
-            'MSML',
-        ],
-        'PDIP' => ['PDIP'],
-        'RW' => [
-            'SOIC_IC',
-            'SOIC_W',
-            'SOIC_W_FP'
-        ],
-        'Brand' => [
-            'SBDIP',
-            'CERDIP',
-            'CERPACK',
-            'CERPAK',
-            'CHIP',
-            'CLCC',
-            'FLATPACK',
-        ],
-        'Turret' => ['DFN', 'GQFN', 'SC70', 'TSOT', 'UTQFN', 'QFN'],
-        'Tray' => [
-            'BGA',
-            'BGA_CAV',
-            'BGA_ED',
-            'CBGA',
-            'CSP_BGA',
-            'LCC',
-            'LCC_HS',
-            'LCC_V',
-            'LFCSP',
-            'LFCSP_CAV',
-            'LFCSP_RT',
-            'LFCSP_SS',
-            'LGA',
-            'LGA_CAV',
-            'LQFN',
-            'LQFN_EP',
-            'LQFP',
-            'LQFP_ED',
-            'LQFP_EP',
-            'MQFP',
-            'SOIC_CAV',
-            'TQFP',
-            'TQFP_EP',
-            'WLBGA',
-        ],
-    ];
+    public const CACHE_REVERSE = 'package_groups:reverse_map';
+    public const CACHE_GROUPED = 'package_groups:grouped';
 
-    private static ?array $reverseMap = null;
+    public function __construct(private LoadingPlanPackageGroupRepository $repo) {}
 
+    /** Backward-compatible static entry point: PackageGroups::groupOf('QSOP') */
     public static function groupOf(?string $packageName): ?string
     {
-        if (!$packageName) return $packageName;
+        return app(self::class)->resolve($packageName);
+    }
 
-        if (self::$reverseMap === null) {
-            self::$reverseMap = [];
-            foreach (self::GROUPS as $group => $members) {
-                foreach ($members as $member) {
-                    self::$reverseMap[$member] = $group;
-                }
-            }
+    public static function flushCache(): void
+    {
+        Cache::forget(self::CACHE_REVERSE);
+        Cache::forget(self::CACHE_GROUPED);
+    }
+
+    /** Group for a package, or the package name itself if unmapped. */
+    public function resolve(?string $packageName): ?string
+    {
+        if (!$packageName) {
+            return $packageName;
         }
 
-        return self::$reverseMap[$packageName] ?? $packageName;
+        return $this->reverseMap()[$packageName] ?? $packageName;
+    }
+
+    /** [package_name => group_name] (cached) */
+    public function reverseMap(): array
+    {
+        return Cache::rememberForever(self::CACHE_REVERSE, function () {
+            return $this->repo->all()
+                ->sortBy('id')
+                ->pluck('group_name', 'package_name')
+                ->all();
+        });
+    }
+
+    /** [group_name => [package_name, ...]] (cached), same shape as the old GROUPS const */
+    public function grouped(): array
+    {
+        return Cache::rememberForever(self::CACHE_GROUPED, function () {
+            return $this->repo->all()
+                ->groupBy('group_name')
+                ->map(fn($rows) => $rows->pluck('package_name')->values()->all())
+                ->all();
+        });
+    }
+
+    public function list(?string $group = null, ?string $search = null)
+    {
+        return $this->repo->all($group, $search);
+    }
+
+    public function find(int $id): LoadingPlanPackageGroup
+    {
+        return $this->repo->findOrFail($id);
+    }
+
+    // Mutations: cache is flushed by the model's saved/deleted events.
+
+    public function create(array $data): LoadingPlanPackageGroup
+    {
+        return $this->repo->create($data);
+    }
+
+    public function update(LoadingPlanPackageGroup $model, array $data): LoadingPlanPackageGroup
+    {
+        return $this->repo->update($model, $data);
+    }
+
+    public function delete(LoadingPlanPackageGroup $model): bool
+    {
+        return $this->repo->delete($model);
     }
 }

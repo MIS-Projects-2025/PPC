@@ -4,6 +4,8 @@ namespace App\Repositories;
 
 use App\Models\CustomerDataWip;
 use App\Models\F3Wip;
+use App\Models\Partname;
+use App\Models\LotQuantity;
 use App\Traits\PackageAliasTrait;
 use App\Traits\TrendAggregationTrait;
 use Illuminate\Database\Query\Builder;
@@ -29,7 +31,7 @@ class F1F2WipRepository
   protected $packageFilterService;
   protected $packageGroupRepo;
   protected $analogCalendarRepo;
-
+  protected ?\Illuminate\Support\Collection $packageListByDeviceName = null;
 
   public function __construct(
     PackageFilterService $packageFilterService,
@@ -122,16 +124,95 @@ class F1F2WipRepository
   //   );
   // }
 
-  public function insertManyCustomers(array $data)
+  public function loadPackageList(): void
   {
-    $data = array_map(function ($row) {
-      if (isset($row['Date_Loaded'])) {
-        $row['Date_Loaded'] = \Carbon\Carbon::parse($row['Date_Loaded'])->format('Y-m-d H:i:s');
-      }
-      return $row;
-    }, $data);
+    if ($this->packageListByDeviceName !== null) {
+      return;
+    }
 
-    CustomerDataWip::insert($data);
+    $this->packageListByDeviceName = Partname::query()
+      ->get(['id', 'devicename', 'recipe'])
+      ->keyBy('devicename');
+  }
+
+  public function insertManyCustomers(array $data): void
+  {
+    if (empty($data)) {
+      return;
+    }
+
+    if ($this->packageListByDeviceName === null) {
+      $this->loadPackageList(); // fallback if called standalone, outside processCsvImport
+    }
+
+    $now = Carbon::now();
+    $wipRows = [];
+    $lotQuantityRows = [];
+
+    foreach ($data as $row) {
+      if (isset($row['Date_Loaded'])) {
+        $row['Date_Loaded'] = Carbon::parse($row['Date_Loaded'])->format('Y-m-d H:i:s');
+      }
+      $wipRows[] = $row;
+
+      $lotQuantityRows[] = $this->buildLotQuantityRow(
+        $row,
+        $this->packageListByDeviceName->get($row['Part_Name']),
+        $now
+      );
+    }
+
+    DB::transaction(function () use ($wipRows, $lotQuantityRows) {
+      CustomerDataWip::insert($wipRows);
+
+      DB::connection((new LotQuantity)->getConnectionName())
+        ->table((new LotQuantity)->getTable())
+        ->upsert(
+          $lotQuantityRows,
+          ['lot_id'],
+          ['part_name', 'qty_base', 'recipe_used', 'recipe_source_id', 'commit', 'recipe_status', 'updated_at']
+        );
+    });
+  }
+
+  protected function buildLotQuantityRow(array $row, $packageListRow, Carbon $now): array
+  {
+    $qty = (int) ($row['Qty'] ?? 0);
+    $recipe = $packageListRow->recipe ?? null;
+
+    $commit = ($recipe && $recipe > 0)
+      ? (int) floor($qty / $recipe) * $recipe
+      : null;
+
+    $recipeStatus = match (true) {
+      $recipe && $recipe > 0 && $commit === 0 => 'qty_below_recipe',
+      $recipe && $recipe > 0                  => 'ok',
+      default                                 => 'no_recipe',
+    };
+
+    if ($this->isTubeOrTray($row['Ramp_Time'] ?? null)) {
+      $commit = (int) floor($qty * 0.95);
+      $recipeStatus = 'ok';
+    }
+
+    return [
+      'lot_id'            => $row['Lot_Id'],
+      'scheduled_date'    => $row['import_date'] ?? $now,
+      'part_name'         => $row['Part_Name'],
+      'qty_base'          => $qty,
+      'qty_override'      => null,
+      'recipe_used'       => $recipe,
+      'recipe_source_id'  => $packageListRow->id ?? null,
+      'commit'            => $commit,
+      'recipe_status'     => $recipeStatus,
+      'created_at'        => $now,
+      'updated_at'        => $now,
+    ];
+  }
+
+  protected function isTubeOrTray(?string $rampTime): bool
+  {
+    return in_array($rampTime, ['Tube', 'Tray'], true);
   }
 
   public function applyStationFilter($query, array $includeStations = [], array $excludeStations = []): Builder
