@@ -92,6 +92,9 @@ export function useBulkOperations({
 
     const handleBulkFieldUpdate = useCallback(
         (field, value) => {
+
+            console.log("LOG ~ useBulkOperations.js:96 ~ useBulkOperations ~ field:", field);
+            
             runFieldUpdate({
                 filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
                 fields: { [field]: value },
@@ -118,7 +121,7 @@ export function useBulkOperations({
                     console.log('transferring', r.id, 'from', r.machine, 'to', targetMachine);
                     affectedMachines.add(r.machine);
                     affectedMachines.add(targetMachine);
-                    return { ...r, machine: targetMachine };
+                    return { ...r, machine: targetMachine, bucket_id: null, bucket_position: null };
                 });
                 console.log('before recompute', next.filter(r => selectedRows.has(r.id)));
                 if (baseTimes) affectedMachines.forEach((m) => recomputeMachine(next, m, baseTimes, date));

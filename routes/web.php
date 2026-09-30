@@ -21,6 +21,7 @@ use App\Http\Controllers\{
     PackageCapacityController,
     PackageController,
     PackageGroupController,
+    LoadingPlanBucketController,
     LoadingPlanSettingsController,
     LoadingPlanPackageGroupController,
     MachineCapacityController,
@@ -98,6 +99,12 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::prefix('machine-capacities')->name('machine-capacities.')->group(function () {
         Route::get('current/{machineId}', [MachineCapacityController::class, 'current'])->name('current');
     });
+
+    Route::post('buckets/park', [LoadingPlanBucketController::class, 'park'])->name('buckets.park');
+    Route::post('buckets/unpark', [LoadingPlanBucketController::class, 'unpark'])->name('buckets.unpark');
+    Route::post('buckets', [LoadingPlanBucketController::class, 'store'])->name('buckets.store');
+    Route::patch('buckets/{bucket}', [LoadingPlanBucketController::class, 'update'])->name('buckets.update');
+    Route::delete('buckets/{bucket}', [LoadingPlanBucketController::class, 'destroy'])->name('buckets.destroy');
 
     Route::apiResource('machine-capacities', MachineCapacityController::class)
         ->parameters(['machine-capacities' => 'id'])

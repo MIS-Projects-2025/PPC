@@ -12,6 +12,18 @@ export const TableInteractionContext = createContext({
     disableAddRowBlock: false,
 });
 
+const getFactoryColor = (factory) => {
+    const value = factory?.trim().toUpperCase() ?? "";
+
+    if (value.includes("F1")) return "bg-sky-200/60";
+    if (value.includes("F2")) return "bg-emerald-200/60";
+    if (value.includes("F3")) return "bg-orange-200/60";
+    if (value.includes("RES")) return "bg-amber-200/60";
+    if (value.includes("BRAND")) return "bg-cyan-200/60";
+
+    return "bg-slate-200/60";
+};
+
 export function MachineHeaderBar({
     row,
 	rowCount,
@@ -22,8 +34,11 @@ export function MachineHeaderBar({
 	machineKey,
     innerRef,
 }) {
+
+    console.log("LOG ~ MachineHeaderBar.jsx:38 ~ MachineHeaderBar ~ row:", row);
 	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
     const machine = row?.machine;
+	const machineID = row?.machineId;
 	const machineLabel = row?.machineLabel;
     const isUnassigned = (String (machineLabel)).toLowerCase() === "Unassigned" || machine === null;
     const isManual = machine === MACHINE_MANUAL;
@@ -33,10 +48,21 @@ export function MachineHeaderBar({
         // disableAddRowLot,
         // disableAddRowBlock,
         // scrollParentRef,
+		onAddBucket,
+		serverMachines,
         machineCapacity,
         machineTotalDoable,
         machineTotalQuantity,
     } = useContext(TableInteractionContext);
+
+	console.log("LOG ~ MachineHeaderBar.jsx:42 ~ MachineHeaderBar ~ serverMachines:", serverMachines);
+	console.log("LOG ~ MachineHeaderBar.jsx:58 ~ MachineHeaderBar ~ machine:", machineID);
+
+	const machineFactory = serverMachines[machineID]?.factory;
+
+	const factoryColor = getFactoryColor(machineFactory);
+	
+	console.log("LOG ~ MachineHeaderBar.jsx:44 ~ MachineHeaderBar ~ machineFactory:", machineFactory);
 
 	const totalQty = machineTotalQuantity[machine];
 	const totalDoable = machineTotalDoable[machine];
@@ -69,7 +95,7 @@ export function MachineHeaderBar({
 
     return (
         <div
-            className={`w-full h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
+            className={`w-full ${factoryColor} h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
                 isOver
                     ? "outline-2 outline-dashed outline-[#7dd3fc] outline-offset-[-2px]"
                     : "outline-none"
@@ -110,6 +136,13 @@ export function MachineHeaderBar({
 						{totalQty?.toLocaleString()}
 					</span>
 				</div>
+
+				{onAddBucket && machine !== MACHINE_MANUAL && (
+					<button type="button" className="btn btn-ghost btn-xs"
+						onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
+						+ Group
+					</button>
+				)}
 
 				{/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
 				{!isUnassigned && !isManual && (

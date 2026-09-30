@@ -19,11 +19,11 @@ export function useTableSearch({
     activePackage,
     dataRows,
     bakeLots,
-    activePackageGroup,
     displayRows,
     bakeDisplayRows,
     columns,
     bakeColumns,
+    rowInActiveTab,
     collapsedMachines,
     setCollapsedMachines,
     highlightedMatch,
@@ -46,9 +46,11 @@ export function useTableSearch({
     // search only surfaces rows that can actually be scrolled to right now.
     const searchVisibleRows = useMemo(() => {
         if (activePackage === "Bake") return bakeLots ?? [];
-        const activeList = activePackageGroup ?? [];
-        return dataRows.filter((r) => isBlockRow(r) || activeList.includes(r.package_name));
-    }, [activePackage, dataRows, bakeLots, activePackageGroup]);
+        return dataRows.filter((r) => {
+            if (activePackage === "Unassigned") return r.machine === null && r.station !== "GTTRES_T";
+            return isBlockRow(r) || rowInActiveTab(r);
+        });
+    }, [activePackage, dataRows, bakeLots, rowInActiveTab]);
 
     const searchMatches = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();

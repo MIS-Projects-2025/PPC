@@ -1,5 +1,6 @@
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { TAGS } from "@/Components/LoadingPlan/Tag";
+import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FaTrash } from "react-icons/fa";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
@@ -22,6 +23,9 @@ export default function SelectionToolbar({
     onMergeRows,
     onDelete,
     onClearSelection,
+    buckets, 
+    onMoveToBucket, 
+    onUngroup,
     date,
 }) {
     console.log("LOG ~ SelectionToolbar.jsx:27 ~ SelectionToolbar ~ allData:", allData);
@@ -70,6 +74,7 @@ export default function SelectionToolbar({
         [allData, selectedIds],
     );
 
+    const canGroup = selectedRows.length > 0 && selectedRows.every((r) => !isBlockRow(r) && r.lot_id && !r.is_leaked);
     const isSelectedRowsUnassigned = useMemo(
         () => selectedRows.some((r) => r.machine === null),
         [selectedRows],
@@ -100,6 +105,35 @@ export default function SelectionToolbar({
                     </span>
 
                     <div className="w-px h-5 bg-base-content/20" />
+
+                    <button
+                        className="btn btn-sm text-xs font-medium"
+                        popoverTarget="bucket-popover"
+                        style={{ anchorName: "--bucket-anchor" }}
+                        disabled={disabled || !canGroup || (buckets ?? []).length === 0}
+                    >
+                        Move to group ▾
+                    </button>
+
+                    <ul className="dropdown menu w-56 rounded-box bg-base-100 p-2 shadow-lg border border-base-content/10"
+                        popover="auto" id="bucket-popover"
+                        style={{ positionAnchor: "--bucket-anchor", positionArea: "top span-all", positionTryFallbacks: "flip-block", marginBottom: "8px" }}>
+                        {(buckets ?? []).map((b) => (
+                            <li key={b.id}>
+                                <button type="button" className="text-xs"
+                                    onClick={() => { onMoveToBucket(b.id); document.getElementById("bucket-popover")?.hidePopover?.(); }}>
+                                    {b.machine ? `${b.machine} · ` : ""}{b.label}
+                                </button>
+                            </li>
+                        ))}
+                        <div className="divider my-0.5" />
+                        <li>
+                            <button type="button" className="text-xs" disabled={!selectedRows.some((r) => r.bucket_id != null)}
+                                onClick={() => { onUngroup(); document.getElementById("bucket-popover")?.hidePopover?.(); }}>
+                                Remove from group
+                            </button>
+                        </li>
+                    </ul>
 
                     {/* Popover Trigger Button */}
                     <button

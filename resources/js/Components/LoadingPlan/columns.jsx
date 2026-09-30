@@ -3,6 +3,7 @@ import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { createContext } from 'react';
 import { SelectColumn } from "react-data-grid";
 import { isBlockRow } from "../../Lib/LoadingPlan/helpers";
+import { BucketHeaderCell } from "./BucketHeaderBar";
 import { CellEditor } from "./CellEditor";
 import { DoableCell } from "./DoableCell";
 import { MachineHeaderCell } from "./MachineHeaderCell";
@@ -217,14 +218,9 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
             },
             renderCell({ row }) {
                 if (row.__type === "header") {
-                    return (
-                        <MachineHeaderCell
-                            row={row}
-                            rowCount={row.__rowCount}
-                            lotCount={row.__lotCount}
-                            onToggleCollapse={onToggleCollapse}
-                        />
-                    );
+                    return row.__headerKind === "bucket"
+                        ? <BucketHeaderCell row={row} onToggleCollapse={onToggleCollapse} />
+                        : <MachineHeaderCell row={row} rowCount={row.__rowCount} lotCount={row.__lotCount} onToggleCollapse={onToggleCollapse} />;
                 }
                 return <RowDropTargetCell rowId={row.id} />;
             },

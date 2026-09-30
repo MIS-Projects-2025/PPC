@@ -281,7 +281,7 @@ class LoadingPlanService
 
         return CustomerDataWip::query()
             ->forDate([$this->date, $this->previousDate])
-            ->tapeReelStations()
+            ->loadingPlanStations()
             ->excludingPostTnr()
             ->whereIn('Lot_Id', $leakedLotIds)
             ->orderByDesc('import_date')
@@ -304,7 +304,7 @@ class LoadingPlanService
 
         return CustomerDataWip::query()
             ->forDate($this->date)
-            ->tapeReelStations()
+            ->loadingPlanStations()
             ->excludingPostTnr()
             ->whereIn('Package_Name', $allowedPackages)
             ->get()
@@ -490,6 +490,7 @@ class LoadingPlanService
 
             'block_label'                => $entry?->block_label,
             'machine'                    => $machine,
+            'machine_id'                 => $entry?->machine_id,
             'scheduled_date'             => $scheduledDate,
 
             // Lot & WIP Identifiers/Specs

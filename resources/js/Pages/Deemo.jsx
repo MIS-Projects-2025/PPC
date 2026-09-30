@@ -1,6 +1,7 @@
 import DateNav from "@/Components/DateNav";
 import AddEntryModal from "@/Components/LoadingPlan/AddEntriesModal";
 import { BakeSelectionToolbar } from "@/Components/LoadingPlan/BakeSelectionToolbar";
+import { BucketHeaderBar } from "@/Components/LoadingPlan/BucketHeaderBar";
 import { DATA_COLUMNS, TableActionsContext, makeBakeColumns, makeColumns } from "@/Components/LoadingPlan/columns";
 import DataIntegrityModal, {
     DATA_INTEGRITY_MODAL_ID,
@@ -25,6 +26,7 @@ import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { packagesInGroup } from "@/Constants/loadingPlanPackageGroups.js";
 import { MACHINE_MANUAL, hasTimeline } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
+import { useBucketOperations } from "@/Hooks/LoadingPlan/useBucketOperations";
 import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
 import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
 import { useDragReorder } from "@/Hooks/LoadingPlan/useDragReorder";
@@ -322,7 +324,9 @@ function RowHistoryButton({ isHidden, anchorElement, onViewHistory, buttonsRef }
 }
 
 const ALL_PACKAGES_TAB = "ALL PACKAGE";
-
+const RES_TAB = "RES";
+const RES_STATION = "GTTRES_T";
+const isResRow = (r) => r.station === RES_STATION;
 // ---------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------
@@ -336,6 +340,7 @@ export default function Deemo({
     packageGroups,
     packageGroupNames,
     machineCapacity,
+    buckets: serverBuckets,
     date,
     selectedLocation,
     status,
@@ -349,6 +354,15 @@ export default function Deemo({
     schedulerHistory,
     readOnly = false, // NEW — true disables every write path; see file header
 }) {
+    console.log("buckets:", serverBuckets.map(b => [b.id, b.label, b.machine]));
+    console.log("parked rows:", data.filter((r) => r.bucket_id != null));
+
+    const machinesByName = useMemo(
+        () => Object.fromEntries(Object.values(serverMachines).map((m) => [m.name, m])),
+        [serverMachines],
+    );
+
+    // console.log("LOG ~ Deemo.jsx:353 ~ Deemo ~ serverMachines:", serverMachines);
     const {
         present: { rows: dataRows },
         update,
@@ -484,16 +498,24 @@ export default function Deemo({
         useLoadingPlanStore.getState().reset(seeded);
     }, [data]);
 
+
+    // console.log("LOG ~ Deemo.jsx:490 ~ Deemo ~ serverMachines:", serverMachines);
     const machines = useMemo(() => {
         return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
     }, [serverMachines]);
 
+    // console.log("LOG ~ Deemo.jsx:493 ~ Deemo ~ machines:", machines);
+
     const activePackageGroup = useMemo(() => {
-        // "Unassigned" isn't a real package group — it's a synthetic tab that
-        // aggregates every unassigned-machine lot across ALL packages (see
-        // displayRows below), so it doesn't filter by package at all.
-        if (activePackage === "Unassigned" || activePackage === ALL_PACKAGES_TAB) return null;
-        return packageGroups[activePackage] || null;
+        if (
+            activePackage === "Unassigned" ||
+            activePackage === ALL_PACKAGES_TAB ||
+            activePackage === RES_TAB
+        ) return null;
+
+        const group = packageGroups?.[activePackage];
+        if (!group) return null;
+        return Array.isArray(group) ? group : Object.values(group);
     }, [activePackage, packageGroups]);
 
     // console.log("LOG ~ Deemo.jsx:1001 ~ Deemo ~ activePackageGroup:", activePackageGroup);
@@ -525,6 +547,33 @@ export default function Deemo({
     const clearSelection = useCallback(() => {
         setSelectedRows(new Set());
     }, []);
+
+    const [bucketList, setBucketList] = useState(serverBuckets ?? []);
+    useEffect(() => setBucketList(serverBuckets ?? []), [serverBuckets]);
+
+    const bucketsByMachine = useMemo(() => {
+        const map = new Map();
+        bucketList.forEach((b) => {
+            const k = b.machine ?? null;
+            if (!map.has(k)) map.set(k, []);
+            map.get(k).push(b);
+        });
+        map.forEach((l) => l.sort((a, b) => a.sort_order - b.sort_order));
+        return map;
+    }, [bucketList]);
+
+    const knownBucketIds = useMemo(() => new Set(bucketList.map((b) => b.id)), [bucketList]);
+    // A row counts as parked only if its group still exists; orphans fall back to Unassigned.
+    const isParked = useCallback(
+        (r) => r.bucket_id != null && knownBucketIds.has(r.bucket_id),
+        [knownBucketIds],
+    );
+
+    const { parkRows, unparkRows, handleBulkPark, handleBulkUnpark, createBucket, renameBucket, deleteBucket } =
+        useBucketOperations({
+            store: useLoadingPlanStore, dataRows, selectedRows, update, withUpdating, mutate, toast,
+            baseTimes, date, selectedLocation, setIsDirty, clearSelection, setBucketList,
+        });
 
     const clearBakeSelection = useCallback(() => setSelectedBakeRows(new Set()), []);
 
@@ -938,18 +987,23 @@ export default function Deemo({
         return result;
     }, [dataRows]);
 
+    const rowInActiveTab = useCallback((r) => {
+        if (activePackage === RES_TAB) return isResRow(r);
+        if (isResRow(r)) return false;                    // RES is separate everywhere else
+        if (activePackage === ALL_PACKAGES_TAB) return true;
+        return (activePackageGroup ?? []).includes(r.package_name);
+    }, [activePackage, activePackageGroup]);
+
     // ── Migrated from LoadingPlanTable.jsx: otherPackageCounts ─────────────
     // How many rows sit on a machine but are hidden by the current package
     // tab (they belong to some OTHER package group). Unassigned ignores the
     // package filter entirely (see displayRows below), so it's never
     // counted here — same contract as LoadingPlanTable.jsx.
     const otherPackageCounts = useMemo(() => {
-        if (activePackage === ALL_PACKAGES_TAB) return {};
-        const activeList = activePackageGroup ?? [];
         const result = {};
         dataRows.forEach((r) => {
             if (r.machine === null) return; // Unassigned ignores the package filter
-            if (activeList.includes(r.package_name)) return;
+            if (rowInActiveTab(r)) return;
             result[r.machine] = (result[r.machine] ?? 0) + 1;
         });
         return result;
@@ -1019,10 +1073,41 @@ export default function Deemo({
     //    conversion, no lots) is hidden entirely on that tab, the same way
     //    an empty machine already was.
     const displayRows = useMemo(() => {
+        const isAll = activePackage === ALL_PACKAGES_TAB;
+
+        // Group headers (+ their lots) that belong under `machineKey`
+        // (null = top-level groups, shown with the Unassigned section).
+        const bucketSections = (machineKey, isVisible) =>
+            (bucketsByMachine.get(machineKey) ?? []).flatMap((bucket) => {
+                const key = `bucket:${bucket.id}`; // string, can't collide with machine names
+                const rows = dataRows
+                    .filter((r) => r.bucket_id === bucket.id && isVisible(r))
+                    .sort((a, b) => (a.bucket_position ?? 0) - (b.bucket_position ?? 0));
+
+                const header = {
+                    id: `header-${key}`,
+                    __type: "header",
+                    __headerKind: "bucket",
+                    bucketId: bucket.id,
+                    collapseKey: key,
+                    label: bucket.label,
+                    nested: machineKey !== null,
+                    __rowCount: rows.length,
+                    __isCollapsed: collapsedMachines.has(key),
+                    isLocked: true,
+                };
+
+                return header.__isCollapsed
+                    ? [header]
+                    : [header, ...rows.map((r) => ({ ...r, __type: "data" }))];
+            });
+
+        // ── "Unassigned" tab: every unplanned, non-parked lot across all packages ──
         if (activePackage === "Unassigned") {
-            const rowsForMachine = dataRows.filter((r) => r.machine === null);
+            const rowsForMachine = dataRows.filter(
+                (r) => r.machine === null && !isResRow(r) && !isParked(r),
+            );
             const isCollapsed = collapsedMachines.has(null);
-            const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
 
             const headerRow = {
                 id: "header-unassigned-all",
@@ -1031,36 +1116,41 @@ export default function Deemo({
                 machineLabel: "Unassigned",
                 platform: undefined,
                 __rowCount: rowsForMachine.length,
-                __lotCount: lotCount,
+                __lotCount: rowsForMachine.filter((r) => !isBlockRow(r)).length,
                 otherPackageCount: 0,
                 __isCollapsed: isCollapsed,
                 isLocked: true,
             };
 
-            if (isCollapsed) return [headerRow];
-            return [headerRow, ...rowsForMachine.map((r) => ({ ...r, id: r.id, __type: "data" }))];
+            return [
+                headerRow,
+                ...(isCollapsed ? [] : rowsForMachine.map((r) => ({ ...r, __type: "data" }))),
+                ...bucketSections(null, (r) => !isResRow(r)), // groups stay visible when collapsed
+            ];
         }
 
-        return machines.flatMap((m) => {
+        // ── Every other tab ──
+        const visible = (r) => rowInActiveTab(r);
+
+        const machineSections = machines.flatMap((m) => {
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
-            const isAll = activePackage === ALL_PACKAGES_TAB;
 
             if (isManual && activePackage !== "MANUAL" && !isAll) return [];
 
             const rowsForMachine = dataRows.filter((r) => {
-                if (r.machine !== m) return false;
-                if (isAll) return true;
+                if (r.machine !== m || isParked(r)) return false;
                 if (isBlockRow(r)) return true;
-                const activeList = activePackageGroup ?? [];
-                return activeList.includes(r.package_name);
+                return rowInActiveTab(r);
             });
 
             const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
 
-            if (lotCount === 0 && !isUnassigned && !isManual) {
-                return [];
-            }
+            // only real machines own nested groups; top-level groups are appended at the very end
+            const parked = isUnassigned ? [] : bucketSections(m, visible);
+            const parkedCount = parked.filter((r) => r.__type === "data").length;
+
+            if (lotCount === 0 && parkedCount === 0 && !isUnassigned && !isManual) return [];
 
             const isCollapsed = collapsedMachines.has(m);
 
@@ -1068,21 +1158,40 @@ export default function Deemo({
                 id: `header-${m ?? "unassigned"}`,
                 __type: "header",
                 machine: m,
+                machineId: machinesByName[m]?.id,
                 machineLabel: isUnassigned ? "Unassigned" : isManual ? "MANUAL" : m,
                 platform: machinePlatform.get(m),
-                __rowCount: rowsForMachine.length, // total count, shown even while collapsed
+                __rowCount: rowsForMachine.length,
                 __lotCount: lotCount,
                 otherPackageCount: isUnassigned ? 0 : (otherPackageCounts[m] ?? 0),
                 __isCollapsed: isCollapsed,
                 isLocked: true,
             };
 
-            // Collapsed: emit just the header, hide the data rows under it.
             if (isCollapsed) return [headerRow];
 
-            return [headerRow, ...rowsForMachine.map((r) => ({ ...r, id: r.id, __type: "data" }))];
+            return [
+                headerRow,
+                ...rowsForMachine.map((r) => ({ ...r, __type: "data" })),
+                ...parked,
+            ];
         });
-    }, [activePackage, machines, dataRows, activePackageGroup, machinePlatform, otherPackageCounts, collapsedMachines]);
+
+        // Top-level groups (Anticipate, Upcoming, ...) go below every machine.
+        return [...machineSections, ...bucketSections(null, visible)];
+    }, [
+        activePackage,
+        machines,
+        dataRows,
+        rowInActiveTab,
+        isParked,
+        machinesByName,
+        machinePlatform,
+        otherPackageCounts,
+        collapsedMachines,
+        bucketsByMachine,
+    ]);
+    // console.log("LOG ~ Deemo.jsx:1094 ~ Deemo ~ displayRows:", displayRows);
 
     // const [entryHistoryData, setEntryHistoryData] = useState([]);
     // const [entryHistoryLoading, setEntryHistoryLoading] = useState(false);
@@ -1173,6 +1282,7 @@ export default function Deemo({
         bakeDisplayRows,
         columns,
         bakeColumns,
+        rowInActiveTab,
         collapsedMachines,
         setCollapsedMachines,
         highlightedMatch,
@@ -1203,11 +1313,12 @@ export default function Deemo({
                 }
                 if (e.key === "a") {
                     e.preventDefault();
-                    setSelectedRows(
-                        new Set(
-                            dataRowsRef.current.filter((r) => r.entry_id).map((r) => r.entry_id),
-                        ),
-                    );
+                    setSelectedRows(new Set(dataRowsRef.current.map((r) => r.id)));
+                    // setSelectedRows(
+                    //     new Set(
+                    //         dataRowsRef.current.filter((r) => r.entry_id).map((r) => r.entry_id),
+                    //     ),
+                    // );
                 }
             }
         };
@@ -1238,6 +1349,8 @@ export default function Deemo({
         handleDragEnd,
         handleDragCancel,
     } = useDragReorder({
+        onPark: parkRows, 
+        onUnpark: unparkRows,
         dataRows,
         update,
         withUpdating,
@@ -1257,6 +1370,8 @@ export default function Deemo({
             const rowDropId = `row-${row.id}`;
             if (!readOnly && hoveredRowId === rowDropId)
                 return "bg-pink-500 relative drop-target-row";
+            if (row.__headerKind === "bucket")
+                return "text-xs border-t-2 border-info/50 flex machine-header-row";
             if (row.__type === "header")
                 return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
             if (isBlockRow(row) && !selectedRows.has(row.id))
@@ -1266,18 +1381,34 @@ export default function Deemo({
         [readOnly, hoveredRowId, selectedRows],
     );
 
+    const [bucketModalMachine, setBucketModalMachine] = useState(null);
+    const [bucketLabel, setBucketLabel] = useState("");
+    const handleAddBucket = useCallback((machine) => {
+        setBucketModalMachine(machine);
+        setBucketLabel("");
+        document.getElementById("add_bucket_modal")?.showModal();
+    }, []);
+
     const tableInteractionValue = useMemo(
         () => ({
+            serverMachines,
             machineCapacity,
             machineTotalDoable,
             machineTotalQuantity,
             otherPackageCounts,
             onAddRow: readOnly ? undefined : handleAddRow,
             onAddBlock: readOnly ? undefined : handleAddBlock,
+            onAddBucket: readOnly ? undefined : handleAddBucket,
+            onRenameBucket: readOnly ? undefined : renameBucket,
+            onDeleteBucket: readOnly ? undefined : deleteBucket,
             isUpdating,
         }),
         [
+            serverMachines,
             readOnly,
+            handleAddBucket, 
+            renameBucket,
+            deleteBucket,
             machineCapacity,
             machineTotalDoable,
             machineTotalQuantity,
@@ -1301,7 +1432,7 @@ export default function Deemo({
 
     const hoveredRowData = displayRows[hoveredRow?.rowIdx] ?? null;
     const isInsertRowButtonVisible = !readOnly && hoveredRowData && hoveredRowData?.machine !== null && hoveredRowData?.__type === "data" && !isUpdating;
-    const isHistoryButtonVisible = hoveredRowData && hoveredRowData?.__type === "data";
+    const isHistoryButtonVisible = hoveredRowData && hoveredRowData.__type === "data" && hoveredRowData.entry_id;
 
     const tableActionsValue = useMemo(
         () => ({
@@ -1511,6 +1642,7 @@ export default function Deemo({
                             items={[
                                 "Unassigned",
                                 ALL_PACKAGES_TAB,
+                                RES_TAB,
                                 ...packageGroupNames,
                                 { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> },
                             ]}
@@ -1712,20 +1844,12 @@ export default function Deemo({
                                                 buttonsRef={buttonsRef}
                                                 onInsertAbove={() => {
                                                     setPlacementOfNewEntry("above");
-                                                    setSelectedRows(
-                                                        new Set(
-                                                            [displayRows[hoveredRow.rowIdx]],
-                                                        ),
-                                                    );
+                                                    setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
                                                     addEntryModalRef.current?.showModal()
                                                 }}
                                                 onInsertBelow={() => {
                                                     setPlacementOfNewEntry("below");
-                                                    setSelectedRows(
-                                                        new Set(
-                                                            [displayRows[hoveredRow.rowIdx]],
-                                                        ),
-                                                    );
+                                                    setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
                                                     addEntryModalRef.current?.showModal()
                                                 }}
                                             />
@@ -1763,21 +1887,26 @@ export default function Deemo({
                                         >
                                             <div className="absolute left-0 right-0 pl-9 h-full w-full flex items-center justify-between">
                                                 <div className="flex items-center h-full gap-2 min-w-0">
-                                                    <MachineHeaderBar
-                                                        row={{
-                                                            machineLabel: stickyMachine?.machineLabel ?? null,
-                                                            machine: stickyMachine.machine,
-                                                                // stickyMachine.machineLabel ??
-                                                                // stickyMachine.machine,
-                                                            otherPackageCount:
-                                                                stickyMachine.otherPackageCount,
-                                                        }}
-                                                        machineKey={stickyMachine.machine}
-                                                        rowCount={stickyMachine.__rowCount}
-                                                        lotCount={stickyMachine.__lotCount}
-                                                        isCollapsed={stickyMachine.__isCollapsed}
-                                                        onToggleCollapse={toggleMachineCollapsed}
-                                                    />
+                                                    {stickyMachine.__headerKind === "bucket" ? (
+                                                        <BucketHeaderBar row={stickyMachine} onToggleCollapse={toggleMachineCollapsed} />
+                                                    ) : (
+                                                        <MachineHeaderBar
+                                                            row={{
+                                                                machineLabel: stickyMachine?.machineLabel ?? null,
+                                                                machine: stickyMachine.machine,
+                                                                machineId: stickyMachine.machineId,
+                                                                    // stickyMachine.machineLabel ??
+                                                                    // stickyMachine.machine,
+                                                                otherPackageCount:
+                                                                    stickyMachine.otherPackageCount,
+                                                            }}
+                                                            machineKey={stickyMachine.machine}
+                                                            rowCount={stickyMachine.__rowCount}
+                                                            lotCount={stickyMachine.__lotCount}
+                                                            isCollapsed={stickyMachine.__isCollapsed}
+                                                            onToggleCollapse={toggleMachineCollapsed}
+                                                        />
+                                                    )}
                                                 </div>
                                             </div>
                                         </div>
@@ -1810,6 +1939,9 @@ export default function Deemo({
                     {!readOnly && (
                         <SelectionToolbar
                             selectedIds={selectedRows}
+                            buckets={bucketList} 
+                            onMoveToBucket={handleBulkPark} 
+                            onUngroup={handleBulkUnpark}
                             machinePlatform={machinePlatform}
                             allData={dataRows}
                             machines={machines}
@@ -1884,7 +2016,7 @@ export default function Deemo({
                         onClick={() => setStatusMenu(null)}
                     />
                     <div
-                        className="fixed z-50 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36"
+                        className="fixed z-50 bg-base-100 border border-base-300 rounded-lg shadow-lg p-1 grid grid-cols-2 gap-1 min-w-72"
                         style={{ top: statusMenu.y, left: statusMenu.x }}
                     >
                         {[
@@ -1895,11 +2027,25 @@ export default function Deemo({
                             "BOXING",
                             "LWAIT",
                             "NONE",
+                            "OQA",
+                            "BUY-OFF",
+                            "ON BAKE",
+                            "FOR BAKE",
+                            "ON SORT",
+                            "FOR SORT",
+                            "FOR BRAND",
+                            "ON BRAND",
+                            "FOR LPI",
+                            "ON LPI",
+                            "FOR LLI",
+                            "ON LLI",
+                            "FOR LEADCON",
+                            "ON LEADCON"
                         ].map((s) => (
                             <button
                                 key={s}
                                 className={clsx(
-                                    "btn btn-ghost w-full text-left px-2 text-sm flex items-center gap-2",
+                                    "btn btn-sm btn-ghost w-full justify-start px-2 text-sm flex items-center gap-2",
                                     !isUpdating && "hover:bg-base-200",
                                 )}
                                 onClick={() => handleStatusChange(s)}
@@ -1986,6 +2132,32 @@ export default function Deemo({
                     <form method="dialog" className="modal-backdrop">
                         <button>close</button>
                     </form>
+                </dialog>
+            )}
+
+            {!readOnly && (
+                <dialog id="add_bucket_modal" className="modal">
+                    <div className="modal-box bg-base-300">
+                        <h3 className="font-bold text-lg mb-3">
+                            Add group{bucketModalMachine ? ` under ${bucketModalMachine}` : ""}
+                        </h3>
+                        <div className="flex gap-2 mb-3">
+                            {["Anticipate", "Upcoming"].map((p) => (
+                                <button key={p} type="button" className="btn btn-sm" onClick={() => setBucketLabel(p)}>{p}</button>
+                            ))}
+                        </div>
+                        <input className="input input-bordered w-full" placeholder="Group name" value={bucketLabel}
+                            onChange={(e) => setBucketLabel(e.target.value)} />
+                        <div className="modal-action">
+                            <form method="dialog"><button className="btn btn-ghost">Cancel</button></form>
+                            <button className="btn btn-primary" disabled={!bucketLabel.trim() || isUpdating}
+                                onClick={async () => {
+                                    await createBucket({ label: bucketLabel.trim(), machine: bucketModalMachine });
+                                    document.getElementById("add_bucket_modal")?.close();
+                                }}>Add</button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop"><button>close</button></form>
                 </dialog>
             )}
 

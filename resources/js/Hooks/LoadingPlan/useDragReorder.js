@@ -11,6 +11,8 @@ export function useDragReorder({
     baseTimes,
     date,
     onReorder,
+    onPark,
+    onUnpark,
     onLotTransfer,
     toast,
     clearSelection,
@@ -53,6 +55,35 @@ export function useDragReorder({
             const draggedRowId = active.id;
 
             if (String(draggedRowId) === overId.replace("row-", "")) return;
+
+            const dragged = dataRows.find((r) => r.id === draggedRowId);
+
+            let bucketDrop = null;
+            if (overId.startsWith("bucket-")) {
+                const bucketId = Number(overId.slice("bucket-".length));
+                const first = dataRows
+                    .filter((r) => r.bucket_id === bucketId)
+                    .sort((a, b) => a.bucket_position - b.bucket_position)[0];
+                bucketDrop = { bucketId, nextLotId: first?.lot_id ?? null };          // dropping on a header = top of group
+            } else if (overId.startsWith("row-")) {
+                const target = dataRows.find((r) => String(r.id) === overId.slice(4));
+                if (target?.bucket_id != null) bucketDrop = { bucketId: target.bucket_id, prevLotId: target.lot_id }; // after target
+            }
+
+            if (bucketDrop) {
+                if (dragged && !isBlockRow(dragged)) onPark?.([dragged], bucketDrop.bucketId, bucketDrop);
+                return;
+            }
+
+            // parked row dropped on Unassigned (header, or an unassigned row) = unpark
+            const overRow = overId.startsWith("row-") ? dataRows.find((r) => String(r.id) === overId.slice(4)) : null;
+            const toUnassigned = overId.startsWith("machine-")
+                ? droppableMachineFromToken(overId) === null
+                : overRow && overRow.machine === null && overRow.bucket_id == null;
+            if (dragged?.bucket_id != null && toUnassigned) {
+                onUnpark?.([dragged]);
+                return;
+            }
 
             let pending = null;
 

@@ -10,6 +10,8 @@ use App\Exceptions\ActiveMergeParticipantException;
 use App\Exceptions\ActiveSplitChildException;
 use App\Models\LoadingPlanEntry;
 use App\Models\QdnMachine;
+use App\Models\LotBucketItem;
+use App\Models\LoadingPlanBucket;
 use App\Models\LotQuantity;
 use App\Models\LoadingPlanEntryHistory;
 use App\Models\LotQuantityHistory;
@@ -154,6 +156,7 @@ class LoadingPlanEntryService
             }
 
             $resolvedDate = $this->assertConsistentDates($anchorEntries);
+            if ($entryType === 'lot') $this->releaseFromBuckets([$entry->lot_id], $resolvedDate);
 
             $sourceMachineId = $entry->machine_id; // null for the newly-created row — fine
             $targetMachineId = $this->resolveMachineId($targetMachine);
@@ -333,6 +336,8 @@ class LoadingPlanEntryService
                 return collect();
             }
 
+            $this->releaseFromBuckets($lotIds, $date);
+
             $machinesToLock = $movers->pluck('machine_id')
                 ->push($targetMachineId)
                 ->filter()
@@ -493,6 +498,8 @@ class LoadingPlanEntryService
             if ($movers->isEmpty() && empty($unplannedLotIds)) {
                 return collect();
             }
+
+            $this->releaseFromBuckets($lotIds, $date);
 
             // Lock every machine that's either a source (movers' current
             // machine) or a destination (any distinct target) — same idea as
@@ -1376,6 +1383,7 @@ class LoadingPlanEntryService
     private function createLotRow(array $row, string $date)
     {
         $lotId = $row['lot_id'] ?? throw new \InvalidArgumentException('create row missing lot_id for entry_type lot');
+        $this->releaseFromBuckets([$lotId], $date);
         $fields = $row['fields'] ?? [];
         $machineId = $row['machine'] !== null ? $this->resolveMachineId($row['machine']) : null;
 
@@ -2180,5 +2188,121 @@ class LoadingPlanEntryService
         }
 
         return $freshEntries;
+    }
+
+    public function parkLots(array $lotIds, int $bucketId, string $date, ?string $prevLotId, ?string $nextLotId): array
+    {
+        return DB::transaction(function () use ($lotIds, $bucketId, $date, $prevLotId, $nextLotId) {
+            $this->assertDateNotFinalized($date);
+            LoadingPlanBucket::findOrFail($bucketId);
+
+            $entries = LoadingPlanEntry::where('scheduled_date', $date)
+                ->where('entry_type', 'lot')
+                ->whereIn('lot_id', $lotIds)
+                ->get();
+
+            if ($entries->isNotEmpty()) {
+                $withWip = CustomerDataWip::whereDate('import_date', $date)
+                    ->whereIn('Lot_Id', $entries->pluck('lot_id'))
+                    ->pluck('Lot_Id')->all();
+
+                foreach ($entries as $e) {
+                    $this->assertNotFinalized($e);
+                    if (!in_array($e->lot_id, $withWip, true)) {
+                        abort(422, "Lot {$e->lot_id} has no WIP row (manual lot) and can't be grouped.");
+                    }
+                    // ASSUMPTION: LotSplit has parent_lot_id / child_lot_id — check column names
+                    $inSplit = \App\Models\LotSplit::active()
+                        ->where('scheduled_date', $date)
+                        ->where(fn($q) => $q->where('child_lot_id', $e->lot_id)->orWhere('parent_lot_id', $e->lot_id))
+                        ->exists();
+                    $inMerge = \App\Models\LotMerge::active()
+                        ->where('scheduled_date', $date)
+                        ->where(fn($q) => $q->where('target_lot_id', $e->lot_id)->orWhere('source_lot_id', $e->lot_id))
+                        ->exists();
+                    if ($inSplit || $inMerge) {
+                        abort(422, "Lot {$e->lot_id} is part of an active split/merge — revert it first.");
+                    }
+                }
+            }
+
+            $machineIds = $entries->pluck('machine_id')->filter()->unique()->sort()->values()->all();
+            if ($machineIds) {
+                $this->lockMachineRows($machineIds, $date);
+            }
+
+            foreach ($entries as $e) {
+                $e->delete(); // model delete, not query delete, so history observers fire
+            }
+
+            foreach ($machineIds as $machineId) {
+                $restart = $this->findFirstRemainingRow($machineId, $date);
+                if ($restart) {
+                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId);
+                }
+            }
+
+            $positions = $this->resolveBucketPositions($bucketId, $lotIds, $date, $prevLotId, $nextLotId);
+
+            foreach ($positions as $lotId => $pos) {
+                LotBucketItem::updateOrCreate(
+                    ['lot_id' => $lotId, 'scheduled_date' => $date],
+                    ['bucket_id' => $bucketId, 'position' => $pos],
+                );
+            }
+
+            return collect($positions)
+                ->map(fn($pos, $lotId) => ['lot_id' => $lotId, 'bucket_id' => $bucketId, 'bucket_position' => $pos])
+                ->values()->all();
+        });
+    }
+
+    public function releaseFromBuckets(array $lotIds, string $date): void
+    {
+        $lotIds = array_values(array_filter($lotIds));
+        if ($lotIds) {
+            LotBucketItem::where('scheduled_date', $date)->whereIn('lot_id', $lotIds)->delete();
+        }
+    }
+
+    private function resolveBucketPositions(int $bucketId, array $lotIds, string $date, ?string $prevLotId, ?string $nextLotId, bool $retry = true): array
+    {
+        $items = LotBucketItem::where('bucket_id', $bucketId)
+            ->where('scheduled_date', $date)
+            ->whereNotIn('lot_id', $lotIds)
+            ->orderBy('position')->lockForUpdate()->get();
+
+        $prev = $prevLotId ? $items->firstWhere('lot_id', $prevLotId)?->position : null;
+        $next = $nextLotId ? $items->firstWhere('lot_id', $nextLotId)?->position : null;
+
+        if ($prev === null && $next === null) {
+            $prev = $items->max('position');                       // append
+        }
+        if ($prev !== null && $next === null) {
+            $next = $items->first(fn($i) => $i->position > $prev)?->position;
+        } elseif ($next !== null && $prev === null) {
+            $prev = $items->last(fn($i) => $i->position < $next)?->position;
+        }
+
+        $n = count($lotIds);
+        [$start, $step] = match (true) {
+            $prev !== null && $next !== null => [$prev, ($next - $prev) / ($n + 1)],
+            $prev !== null                   => [$prev, self::GAP_SEED],
+            $next !== null                   => [$next - ($n + 1) * self::GAP_SEED, self::GAP_SEED],
+            default                          => [0, self::GAP_SEED],
+        };
+
+        if ($step < self::MIN_GAP && $retry) {
+            foreach ($items as $i => $item) {
+                $item->update(['position' => ($i + 1) * self::GAP_SEED]);
+            }
+            return $this->resolveBucketPositions($bucketId, $lotIds, $date, $prevLotId, $nextLotId, false);
+        }
+
+        $out = [];
+        foreach (array_values($lotIds) as $i => $lotId) {
+            $out[$lotId] = round($start + $step * ($i + 1), 4);
+        }
+        return $out;
     }
 }
