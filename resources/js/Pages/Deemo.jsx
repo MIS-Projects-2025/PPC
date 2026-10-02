@@ -39,9 +39,7 @@ import { useMutation } from "@/Hooks/useMutation";
 import { useToast } from "@/Hooks/useToast";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { downloadExcelBuffer, exportLoadingPlanToExcel } from "@/Lib/LoadingPlan/loadingPlanExcelExporter";
-import {
-    recomputeMachine,
-} from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
+import { timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
@@ -354,15 +352,14 @@ export default function Deemo({
     schedulerHistory,
     readOnly = false, // NEW — true disables every write path; see file header
 }) {
-    console.log("buckets:", serverBuckets.map(b => [b.id, b.label, b.machine]));
-    console.log("parked rows:", data.filter((r) => r.bucket_id != null));
+    // console.log("buckets:", serverBuckets.map(b => [b.id, b.label, b.machine]));
+    // console.log("parked rows:", data.filter((r) => r.bucket_id != null));
 
     const machinesByName = useMemo(
         () => Object.fromEntries(Object.values(serverMachines).map((m) => [m.name, m])),
         [serverMachines],
     );
 
-    // console.log("LOG ~ Deemo.jsx:353 ~ Deemo ~ serverMachines:", serverMachines);
     const {
         present: { rows: dataRows },
         update,
@@ -373,7 +370,7 @@ export default function Deemo({
     } = useLoadingPlanStore();
     
     // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
-    console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
+    // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
 
     const toast = useToast();
     const { mutate } = useMutation();
@@ -476,6 +473,7 @@ export default function Deemo({
     useEffect(() => {
         const seeded = (data ?? []).map((row) => ({
             ...row,
+            ...timeFieldsFromDatetimes(row.time_start_at, row.time_end_at, date),
             machine: row.machine ?? null,
             tag: row.tag ?? null,
             doable: row.doable ?? 0,
@@ -485,26 +483,28 @@ export default function Deemo({
             // convention here. See assumptions note at top of file.
             _dndId: row.entry_id
                 ? `entry-${row.entry_id}`
-                : `wip-${row.id ?? Math.random()}`,
+                : `${row.id ?? Math.random()}`,
         }));
-
-        if (baseTimes) {
-            const buckets = new Set(seeded.map((r) => r.machine));
-            buckets.forEach((m) =>
-                recomputeMachine(seeded, m, baseTimes, date),
-            );
-        }
 
         useLoadingPlanStore.getState().reset(seeded);
     }, [data]);
 
 
-    // console.log("LOG ~ Deemo.jsx:490 ~ Deemo ~ serverMachines:", serverMachines);
     const machines = useMemo(() => {
         return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
     }, [serverMachines]);
 
-    // console.log("LOG ~ Deemo.jsx:493 ~ Deemo ~ machines:", machines);
+    const [expandedMachines, setExpandedMachines] = usePersistedSet('expandedMachines');
+
+    const toggleExpandedMachine = useCallback((machine) => {
+        setExpandedMachines((prev) => {
+            const next = new Set(prev);
+            if (next.has(machine)) next.delete(machine);
+            else next.add(machine);
+            return next;
+        });
+        setSelectedRows(new Set());
+    }, []);
 
     const activePackageGroup = useMemo(() => {
         if (
@@ -549,7 +549,9 @@ export default function Deemo({
     }, []);
 
     const [bucketList, setBucketList] = useState(serverBuckets ?? []);
+
     useEffect(() => setBucketList(serverBuckets ?? []), [serverBuckets]);
+    console.log("LOG ~ Deemo.jsx:550 ~ Deemo ~ bucketList:", bucketList);
 
     const bucketsByMachine = useMemo(() => {
         const map = new Map();
@@ -572,7 +574,7 @@ export default function Deemo({
     const { parkRows, unparkRows, handleBulkPark, handleBulkUnpark, createBucket, renameBucket, deleteBucket } =
         useBucketOperations({
             store: useLoadingPlanStore, dataRows, selectedRows, update, withUpdating, mutate, toast,
-            baseTimes, date, selectedLocation, setIsDirty, clearSelection, setBucketList,
+            date, selectedLocation, setIsDirty, clearSelection, setBucketList,
         });
 
     const clearBakeSelection = useCallback(() => setSelectedBakeRows(new Set()), []);
@@ -655,6 +657,7 @@ export default function Deemo({
         handleBulkFieldUpdate,
         handleBulkTransfer,
         handleBulkDelete,
+        handleRework,
     } = useBulkOperations({
         dataRows,
         selectedRows,
@@ -664,7 +667,6 @@ export default function Deemo({
         toast,
         setIsDirty,
         clearSelection,
-        baseTimes,
         date,
         syncServerFields
     });
@@ -708,10 +710,9 @@ export default function Deemo({
                 }),
             )
                 .then((entry) => {
-                    update((prev) => {
-                        const withNew = [...prev, { ...entry, _dndId: `entry-${entry.entry_id}` }];
-                        return baseTimes ? recomputeMachine(withNew, machine, baseTimes, date) : withNew;
-                    });
+                    const { affected_timings, ...row } = entry;
+                    update((prev) => [...prev, { ...row, _dndId: `entry-${row.entry_id}` }]);
+                    applyAffectedTimings(update, affected_timings, date);
                     setIsDirty(true);
                     return entry;
                 })
@@ -749,10 +750,9 @@ export default function Deemo({
                 }),
             )
                 .then((entry) => {
-                    update((prev) => {
-                        const withNew = [...prev, { ...entry, _dndId: `entry-${entry.entry_id}` }];
-                        return baseTimes ? recomputeMachine(withNew, machine, baseTimes, date) : withNew;
-                    });
+                    const { affected_timings, ...row } = entry;
+                    update((prev) => [...prev, { ...row, _dndId: `entry-${row.entry_id}` }]);
+                    applyAffectedTimings(update, affected_timings, date);
                     setIsDirty(true);
                     return entry;
                 })
@@ -811,7 +811,7 @@ export default function Deemo({
         revertMerge,
         mergeRows,
         splitRow 
-    } = useSplitMergeOperations({ dataRows, update, withUpdating, mutate, baseTimes, date, toast, setIsDirty, syncServerFields });
+    } = useSplitMergeOperations({ dataRows, update, withUpdating, mutate, date, toast, setIsDirty, syncServerFields });
 
     const handleShowSplitHistory = useCallback(
         (rootLotId, isParent, isChild) =>
@@ -874,21 +874,32 @@ export default function Deemo({
         });
     }, []);
 
-    // react-data-grid reports resize as (columnIndex, newWidth) — see
-    // onColumnResize on the main <DataGrid /> below. `idx` indexes into the
-    // SAME array passed as the `columns` prop there (decoratedColumns),
-    // which preserves the order of `columns`, so indexing into `columns`
-    // here is safe.
-    const handleColumnResize = useCallback(
-        (idx, width) => {
-            const col = columns[idx];
-            if (!col?.key || !dataColumnKeys.has(col.key)) return;
-            setColumnWidths((prev) => ({
-                ...prev,
-                [col.key]: Math.max(MIN_COLUMN_WIDTH, width),
-            }));
+    // Feed the grid our widths so it has no private copy to disagree with.
+    const gridColumnWidths = useMemo(
+        () =>
+            new Map(
+                Object.entries(columnWidths).map(([key, width]) => [
+                    key,
+                    { type: "resized", width },
+                ]),
+            ),
+        [columnWidths],
+    );
+
+    // The grid reports drag-resizes here as a full Map.
+    const handleColumnWidthsChange = useCallback(
+        (next) => {
+            setColumnWidths((prev) => {
+                const out = { ...prev };
+                next.forEach((entry, key) => {
+                    if (dataColumnKeys.has(key) && entry.type === "resized") {
+                        out[key] = Math.max(MIN_COLUMN_WIDTH, entry.width);
+                    }
+                });
+                return out;
+            });
         },
-        [columns, dataColumnKeys],
+        [dataColumnKeys],
     );
 
     // Toggle a column between its default width and the collapsed sliver.
@@ -927,6 +938,7 @@ export default function Deemo({
                 ...col,
                 width: width ?? col.width,
                 minWidth: MIN_COLUMN_WIDTH,
+                maxWidth: isCollapsed ? MIN_COLUMN_WIDTH : col.maxWidth,
                 resizable: col.resizable ?? true,
                 headerCellClass: clsx(col.headerCellClass, isCollapsed && "bg-warning/20"),
                 cellClass: (row) =>
@@ -1002,12 +1014,13 @@ export default function Deemo({
     const otherPackageCounts = useMemo(() => {
         const result = {};
         dataRows.forEach((r) => {
-            if (r.machine === null) return; // Unassigned ignores the package filter
+            if (r.machine === null) return;
+            if (isBlockRow(r) || isParked(r)) return;
             if (rowInActiveTab(r)) return;
             result[r.machine] = (result[r.machine] ?? 0) + 1;
         });
         return result;
-    }, [dataRows, activePackageGroup, activePackage]);
+    }, [dataRows, rowInActiveTab, isParked]);
 
     const bakeOvens = useMemo(() => {
         const set = new Set((bakeLots ?? []).map((r) => r.oven_num));
@@ -1043,19 +1056,15 @@ export default function Deemo({
 
     // stub handlers — wire these up once the real bulk actions are defined
     const handleBakeApprove = useCallback(() => {
-        // console.log("Approve bake lots (stub):", Array.from(selectedBakeRows));
     }, [selectedBakeRows]);
 
     const handleBakeReprocess = useCallback(() => {
-        // console.log("Reprocess bake lots (stub):", Array.from(selectedBakeRows));
     }, [selectedBakeRows]);
 
     const handleBakeExport = useCallback(() => {
-        // console.log("Export bake lots (stub):", Array.from(selectedBakeRows));
     }, [selectedBakeRows]);
 
     const handleBakeDelete = useCallback(() => {
-        // console.log("Delete bake lots (stub):", Array.from(selectedBakeRows));
         setSelectedBakeRows(new Set());
     }, [selectedBakeRows]);
 
@@ -1135,22 +1144,58 @@ export default function Deemo({
         const machineSections = machines.flatMap((m) => {
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
+            const canCollapse = !isUnassigned && !isManual;
+            const showAll = canCollapse && expandedMachines.has(m);
 
             if (isManual && activePackage !== "MANUAL" && !isAll) return [];
 
-            const rowsForMachine = dataRows.filter((r) => {
-                if (r.machine !== m || isParked(r)) return false;
-                if (isBlockRow(r)) return true;
-                return rowInActiveTab(r);
+            const machineRows = dataRows.filter((r) => r.machine === m && !isParked(r));
+            const isHidden = (r) => !isBlockRow(r) && !rowInActiveTab(r);
+            const matchingLots = machineRows.filter((r) => !isBlockRow(r) && rowInActiveTab(r)).length;
+
+            // Walk in dataRows order (the local order after a drag is the truth).
+            // Consecutive hidden rows collapse into one display-only row.
+            const shown = [];
+            let run = [];
+            const flushRun = () => {
+                if (!run.length) return;
+                const first = run[0];
+                const last = run[run.length - 1];
+                shown.push({
+                    id: `collapsed-${first.id}`,
+                    __type: "collapsed",
+                    isLocked: true,
+                    machine: m,
+                    firstRowId: first.id,
+                    lastRowId: last.id,
+                    __count: run.length,
+                    __packages: [...new Set(run.map((r) => r.package_name).filter(Boolean))],
+                    // the timeline is contiguous, so first start / last end = min / max
+                    time_start: first.time_start,
+                    time_start_day_offset: first.time_start_day_offset,
+                    time_end: last.time_end,
+                    time_end_day_offset: last.time_end_day_offset,
+                });
+                run = [];
+            };
+
+            machineRows.forEach((r) => {
+                if (!isHidden(r) || showAll) {
+                    flushRun();
+                    shown.push({ ...r, __type: "data" });
+                } else if (canCollapse) {
+                    run.push(r);
+                } // Unassigned / MANUAL: hidden rows are dropped, as before
             });
+            flushRun();
 
-            const lotCount = rowsForMachine.filter((r) => !isBlockRow(r)).length;
+            const dataShown = shown.filter((r) => r.__type === "data");
+            const lotCount = dataShown.filter((r) => !isBlockRow(r)).length;
 
-            // only real machines own nested groups; top-level groups are appended at the very end
-            const parked = isUnassigned ? [] : bucketSections(m, visible);
+            const parked = isUnassigned ? [] : bucketSections(m, showAll ? () => true : visible);
             const parkedCount = parked.filter((r) => r.__type === "data").length;
 
-            if (lotCount === 0 && parkedCount === 0 && !isUnassigned && !isManual) return [];
+            if (matchingLots === 0 && parkedCount === 0 && canCollapse) return [];
 
             const isCollapsed = collapsedMachines.has(m);
 
@@ -1161,7 +1206,7 @@ export default function Deemo({
                 machineId: machinesByName[m]?.id,
                 machineLabel: isUnassigned ? "Unassigned" : isManual ? "MANUAL" : m,
                 platform: machinePlatform.get(m),
-                __rowCount: rowsForMachine.length,
+                __rowCount: dataShown.length,
                 __lotCount: lotCount,
                 otherPackageCount: isUnassigned ? 0 : (otherPackageCounts[m] ?? 0),
                 __isCollapsed: isCollapsed,
@@ -1169,12 +1214,7 @@ export default function Deemo({
             };
 
             if (isCollapsed) return [headerRow];
-
-            return [
-                headerRow,
-                ...rowsForMachine.map((r) => ({ ...r, __type: "data" })),
-                ...parked,
-            ];
+            return [headerRow, ...shown, ...parked];
         });
 
         // Top-level groups (Anticipate, Upcoming, ...) go below every machine.
@@ -1184,6 +1224,7 @@ export default function Deemo({
         machines,
         dataRows,
         rowInActiveTab,
+        expandedMachines,
         isParked,
         machinesByName,
         machinePlatform,
@@ -1191,27 +1232,14 @@ export default function Deemo({
         collapsedMachines,
         bucketsByMachine,
     ]);
-    // console.log("LOG ~ Deemo.jsx:1094 ~ Deemo ~ displayRows:", displayRows);
 
-    // const [entryHistoryData, setEntryHistoryData] = useState([]);
-    // const [entryHistoryLoading, setEntryHistoryLoading] = useState(false);
-    // const entryHistoryModalRef = useRef(null);
+    const collapsedRunsById = useMemo(
+        () => new Map(displayRows.filter((r) => r.__type === "collapsed").map((r) => [r.id, r])),
+        [displayRows],
+    );
+
     const historyModalRef = useRef(null);
     const [historyEntryId, setHistoryEntryId] = useState(null);
-
-    // async function fetchEntryHistory(entryId) {
-    //     setEntryHistoryLoading(true);
-    //     entryHistoryModalRef.current?.showModal();
-    //     try {
-    //         const res = await fetch(route("loading-plan.entries.history", entryId));
-    //         const data = await res.json();
-    //         setEntryHistoryData(data.data); // .data if it's a Laravel paginator response
-    //     } catch (err) {
-    //         console.error("Failed to load entry history", err);
-    //     } finally {
-    //         setEntryHistoryLoading(false);
-    //     }
-    // }
 
     async function handleExport() {
       setIsExporting(true);
@@ -1240,14 +1268,10 @@ export default function Deemo({
     //     }
     // }
 
-    // console.log("DI ~ Deemo.jsx:924 ~ Deemo ~ displayRows:", displayRows);
 
     const stickyMachine = useStickyGroupHeader(displayRows, gridRef);
 
-    // console.log("LOG ~ Deemo.jsx:783 ~ Deemo ~ stickyMachine:", stickyMachine);
     const stickyOven = useStickyGroupHeader(bakeDisplayRows, gridRef);
-
-    // console.log("LOG ~ Deemo.jsx:786 ~ Deemo ~ stickyOven:", stickyOven);
 
     // Separate effect, sole job: clear the highlight 1.5s after it's set.
     // Depends ONLY on highlightedMatch — untouched by columns/displayRows
@@ -1311,15 +1335,15 @@ export default function Deemo({
                     e.preventDefault();
                     handleRedo();
                 }
-                if (e.key === "a") {
-                    e.preventDefault();
-                    setSelectedRows(new Set(dataRowsRef.current.map((r) => r.id)));
+                // if (e.key === "a") {
+                    // e.preventDefault();
+                    // setSelectedRows(new Set(dataRowsRef.current.map((r) => r.id)));
                     // setSelectedRows(
                     //     new Set(
                     //         dataRowsRef.current.filter((r) => r.entry_id).map((r) => r.entry_id),
                     //     ),
                     // );
-                }
+                // }
             }
         };
         window.addEventListener("keydown", onKey);
@@ -1347,15 +1371,20 @@ export default function Deemo({
         handleDragStart,
         handleDragOver,
         handleDragEnd,
+        draggedCount,
         handleDragCancel,
     } = useDragReorder({
+        selectedRows,
+        displayRows,
+        onUnassign: handleBulkDelete,
+        store: useLoadingPlanStore,
         onPark: parkRows, 
         onUnpark: unparkRows,
+        collapsedRunsById,
         dataRows,
         update,
         withUpdating,
         mutate,
-        baseTimes,
         date,
         onReorder,
         onLotTransfer,
@@ -1376,6 +1405,7 @@ export default function Deemo({
                 return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
             if (isBlockRow(row) && !selectedRows.has(row.id))
                 return "block-row-bg border-l-4 border-warning/60";
+            if (row.is_rework && !selectedRows.has(row.id)) return "border-l-4 border-info/60";
             return undefined;
         },
         [readOnly, hoveredRowId, selectedRows],
@@ -1402,11 +1432,15 @@ export default function Deemo({
             onRenameBucket: readOnly ? undefined : renameBucket,
             onDeleteBucket: readOnly ? undefined : deleteBucket,
             isUpdating,
+            expandedMachines,
+            onToggleExpandOthers: toggleExpandedMachine,
         }),
         [
             serverMachines,
             readOnly,
-            handleAddBucket, 
+            expandedMachines,
+            toggleExpandedMachine,
+            handleAddBucket,
             renameBucket,
             deleteBucket,
             machineCapacity,
@@ -1820,7 +1854,7 @@ export default function Deemo({
                                             ),
                                         }}
                                         onRowsChange={readOnly ? undefined : handleRowsChange}
-                                        onColumnResize={handleColumnResize}
+                                        onColumnWidthsChange={handleColumnWidthsChange}
                                         rowKeyGetter={(row) => row.id}
                                         selectedRows={readOnly ? undefined : selectedRows}
                                         onSelectedRowsChange={readOnly ? undefined : setSelectedRows}
@@ -1916,8 +1950,8 @@ export default function Deemo({
                             <DragOverlay>
                                 {!readOnly && draggedRow ? (
                                     <div className="bg-base-200 w-[300px] p-2 rounded shadow-lg text-sm font-semibold">
-                                        {draggedRow.part_name || "Lot"} -{" "}
-                                        {draggedRow.lot_id} - {draggedRow.package_name}
+                                        {draggedRow.part_name || "Lot"} - {draggedRow.lot_id} - {draggedRow.package_name}
+                                        {draggedCount > 1 && <div className="text-xs font-normal opacity-70">+{draggedCount - 1} more</div>}
                                     </div>
                                 ) : null}
                             </DragOverlay>
@@ -1952,6 +1986,7 @@ export default function Deemo({
                             onBulkFieldUpdate={handleBulkFieldUpdate}
                             onTransfer={handleBulkTransfer}
                             onSplitRow={splitRow}
+                            onRework={handleRework}
                             onMergeRows={mergeRows}
                             onDelete={handleBulkDelete}
                             onClearSelection={clearSelection}

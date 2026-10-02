@@ -21,6 +21,7 @@ export default function SelectionToolbar({
     onTransfer,
     onSplitRow,
     onMergeRows,
+    onRework,
     onDelete,
     onClearSelection,
     buckets, 
@@ -28,15 +29,6 @@ export default function SelectionToolbar({
     onUngroup,
     date,
 }) {
-    console.log("LOG ~ SelectionToolbar.jsx:27 ~ SelectionToolbar ~ allData:", allData);
-    console.log("LOG ~ SelectionToolbar.jsx:27 ~ SelectionToolbar ~ selectedIds:", selectedIds);
-    
-    // console.log("🚀 ~ SelectionToolbar ~ allData:", allData);
-    // console.log("🚀 ~ SelectionToolbar ~ selectedIds:", selectedIds);
-    // console.log(
-    //     "🚀 ~ SelectionToolbar ~ selectedIds:",
-    //     allData.filter((r) => selectedIds.has(r._dndId)),
-    // );
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
@@ -66,22 +58,33 @@ export default function SelectionToolbar({
         [allData, selectedIds],
     );
     
-    console.log("LOG ~ SelectionToolbar.jsx:64 ~ SelectionToolbar ~ selectedIds:", selectedIds);
-    console.log("LOG ~ SelectionToolbar.jsx:68 ~ SelectionToolbar ~ selectedRow:", selectedRow);
-
     const selectedRows = useMemo(
         () => allData.filter((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
     );
 
-    const canGroup = selectedRows.length > 0 && selectedRows.every((r) => !isBlockRow(r) && r.lot_id && !r.is_leaked);
+    const reworkedLotIds = useMemo(
+        () => new Set(allData.filter((r) => r.is_rework).map((r) => r.lot_id)),
+        [allData],
+    );
+    
+    const canGroup =
+        selectedRows.length > 0 &&
+        selectedRows.every((r) => !isBlockRow(r) && r.lot_id && !r.is_leaked && !r.is_rework && !reworkedLotIds.has(r.lot_id));
+
+    const hasReworkSelected = selectedRows.some((r) => r.is_rework);
+
+    const canRework =
+        count === 1 && selectedRow && !isBlockRow(selectedRow) && selectedRow.entry_id &&
+        selectedRow.machine !== null && !selectedRow.is_leaked;
+
     const isSelectedRowsUnassigned = useMemo(
         () => selectedRows.some((r) => r.machine === null),
         [selectedRows],
     );
 
     const transferLotIds = useMemo(
-        () => selectedRows.map((r) => r.lot_id).filter(Boolean),
+        () => [...new Set(selectedRows.map((r) => r.lot_id).filter(Boolean))],
         [selectedRows],
     );
 
@@ -239,7 +242,7 @@ export default function SelectionToolbar({
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
                                 count > 1 || isSelectedRowsUnassigned ? "cursor-not-allowed opacity-50" : ""
                             }`}
-                            disabled={count !== 1 || isSelectedRowsUnassigned}
+                            disabled={count !== 1 || isSelectedRowsUnassigned || hasReworkSelected}
                             onClick={() => {
                                 splitModalRef.current?.showModal();
                             }}
@@ -262,12 +265,22 @@ export default function SelectionToolbar({
                                     ? "cursor-not-allowed opacity-50"
                                     : ""
                             }`}
-                            disabled={count !== 2 || isSelectedRowsUnassigned}
+                            disabled={count !== 2 || isSelectedRowsUnassigned || hasReworkSelected}
                             onClick={() => {
                                 mergeModalRef.current?.showModal();
                             }}
                         >
                             <GoGitMerge size={16} /> merge
+                        </button>
+                    </div>
+
+                    <div className="tooltip" data-tip={canRework ? "Duplicate this lot as a rework" : "Select one placed lot to rework"}>
+                        <button
+                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20"
+                            disabled={disabled || !canRework}
+                            onClick={() => onRework(selectedRow)}
+                        >
+                            Rework
                         </button>
                     </div>
 

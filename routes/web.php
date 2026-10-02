@@ -100,6 +100,10 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
         Route::get('current/{machineId}', [MachineCapacityController::class, 'current'])->name('current');
     });
 
+    Route::post('entries/{id}/rework', [LoadingPlanEntryController::class, 'rework'])->name('entries.rework');
+
+    Route::post('entries/bulk-move', [LoadingPlanEntryController::class, 'bulkMove'])->name('bulk-move');
+
     Route::post('buckets/park', [LoadingPlanBucketController::class, 'park'])->name('buckets.park');
     Route::post('buckets/unpark', [LoadingPlanBucketController::class, 'unpark'])->name('buckets.unpark');
     Route::post('buckets', [LoadingPlanBucketController::class, 'store'])->name('buckets.store');
@@ -132,7 +136,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
         ->name('entries.history');
 
     Route::post('bulk-update', [LoadingPlanEntryController::class, 'bulkUpdateField'])->name('bulk-update');
-    Route::post('batch-apply', [LoadingPlanEntryController::class, 'batchApply'])->name('batch-apply');
+    // Route::post('batch-apply', [LoadingPlanEntryController::class, 'batchApply'])->name('batch-apply');
     Route::post('batch-sync', [LoadingPlanEntryController::class, 'batchSync'])->name('batch-sync');
     Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');

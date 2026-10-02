@@ -4,6 +4,72 @@ import dayjs from "dayjs"; // or whatever date lib is already available
 
 const GAP_LABEL = "Gap";
 
+export function timeFieldsFromDatetimes(startAt, endAt, referenceDate) {
+    const ref = dayjs(referenceDate).startOf("day");
+    const part = (v) =>
+        v ? [dayjs(v).format("HH:mm"), dayjs(v).startOf("day").diff(ref, "day")] : [null, 0];
+    const [time_start, time_start_day_offset] = part(startAt);
+    const [time_end, time_end_day_offset] = part(endAt);
+    return {
+        time_start, time_start_day_offset,
+        time_end, time_end_day_offset,
+        time_start_at: startAt ?? null,
+        time_end_at: endAt ?? null,
+    };
+}
+
+// Server-confirmed timings go into the PRESENT state only (skipHistory = true),
+// never into past/future snapshots, since times depend on the row arrangement.
+export function applyAffectedTimings(update, timings, date) {
+    if (!timings?.length) return;
+    const byEntryId = new Map(
+        timings.map((t) => [
+            t.entry_id,
+            {
+                scheduled_date: t.scheduled_date,
+                accu_time: t.accu_time,
+                sequence_order: t.sequence_order,
+                ...timeFieldsFromDatetimes(t.time_start_at, t.time_end_at, date),
+            },
+        ]),
+    );
+
+    update((prev) => {
+        const touched = new Set();
+        const patched = prev.map((r) => {
+            if (r.entry_id == null || !byEntryId.has(r.entry_id)) return r;
+            if (r.machine !== null) touched.add(r.machine);
+            return { ...r, ...byEntryId.get(r.entry_id) };
+        });
+
+        // Put each touched machine's rows back in server order, reusing the
+        // slots those rows already occupy so other machines' rows don't move.
+        touched.forEach((machine) => {
+            const slots = [];
+            const rows = [];
+            patched.forEach((r, i) => {
+                if (r.machine === machine) {
+                    slots.push(i);
+                    rows.push(r);
+                }
+            });
+            
+            const dateOf = (r) => r.scheduled_date ?? date;
+            const seqOf = (r) => r.sequence_order ?? Number.POSITIVE_INFINITY;
+
+            rows.sort((a, b) => {
+                const da = dateOf(a), db = dateOf(b);
+                if (da !== db) return da < db ? -1 : 1;
+                const sa = seqOf(a), sb = seqOf(b);
+                return sa === sb ? 0 : sa < sb ? -1 : 1;
+            });
+            slots.forEach((slot, i) => { patched[slot] = rows[i]; });
+        });
+
+        return patched;
+    }, true);
+}
+
 export function machineBaseDateTime(baseTimes, machine, referenceDate) {
     return baseTimes[machine]
         ? dayjs(baseTimes[machine], "YYYY-MM-DD HH:mm:ss")
@@ -99,46 +165,47 @@ export function applyTimeStartEdit(
     return { rows: next, error: null };
 }
 
-export function recomputeMachine(rows, machine, baseTimes, referenceDate) {
-    const machineRows = rows
-        .filter((r) => r.machine === machine)
-        .sort((a, b) => a.sequence_order - b.sequence_order);
+// deprecated
+// export function recomputeMachine(rows, machine, baseTimes, referenceDate) {
+//     const machineRows = rows
+//         .filter((r) => r.machine === machine)
+//         .sort((a, b) => a.sequence_order - b.sequence_order);
 
-    const baseDateTime = machineBaseDateTime(baseTimes, machine, referenceDate);
+//     const baseDateTime = machineBaseDateTime(baseTimes, machine, referenceDate);
 
-    machineRows.reduce((cursor, row) => {
-        const dur = Number(row.accu_time) || 0;
-        const start = cursor;
-        const end = cursor.add(dur, "minute");
+//     machineRows.reduce((cursor, row) => {
+//         const dur = Number(row.accu_time) || 0;
+//         const start = cursor;
+//         const end = cursor.add(dur, "minute");
 
-        row.time_start = start.format("HH:mm");
-        row.time_start_day_offset = start.startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
-        row.time_end = end.format("HH:mm");
-        row.time_end_day_offset = end.startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+//         row.time_start = start.format("HH:mm");
+//         row.time_start_day_offset = start.startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+//         row.time_end = end.format("HH:mm");
+//         row.time_end_day_offset = end.startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
 
-        return end;
-    }, baseDateTime);
+//         return end;
+//     }, baseDateTime);
 
-    // Rebuild the full array: every other machine's rows stay untouched
-    // and in place; this machine's span gets replaced with the
-    // freshly-sorted, freshly-timed machineRows.
-    const otherRows = [];
-    let insertAt = null;
-    rows.forEach((r) => {
-        if (r.machine === machine) {
-            if (insertAt === null) insertAt = otherRows.length;
-        } else {
-            otherRows.push(r);
-        }
-    });
-    if (insertAt === null) insertAt = otherRows.length; // machine had no rows yet
+//     // Rebuild the full array: every other machine's rows stay untouched
+//     // and in place; this machine's span gets replaced with the
+//     // freshly-sorted, freshly-timed machineRows.
+//     const otherRows = [];
+//     let insertAt = null;
+//     rows.forEach((r) => {
+//         if (r.machine === machine) {
+//             if (insertAt === null) insertAt = otherRows.length;
+//         } else {
+//             otherRows.push(r);
+//         }
+//     });
+//     if (insertAt === null) insertAt = otherRows.length; // machine had no rows yet
 
-    return [
-        ...otherRows.slice(0, insertAt),
-        ...machineRows,
-        ...otherRows.slice(insertAt),
-    ];
-}
+//     return [
+//         ...otherRows.slice(0, insertAt),
+//         ...machineRows,
+//         ...otherRows.slice(insertAt),
+//     ];
+// }
 
 /** CT = Date_Loaded - BE_Starttime in days, 2 dp */
 export function computeCT(row) {

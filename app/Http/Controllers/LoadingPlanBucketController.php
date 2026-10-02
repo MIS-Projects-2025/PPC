@@ -53,14 +53,14 @@ class LoadingPlanBucketController extends Controller
             'prev_lot_id' => 'nullable|string',
             'next_lot_id' => 'nullable|string',
         ]);
-        $items = (new LoadingPlanEntryService())->parkLots(
+        $result = (new LoadingPlanEntryService())->parkLots(
             $d['lot_ids'],
             $d['bucket_id'],
             $d['scheduled_date'],
             $d['prev_lot_id'] ?? null,
             $d['next_lot_id'] ?? null,
         );
-        return response()->json(['items' => $items]);
+        return response()->json($result);
     }
 
     public function unpark(Request $r)

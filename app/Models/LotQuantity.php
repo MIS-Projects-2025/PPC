@@ -21,6 +21,7 @@ class LotQuantity extends Model
         'split_adjustment',
         'merge_adjustment',
         'commit',
+        'rework_seq',
         'recipe_used',
         'recipe_source_id',
         'recipe_status',

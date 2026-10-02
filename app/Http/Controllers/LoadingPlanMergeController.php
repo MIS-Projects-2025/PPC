@@ -55,6 +55,7 @@ class LoadingPlanMergeController extends Controller
                 'merge'  => $result['merge'],
                 'target' => $result['target'],
                 'source' => $result['source'],
+                'affected_timings' => $result['affected_timings'],
             ]);
         } catch (LoadingPlanDateFinalizedException $e) {
             return response()->json([

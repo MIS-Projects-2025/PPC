@@ -34,8 +34,6 @@ export function MachineHeaderBar({
 	machineKey,
     innerRef,
 }) {
-
-    console.log("LOG ~ MachineHeaderBar.jsx:38 ~ MachineHeaderBar ~ row:", row);
 	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
     const machine = row?.machine;
 	const machineID = row?.machineId;
@@ -53,17 +51,18 @@ export function MachineHeaderBar({
         machineCapacity,
         machineTotalDoable,
         machineTotalQuantity,
+		otherPackageCounts,
+		expandedMachines,
+		onToggleExpandOthers
     } = useContext(TableInteractionContext);
 
-	console.log("LOG ~ MachineHeaderBar.jsx:42 ~ MachineHeaderBar ~ serverMachines:", serverMachines);
-	console.log("LOG ~ MachineHeaderBar.jsx:58 ~ MachineHeaderBar ~ machine:", machineID);
+	const otherCount = otherPackageCounts?.[machine] ?? 0;
+	const showingOthers = expandedMachines?.has(machine);
 
 	const machineFactory = serverMachines[machineID]?.factory;
 
 	const factoryColor = getFactoryColor(machineFactory);
 	
-	console.log("LOG ~ MachineHeaderBar.jsx:44 ~ MachineHeaderBar ~ machineFactory:", machineFactory);
-
 	const totalQty = machineTotalQuantity[machine];
 	const totalDoable = machineTotalDoable[machine];
 
@@ -141,6 +140,17 @@ export function MachineHeaderBar({
 					<button type="button" className="btn btn-ghost btn-xs"
 						onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
 						+ Group
+					</button>
+				)}
+
+				{onToggleExpandOthers && !isPseudo && otherCount > 0 && (
+					<button
+						type="button"
+						className={`btn btn-xs ${showingOthers ? "btn-warning" : "btn-ghost"}`}
+						onClick={(e) => { e.stopPropagation(); onToggleExpandOthers(machine); }}
+						title={showingOthers ? "Hide rows outside this tab" : "Show rows outside this tab"}
+					>
+						{showingOthers ? "Hide" : "Show"} +{otherCount} other
 					</button>
 				)}
 

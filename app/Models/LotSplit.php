@@ -14,6 +14,7 @@ class LotSplit extends Model
         'child_lot_id',
         'root_lot_id',
         'scheduled_date',
+        'source_machine',
         'child_qty',
         'split_percentage',
         'target_machine',

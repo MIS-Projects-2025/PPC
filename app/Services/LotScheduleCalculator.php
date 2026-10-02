@@ -134,26 +134,36 @@ class LotScheduleCalculator
      *
      * Assumes $affectedEntry.accu_time is already correct — call recalculate()
      * (or recalculateAndRetime()) before this, never after.
+     * 
+     * 
+     * TODO: we can even just make affectedEntry into just all the entry starting from firts anchor towards the end
      */
     public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, int $machineId): void
     {
         $date = $affectedEntry->scheduled_date->toDateString();
 
-        DB::table('loading_plan_entries')
-            ->where('machine_id', $machineId)
+        $chain = LoadingPlanEntry::where('machine_id', $machineId)
             ->where('scheduled_date', '>=', $affectedEntry->scheduled_date)
+            ->orderBy('scheduled_date')
+            ->orderBy('sequence_order')
+            ->orderBy('id') // tiebreaker
             ->lockForUpdate()
             ->get();
+
+        // Start from the affected entry; skip same-day rows that sort before it
+        $startIdx = $chain->search(fn($e) => $e->id === $affectedEntry->id);
+        if ($startIdx === false) {
+            return;
+        }
+        $chain = $chain->slice($startIdx)->values();
 
         $predecessor = $this->findPredecessor($affectedEntry);
 
         $cursor = ($predecessor && $predecessor->time_end !== null)
             ? $predecessor->time_end
             : $this->getOrCreateDayStart($machineId, $date);
-        // var_dump('predecessor:', $predecessor?->id, $predecessor?->time_end, 'cursor:', $cursor);
-        $current = $affectedEntry;
 
-        while ($current !== null) {
+        foreach ($chain as $current) {
             $newStart = $cursor;
             $newEnd = (clone $cursor)->addMinutes($current->accu_time ?? 0);
 
@@ -162,18 +172,64 @@ class LotScheduleCalculator
                 && $current->time_start->eq($newStart)
                 && $current->time_end->eq($newEnd);
 
-            if ($unchanged) {
-                break;
+            if (!$unchanged) {
+                $current->time_start = $newStart;
+                $current->time_end = $newEnd;
+                $current->save();
             }
 
-            $current->time_start = $newStart;
-            $current->time_end = $newEnd;
-            $current->save();
-
             $cursor = $newEnd;
-            $current = $this->findNextInSequence($current);
         }
     }
+
+
+    // Stale
+    // public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, int $machineId): void
+    // {
+    //     $date = $affectedEntry->scheduled_date->toDateString();
+
+    //     DB::table('loading_plan_entries')
+    //         ->where('machine_id', $machineId)
+    //         ->where('scheduled_date', '>=', $affectedEntry->scheduled_date)
+    //         ->lockForUpdate()
+    //         ->get();
+
+    //     $predecessor = $this->findPredecessor($affectedEntry);
+    //     log_entities($predecessor);
+
+    //     $cursor = ($predecessor && $predecessor->time_end !== null)
+    //         ? $predecessor->time_end
+    //         : $this->getOrCreateDayStart($machineId, $date);
+    //     // var_dump('predecessor:', $predecessor?->id, $predecessor?->time_end, 'cursor:', $cursor);
+    //     $current = $affectedEntry;
+    //     log_entities($current);
+
+    //     while ($current !== null) {
+    //         $newStart = $cursor;
+    //         $newEnd = (clone $cursor)->addMinutes($current->accu_time ?? 0);
+
+    //         $unchanged = $current->time_start !== null
+    //             && $current->time_end !== null
+    //             && $current->time_start->eq($newStart)
+    //             && $current->time_end->eq($newEnd);
+
+    //         // var_dump("LOG ~ LotScheduleCalculator.php:164 ~ LotScheduleCalculator ~ recomputeTimeStartAndEnd ~ $unchanged:", $unchanged);
+
+    //         if ($unchanged) {
+    //             $cursor = $newEnd;
+    //             $current = $this->findNextInSequence($current);
+    //             continue;
+    //         }
+
+    //         $current->time_start = $newStart;
+    //         $current->time_end = $newEnd;
+    //         $current->save();
+
+    //         $cursor = $newEnd;
+    //         $current = $this->findNextInSequence($current);
+    //         log_entities($current);
+    //     }
+    // }
 
     /**
      * The row immediately before $entry on the same machine, chronologically —
@@ -200,15 +256,17 @@ class LotScheduleCalculator
      * The row immediately after $entry on the same machine, chronologically —
      * may be on a later scheduled_date if $entry is the last row of its session.
      * Returns null if $entry is currently the last row planned for this machine.
+     * 
+     * note: stale recmputeTimeStartAndEnd() get all entry once, this is now unused.
      */
-    private function findNextInSequence(LoadingPlanEntry $entry): ?LoadingPlanEntry
+    private function findNextInSequence(LoadingPlanEntry $beforeEntry): ?LoadingPlanEntry
     {
-        return LoadingPlanEntry::where('machine_id', $entry->machine_id)
-            ->where(function ($q) use ($entry) {
-                $q->where('scheduled_date', '>', $entry->scheduled_date)
-                    ->orWhere(function ($q2) use ($entry) {
-                        $q2->where('scheduled_date', $entry->scheduled_date)
-                            ->where('sequence_order', '>', $entry->sequence_order);
+        return LoadingPlanEntry::where('machine_id', $beforeEntry->machine_id)
+            ->where(function ($q) use ($beforeEntry) {
+                $q->where('scheduled_date', '>', $beforeEntry->scheduled_date)
+                    ->orWhere(function ($q2) use ($beforeEntry) {
+                        $q2->where('scheduled_date', $beforeEntry->scheduled_date)
+                            ->where('sequence_order', '>', $beforeEntry->sequence_order);
                     });
             })
             ->orderBy('scheduled_date')

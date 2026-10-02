@@ -70,7 +70,7 @@ function MachineChipButton({ machine, selected, onClick, isPseudo, transferRow }
     const pct = hasCapacity ? Math.min((doable / CAPACITY) * 100, 100) : 0;
     const isExceeded = hasCapacity && doable > CAPACITY;
     const isWarning = hasCapacity && !isExceeded && pct > 85;
-    const isIncompatible = inTransferMode && transferRow?.tier === 5;
+    const isIncompatible = inTransferMode && (transferRow?.tier ?? 5) === 5;
 
     const barColor = isExceeded ? "bg-error" : isWarning ? "bg-warning" : "bg-lime-400";
 
@@ -78,11 +78,10 @@ function MachineChipButton({ machine, selected, onClick, isPseudo, transferRow }
         <button
             type="button"
             onClick={() => onClick(machine)}
-            disabled={isIncompatible}
-            title={hasCapacity ? undefined : machine ?? "Unassigned"}
+            title={isIncompatible ? `${machine} is incompatible` : hasCapacity ? undefined : machine ?? "Unassigned"}
             className={`relative w-full overflow-hidden rounded-md ${MachineChipClasses(
                 selected ? "active" : "idle",
-            )} ${isIncompatible ? "opacity-40 cursor-not-allowed" : "cursor-pointer"} ${
+            )} cursor-pointer ${isIncompatible ? "opacity-40" : ""} ${
                 isExceeded ? "ring-1 ring-error ring-inset" : ""
             }`}
         >
@@ -200,6 +199,11 @@ export default function MachineSelectionGrid({
         return groupByPlatform(filteredMachines, machinePlatform);
     }, [filteredMachines, machinePlatform, inTransferMode, transferCandidates]);
 
+    const selectedTier =
+        inTransferMode && !isPseudoMachine(selectedMachine)
+            ? (transferCandidates[selectedMachine]?.tier ?? 5)
+            : null;
+
     if (inTransferMode && transferLoading) {
         return <div className="text-center text-xs text-base-content/40 py-8">Checking compatibility…</div>;
     }
@@ -214,6 +218,15 @@ export default function MachineSelectionGrid({
                 onChange={(e) => setQuery(e.target.value)}
                 className="input input-sm input-bordered w-full mb-3"
             />
+
+            {selectedTier === 5 && (
+                <div role="alert" className="alert alert-warning alert-soft py-2 px-3 mb-3 text-xs">
+                    <span>
+                        <span className="font-bold">{selectedMachine}</span> is incompatible with the lots being
+                        transferred. You can still assign it. Or if you think the rule is wrong, you can edit it here.
+                    </span>
+                </div>
+            )}
 
             {pseudoMachines.length > 0 && (
                 <div className="mb-3 pb-3 border-b border-dashed border-base-content/10">
@@ -260,7 +273,7 @@ export default function MachineSelectionGrid({
                                             machine={m}
                                             selected={selectedMachine === m}
                                             onClick={handleSelect}
-                                            transferRow={inTransferMode ? transferCandidates[m] : undefined}
+                                            transferRow={inTransferMode ? (transferCandidates[m] ?? null) : undefined}
                                         />
                                     ))}
                                 </div>

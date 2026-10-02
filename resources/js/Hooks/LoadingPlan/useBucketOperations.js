@@ -1,5 +1,5 @@
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
-import { recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
+import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { useCallback } from "react";
 
 const GAP = 1000;
@@ -29,8 +29,7 @@ function optimisticPositions(rows, bucketId, lotIds, prevLotId, nextLotId) {
 }
 
 export function useBucketOperations({
-    store, dataRows, selectedRows, update, withUpdating, mutate, toast,
-    baseTimes, date, selectedLocation, setIsDirty, clearSelection, setBucketList,
+    store, dataRows, selectedRows, update, withUpdating, mutate, toast, date, selectedLocation, setIsDirty, clearSelection, setBucketList,
 }) {
     const parkRows = useCallback(
         (rows, bucketId, { prevLotId = null, nextLotId = null } = {}) => {
@@ -46,7 +45,6 @@ export function useBucketOperations({
 
             const prevSnapshot = dataRows;
             const positions = optimisticPositions(dataRows, bucketId, lotIds, prevLotId, nextLotId);
-            const vacated = new Set(lots.map((r) => r.machine).filter((m) => m !== null));
 
             const next = dataRows.map((r) =>
                 rowIds.has(r.id)
@@ -55,6 +53,8 @@ export function useBucketOperations({
                         machine: null, bucket_id: bucketId, bucket_position: positions[r.lot_id],
                         entry_id: null, lock_version: null, sequence_order: null,
                         time_start: null, time_end: null,
+                        time_start_day_offset: 0,
+                        time_end_day_offset: 0,
                         status: null, tag: null, remarks: "", is_manual_expedite: false,
                     }
                     : r,
@@ -71,7 +71,6 @@ export function useBucketOperations({
             //           }
             //         : r,
             // );
-            if (baseTimes) vacated.forEach((m) => recomputeMachine(next, m, baseTimes, date));
 
             store.getState().reset(next); // wipes undo history on purpose
             setIsDirty(true);
@@ -82,13 +81,14 @@ export function useBucketOperations({
                     body: { bucket_id: bucketId, lot_ids: lotIds, scheduled_date: date, prev_lot_id: prevLotId, next_lot_id: nextLotId },
                 }),
             )
-                .then(({ items }) => {
+                .then(({ items, affected_timings }) => {
                     const byLot = new Map(items.map((i) => [i.lot_id, i]));
                     update((prev) => prev.map((r) => (
                         rowIds.has(r.id)
                             ? { ...r, bucket_position: byLot.get(r.lot_id)?.bucket_position ?? r.bucket_position }
                             : r
                     )), true);
+                    applyAffectedTimings(update, affected_timings, date);
                 })
                 .catch((err) => {
                     console.error("Park failed:", err);
@@ -96,7 +96,7 @@ export function useBucketOperations({
                     toast?.error?.(err?.message ?? "Couldn't move to group — reverted.");
                 });
         },
-        [store, dataRows, update, withUpdating, mutate, toast, baseTimes, date, setIsDirty, clearSelection],
+        [store, dataRows, update, withUpdating, mutate, toast, date, setIsDirty, clearSelection],
     );
 
     const unparkRows = useCallback(

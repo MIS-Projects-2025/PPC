@@ -11,6 +11,8 @@ class LotMerge extends Model
     protected $fillable = [
         'target_lot_id',
         'source_lot_id',
+        'source_machine',
+        'target_machine',
         'scheduled_date',
         'transferred_qty',
         'created_by',

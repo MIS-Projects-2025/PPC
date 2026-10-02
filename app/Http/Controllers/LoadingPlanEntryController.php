@@ -46,6 +46,28 @@ class LoadingPlanEntryController extends Controller
         }
     }
 
+    public function rework(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'machine'         => 'nullable|string',
+            'before_entry_id' => 'nullable|integer',
+            'after_entry_id'  => 'nullable|integer',
+        ]);
+
+        try {
+            return response()->json($this->service->reworkEntry(
+                $id,
+                $data['machine'] ?? null,
+                $data['before_entry_id'] ?? null,
+                $data['after_entry_id'] ?? null
+            ), 201);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
     public function transfer(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -72,22 +94,32 @@ class LoadingPlanEntryController extends Controller
                 $data['entry_id'] ?? null,
             );
 
-            $this->service->deleteEntry($entry->id, $entry->getMachineName());
+            if ($entry->rework_seq > 0) {
+                return response()->json([
+                    'error'   => 'bad_request',
+                    'message' => 'Rework rows cannot be unassigned — delete the row instead.',
+                ], 422);
+            }
 
-            return response()->json($entry->fresh());
+            $timings = $this->service->deleteEntry($entry->id, $entry->getMachineName());
+            return response()->json([...$entry->fresh()->toArray(), 'affected_timings' => $timings]);
         }
 
-        $entry = $this->service->transferEntry(
-            $data['entry_type'],
-            $data['entry_id'] ?? null,
-            $data['target_machine'],
-            $data['before_entry_id'] ?? null,
-            $data['after_entry_id'] ?? null,
-            $data['lot_id'] ?? null,
-            $data['scheduled_date'] ?? null,
-        );
+        try {
+            $entry = $this->service->transferEntry(
+                $data['entry_type'],
+                $data['entry_id'] ?? null,
+                $data['target_machine'],
+                $data['before_entry_id'] ?? null,
+                $data['after_entry_id'] ?? null,
+                $data['lot_id'] ?? null,
+                $data['scheduled_date'] ?? null,
+            );
 
-        return response()->json($entry);
+            return response()->json($entry);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        }
     }
 
     public function bulkTransfer(Request $request): JsonResponse
@@ -96,6 +128,8 @@ class LoadingPlanEntryController extends Controller
             'lot_ids'            => 'nullable|array',
             'lot_ids.*'          => 'string',
             'block_entry_ids'    => 'nullable|array',
+            'entry_ids' => 'nullable|array',
+            'entry_ids.*' => 'integer',
             'block_entry_ids.*'  => 'integer',
             'target_machine'     => 'nullable|string',
             'scheduled_date'     => 'required|date',
@@ -107,6 +141,7 @@ class LoadingPlanEntryController extends Controller
                 $data['block_entry_ids'] ?? [],
                 $data['target_machine'],
                 $data['scheduled_date'],
+                $data['entry_ids'] ?? [],
             );
 
             return response()->json($updated);
@@ -167,6 +202,33 @@ class LoadingPlanEntryController extends Controller
         return response()->json($entry, 201);
     }
 
+    public function bulkMove(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'items'            => 'required|array|min:1',
+            'items.*.entry_id' => 'required_without:items.*.lot_id|nullable|integer',
+            'items.*.lot_id'   => 'required_without:items.*.entry_id|nullable|string',
+            'target_machine'   => 'required|string',
+            'before_entry_id'  => 'nullable|integer',
+            'after_entry_id'   => 'nullable|integer',
+            'scheduled_date'   => 'required|date',
+        ]);
+
+        try {
+            return response()->json($this->service->bulkMove(
+                $data['items'],
+                $data['target_machine'],
+                $data['before_entry_id'] ?? null,
+                $data['after_entry_id'] ?? null,
+                $data['scheduled_date'],
+            ));
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
     public function destroy(Request $request, int $id): JsonResponse
     {
         $data = $request->validate([
@@ -174,9 +236,8 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $this->service->deleteEntry($id, $data['machine'] ?? null);
-
-        return response()->json(['id' => $id]);
+        $timings = $this->service->deleteEntry($id, $data['machine'] ?? null);
+        return response()->json(['id' => $id, 'affected_timings' => $timings]);
     }
 
     public function bulkDestroy(Request $request): JsonResponse
@@ -228,7 +289,16 @@ class LoadingPlanEntryController extends Controller
                 $entry = $this->service->editField($id, $fields, $data['lock_version']);
             }
 
-            return response()->json($entry);
+            $payload = $entry->toArray();
+
+            if (array_intersect(['accu_time', 'qty'], array_keys($fields)) && $entry->machine_id !== null) {
+                $payload['affected_timings'] = LoadingPlanEntryService::timingsFor(
+                    [$entry->machine_id],
+                    $entry->scheduled_date->toDateString(),
+                );
+            }
+
+            return response()->json($payload);
         } catch (StaleWriteException $e) {
             return response()->json([
                 'error'   => 'stale',
@@ -312,49 +382,49 @@ class LoadingPlanEntryController extends Controller
         }
     }
 
-    public function batchApply(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'operations'                   => 'required|array|min:1',
-            'operations.*.fields'          => 'nullable|array',
-            'operations.*.type'            => 'required|in:move,transfer,create_lot,create_block,delete,update_field,split,revert_split,unrevert_split',
-            'operations.*.entry_type'      => 'nullable|string',
-            'operations.*.before_entry_id' => 'nullable|integer',
-            'operations.*.after_entry_id'  => 'nullable|integer',
-            'operations.*.machine'         => 'nullable|string',
-            'operations.*.label'           => 'nullable|string',
-            'operations.*.duration'        => 'nullable|integer',
-            'operations.*.target_machine'  => 'nullable|string',
-            'operations.*.lot_id'          => 'nullable|string',
-            'operations.*.entry_id'        => 'nullable|integer',
-            'operations.*.lock_version'    => 'nullable|integer',
-            'operations.*.parent_lot_id'   => 'nullable|string',
-            'operations.*.child_qty'       => 'nullable|integer|min:1',
-            'operations.*.child_lot_id'    => 'nullable|string',
-            'operations.*.split_id'        => 'nullable|integer',
-            'scheduled_date'                => 'nullable|date',
-        ]);
+    // public function batchApply(Request $request): JsonResponse
+    // {
+    //     $data = $request->validate([
+    //         'operations'                   => 'required|array|min:1',
+    //         'operations.*.fields'          => 'nullable|array',
+    //         'operations.*.type'            => 'required|in:move,transfer,rework,create_lot,create_block,delete,update_field,split,revert_split,unrevert_split',
+    //         'operations.*.entry_type'      => 'nullable|string',
+    //         'operations.*.before_entry_id' => 'nullable|integer',
+    //         'operations.*.after_entry_id'  => 'nullable|integer',
+    //         'operations.*.machine'         => 'nullable|string',
+    //         'operations.*.label'           => 'nullable|string',
+    //         'operations.*.duration'        => 'nullable|integer',
+    //         'operations.*.target_machine'  => 'nullable|string',
+    //         'operations.*.lot_id'          => 'nullable|string',
+    //         'operations.*.entry_id'        => 'nullable|integer',
+    //         'operations.*.lock_version'    => 'nullable|integer',
+    //         'operations.*.parent_lot_id'   => 'nullable|string',
+    //         'operations.*.child_qty'       => 'nullable|integer|min:1',
+    //         'operations.*.child_lot_id'    => 'nullable|string',
+    //         'operations.*.split_id'        => 'nullable|integer',
+    //         'scheduled_date'                => 'nullable|date',
+    //     ]);
 
-        try {
-            $results = $this->service->batchApply($data['operations'], $data['scheduled_date']);
-            return response()->json(['results' => $results]);
-        } catch (\App\Exceptions\InvalidSplitException $e) {
-            return response()->json([
-                'error'   => 'invalid_split',
-                'message' => $e->getMessage(),
-            ], 422);
-        } catch (LoadingPlanDateFinalizedException $e) {
-            return response()->json([
-                'error'          => 'finalized',
-                'message'        => $e->getMessage(),
-                'scheduled_date' => $e->scheduledDate,
-            ], 422);
-        } catch (\Throwable $e) {
-            Log::error('batchApply failed', ['exception' => $e]);
-            return response()->json([
-                'error'   => 'server_error',
-                'message' => 'Could not apply the batch of changes. Nothing was saved.',
-            ], 500);
-        }
-    }
+    //     try {
+    //         $results = $this->service->batchApply($data['operations'], $data['scheduled_date']);
+    //         return response()->json(['results' => $results]);
+    //     } catch (\App\Exceptions\InvalidSplitException $e) {
+    //         return response()->json([
+    //             'error'   => 'invalid_split',
+    //             'message' => $e->getMessage(),
+    //         ], 422);
+    //     } catch (LoadingPlanDateFinalizedException $e) {
+    //         return response()->json([
+    //             'error'          => 'finalized',
+    //             'message'        => $e->getMessage(),
+    //             'scheduled_date' => $e->scheduledDate,
+    //         ], 422);
+    //     } catch (\Throwable $e) {
+    //         Log::error('batchApply failed', ['exception' => $e]);
+    //         return response()->json([
+    //             'error'   => 'server_error',
+    //             'message' => 'Could not apply the batch of changes. Nothing was saved.',
+    //         ], 500);
+    //     }
+    // }
 }

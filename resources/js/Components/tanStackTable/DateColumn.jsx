@@ -24,8 +24,6 @@ const DateCell = React.memo(function DateCell({
 		dateFormat: "yyyy-MM-dd HH:mm",
 	},
 }) {
-	// console.log("🚀 ~ DateCell ~ value:", value);
-
 	const date = React.useMemo(
 		() => (value ? normalizeInputValue(value) : ""),
 		[value],

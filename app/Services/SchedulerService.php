@@ -1318,7 +1318,8 @@ class SchedulerService
             ->whereBetween('time_start', [$windowStart, $windowEnd])
             ->join('lot_quantities', function ($join) {
                 $join->on('lot_quantities.lot_id', '=', 'loading_plan_entries.lot_id')
-                    ->on('lot_quantities.scheduled_date', '=', 'loading_plan_entries.scheduled_date');
+                    ->on('lot_quantities.scheduled_date', '=', 'loading_plan_entries.scheduled_date')
+                    ->on('lot_quantities.rework_seq', '=', 'loading_plan_entries.rework_seq');
             })
             ->groupBy('loading_plan_entries.machine_id')
             ->pluck(DB::raw('SUM(lot_quantities.commit) as total_commit'), 'loading_plan_entries.machine_id');
@@ -1358,6 +1359,7 @@ class SchedulerService
             ->with('lotQuantity')
             ->whereIn('lot_id', $lotIds)
             ->whereDate('scheduled_date', $date)
+            ->where('rework_seq', 0)
             ->where('entry_type', 'lot')
             ->get();
 

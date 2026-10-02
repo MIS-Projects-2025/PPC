@@ -46,6 +46,8 @@ class LoadingPlanService
         'tag',
         'lock_version',
         'accu_time',
+        'rework_seq',
+        'rework_of_entry_id',
         'is_pickup'
     ];
 
@@ -227,6 +229,7 @@ class LoadingPlanService
         $unassignedTodayWipLotQuantities = LotQuantity::with('packageListEntry')
             ->whereIn('lot_id', $unassignedLotIds)
             ->where('scheduled_date', $this->date)
+            ->where('rework_seq', 0)
             ->get()
             ->keyBy('lot_id');
 
@@ -424,6 +427,8 @@ class LoadingPlanService
         $doableStatus = $quantity?->recipe_status ?? 'unknown';
         $capacityUph = $quantity?->capacity_uph_snapshot;
 
+        $reworkSeq = (int) ($entry?->rework_seq ?? 0);
+
         $doableRecipeSource = ($quantity && $quantity->recipe_source_id) ? [
             'id'          => $quantity->recipe_source_id,
             'devicename'  => $quantity->part_name,
@@ -566,10 +571,14 @@ class LoadingPlanService
             'item'                       => $entry?->sequence_order,
             'time_start'                 => $startTime?->format('H:i'),
             'time_end'                   => $endTime?->format('H:i'),
+            'time_start_at'              => $startTime?->format('Y-m-d H:i:s'),
+            'time_end_at'                => $endTime?->format('Y-m-d H:i:s'),
 
             'remarks'                    => $entry?->remarks ?? null,
             'tag'                        => $entry?->tag ?? null,
             'lock_version'               => $entry?->lock_version ?? null,
+            'bucket_id'                  => null,
+            'bucket_position'            => null,
 
             // Capacity & Recipe Metadata
             'accu_time'                 => $accuTime,
@@ -584,6 +593,10 @@ class LoadingPlanService
             'osl'                        => $formulas->osl,
             'cycle_time_exceed'          => $formulas->cycleTimeExceed,
             'cycle_time_exceed_residual' => $formulas->cycleTimeExceedResidual,
+
+            'rework_seq'                 => $reworkSeq,
+            'is_rework'                  => $reworkSeq > 0,
+            'rework_of_entry_id'         => $entry?->rework_of_entry_id ?? null,
 
             // Split & Merge Metadata
             'split_info' => LotSplitService::buildSplitMeta(
@@ -608,11 +621,11 @@ class LoadingPlanService
 
         return [
             'lot_id'       => $wip->Lot_Id,
-            'part_name'    => $wip->Part_Name,    // TODO confirm column name
-            'package_name' => $wip->Package_Name, // TODO confirm column name
-            'qty'          => $wip->Qty,           // TODO confirm column name
-            'lead_count'   => $wip->Lead_Count,    // TODO confirm column name
-            'body_size'    => $wip->Body_Size,     // TODO confirm column name
+            'part_name'    => $wip->Part_Name,
+            'package_name' => $wip->Package_Name,
+            'qty'          => $wip->Qty,
+            'lead_count'   => $wip->Lead_Count,
+            'body_size'    => $wip->Body_Size,
             'is_expedite'  => false,               // TODO no source identified — see below
         ];
     }
@@ -642,8 +655,13 @@ class LoadingPlanService
             ? $entry->lot_id
             : data_get($entryArray, 'lot_id');
 
+        $reworkSeq = $entry instanceof LoadingPlanEntry
+            ? (int) $entry->rework_seq
+            : (int) data_get($entryArray, 'rework_seq', 0);
+
         $quantity = LotQuantity::where('lot_id', $lotId)
             ->where('scheduled_date', $entryDate)
+            ->where('rework_seq', $reworkSeq)
             ->first();
 
         $rootWip = CustomerDataWip::query()

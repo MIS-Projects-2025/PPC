@@ -1,6 +1,7 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import { forwardRef, useContext } from "react";
 import { GoRepoForked } from "react-icons/go";
+import LotEndpoint from "./LotEndpoint";
 
 function formatDate(dateStr) {
     if (!dateStr) return "—";
@@ -27,7 +28,6 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
 ) {
     const { isUpdating = null } = useContext(TableActionsContext);
 
-    // console.log("🚀 ~ SplitHistoryModal ~ history:", history);
     return (
         <dialog ref={ref} id="split_history_modal" className="modal">
             <div className="modal-box bg-base-300 w-11/12 max-w-2xl max-h-[80vh] flex flex-col">
@@ -72,17 +72,15 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
                                         }`}
                                     >
                                         <div className="flex items-center justify-between mb-2">
-                                            <div className="flex items-center gap-2 text-sm">
-                                                <span className="font-mono">
-                                                    {split.parentLotId}
-                                                </span>
-                                                <GoRepoForked
-                                                    size={12}
-                                                    className="text-base-content/30"
+                                            <div className="flex items-center gap-3">
+                                                <LotEndpoint lotId={split.fromLotId} machine={split.fromMachine} />
+                                                <GoRepoForked size={12} className="text-base-content/30" />
+                                                <LotEndpoint 
+                                                    lotId={split.toLotId} 
+                                                    machine={split.toMachine} 
+                                                    className="text-primary"
+                                                    approx={!split.snapshotExact}
                                                 />
-                                                <span className="font-mono text-primary">
-                                                    {split.childLotId}
-                                                </span>
                                             </div>
 
                                             {split.revertedAt && (
@@ -120,13 +118,13 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
 
                                         {(isParent || isChild) && (
                                             <div className="mb-2">
-                                                {isParent && (
+                                                {isCurrentParent && (
                                                     <span className="badge badge-sm badge-primary badge-outline font-mono">
                                                         This lot is PARENT of{" "}
                                                         {split.childLotId}
                                                     </span>
                                                 )}
-                                                {isChild && (
+                                                {isCurrentChild && (
                                                     <span className="badge badge-sm badge-secondary badge-outline font-mono">
                                                         This lot is CHILD of{" "}
                                                         {split.parentLotId}
@@ -195,7 +193,7 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
                                         )}
 
                                         {split.revertedAt && (
-                                            <div className="mt-2 pt-2 border-t border-base-content/10 text-xs text-base-content/40">
+                                            <div className="pt-2 border-t border-base-content/10 text-xs text-base-content/40">
                                                 Reverted{" "}
                                                 {formatDateTime(
                                                     split.revertedAt,

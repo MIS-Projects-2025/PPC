@@ -3,7 +3,6 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use App\Services\LotScheduleCalculator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -16,6 +15,7 @@ class LoadingPlanEntry extends Model
     use HasFactory;
     use Compoships;
     protected $table = 'loading_plan_entries';
+    protected $appends = ['is_rework'];
 
     protected $fillable = [
         'entry_type',
@@ -39,17 +39,28 @@ class LoadingPlanEntry extends Model
         'resulting_setup_state_id',
         'operation_type',
         'matched_rule_id',
-        'is_pickup'
+        'rework_seq',
+        'rework_of_entry_id',
+        'is_pickup',
+        'is_rework',
+        'is_scm',
     ];
 
     protected $casts = [
         'scheduled_date' => 'date',
         'is_pickup'      => 'boolean',
+        'is_rework'      => 'boolean',
+        'is_scm'         => 'boolean',
         'sequence_order' => 'float',
         'finalized_at'   => 'datetime',
         'time_start'     => 'datetime',
         'time_end'       => 'datetime',
     ];
+
+    public function getIsReworkAttribute(): bool
+    {
+        return ($this->rework_seq ?? 0) > 0;
+    }
 
     /**
      * Relationship to the machine record (lives in qdn_db).
@@ -61,7 +72,11 @@ class LoadingPlanEntry extends Model
 
     public function lotQuantity()
     {
-        return $this->hasOne(LotQuantity::class, ['lot_id', 'scheduled_date'], ['lot_id', 'scheduled_date']);
+        return $this->hasOne(
+            LotQuantity::class,
+            ['lot_id', 'scheduled_date', 'rework_seq'],
+            ['lot_id', 'scheduled_date', 'rework_seq']
+        );
     }
     // public function lotQuantity(): HasOne
     // {
@@ -79,6 +94,7 @@ class LoadingPlanEntry extends Model
     {
         return LotQuantity::where('lot_id', $this->lot_id)
             ->where('scheduled_date', $this->scheduled_date)
+            ->where('rework_seq', $this->rework_seq ?? 0)
             ->first();
     }
 

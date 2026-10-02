@@ -226,6 +226,7 @@ class LoadingPlanController extends Controller
                     ->pluck('lot_id');
                 $relevantLotIds = $wipRows->pluck('Lot_Id')->merge($entryLotIds)->filter()->unique();
                 $lotQuantities = LotQuantity::whereIn('scheduled_date', [$date, $previousDate])
+                    ->where('rework_seq', 0)
                     ->whereIn('lot_id', $relevantLotIds)
                     ->get()
                     ->keyBy('lot_id');
@@ -388,7 +389,7 @@ class LoadingPlanController extends Controller
         ]);
 
         return $rows->map(function ($row) use ($items) {
-            $item = (!($row['is_leaked'] ?? false) && $row['lot_id'])
+            $item = (!($row['is_leaked'] ?? false) && $row['lot_id'] && !($row['rework_seq'] ?? 0))
                 ? $items->get($row['lot_id'])
                 : null;
             $row['bucket_id'] = $item?->bucket_id;

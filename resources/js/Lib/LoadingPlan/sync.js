@@ -1,4 +1,5 @@
 import { isBlockRow } from "./helpers";
+import { applyAffectedTimings } from "./loadingPlanSchedule";
 
 /**
  * Syncs additions and field/position edits only. Deletions are a
@@ -62,7 +63,7 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
     return mutate(route("loading-plan.batch-sync"), {
         body: { rows, order, deleted: deletedEntryIds, scheduled_date: date },
     })
-        .then(({ results }) => {
+        .then(({ results, affected_timings }) => {
             // structural removal (deletions) still only concerns `present` —
             // a deleted row shouldn't be resurrected by an unrelated undo either,
             // but that's a separate, pre-existing concern from this bug
@@ -73,11 +74,14 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
             const patches = affected
                 .map((r, idx) => {
                     const result = results[idx];
-                    return result ? { dndId: r._dndId, fields: { ...result, id: r._dndId ? undefined : result.id } } : null;
+                    if (!result) return null;
+                    const { id, time_start, time_end, time_start_at, time_end_at, sequence_order, ...stable } = result;
+                    return { dndId: r._dndId, fields: stable };
                 })
                 .filter(Boolean);
 
             syncServerFields?.(patches);
+            applyAffectedTimings(update, affected_timings, date);
         })
         .catch((err) => {
             // console.log("LOG ~ sync.js:83 ~ syncDeemoToServer ~ err:", err);

@@ -1,65 +1,99 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import React, { useContext } from "react";
 
-export function LotIdCell({ lotId, isPickup, splitInfo, mergeInfo, isPlannedYesterday }) {
+export function LotIdCell({
+    lotId,
+    isPickup,
+    splitInfo,
+    mergeInfo,
+    isPlannedYesterday,
+    isRework,
+    reworkSeq,
+}) {
+    const {
+        handleShowHistory = noop,
+        handleShowMergeHistory = noop,
+    } = useContext(TableActionsContext);
 
-    console.log("LOG ~ LotIdCell.jsx:6 ~ LotIdCell ~ isPickup:", isPickup);
-
-    console.log("LOG ~ LotIdCell.jsx:7 ~ LotIdCell ~ splitInfo:", splitInfo);
-    const { handleShowHistory = noop, handleShowMergeHistory = noop } =
-        useContext(TableActionsContext);
+    const badges = (
+        <>
+            {splitInfo && (
+                <SplitBadge
+                    splitInfo={splitInfo}
+                    handleShowHistory={handleShowHistory}
+                />
+            )}
+            {mergeInfo && (
+                <MergeBadge
+                    mergeInfo={mergeInfo}
+                    handleShowMergeHistory={handleShowMergeHistory}
+                />
+            )}
+        </>
+    );
 
     if (!splitInfo && !mergeInfo) {
         return (
             <span className="font-mono">
-                {isPlannedYesterday && (
-                    <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
-                        past
-                    </span>
-                )}
-                {isPickup && (
-                    <span className="text-xs font-semibold rounded-md bg-accent/50 px-1 mr-1">
-                        PICKUP
-                    </span>
-                )}
-                {lotId}
+                <LotLabel
+                    lotId={lotId}
+                    isPickup={isPickup}
+                    isPlannedYesterday={isPlannedYesterday}
+                    isRework={isRework}
+                    reworkSeq={reworkSeq}
+                />
             </span>
         );
     }
 
     return (
-        <span className="flex items-center justify-between gap-1.5 min-w-0 width-full">
+        <span className="flex items-center justify-between gap-1.5 min-w-0 w-full">
             <div className="font-mono truncate min-w-0">
-                {isPlannedYesterday && (
-                    <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
-                        past
-                    </span>
-                )}
-                {isPickup && (
-                    <span className="text-xs rounded-md bg-accent/50 px-1 mr-1">
-                        PICKUP
-                    </span>
-                )}
-                <span className="truncate">{lotId}</span>
+                <LotLabel
+                    lotId={lotId}
+                    isPickup={isPickup}
+                    isPlannedYesterday={isPlannedYesterday}
+                    isRework={isRework}
+                    reworkSeq={reworkSeq}
+                />
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
-                {splitInfo && (
-                    <SplitBadge
-                        lotId={lotId}
-                        splitInfo={splitInfo}
-                        handleShowHistory={handleShowHistory}
-                    />
-                )}
-                {mergeInfo && (
-                    <MergeBadge
-                        lotId={lotId}
-                        mergeInfo={mergeInfo}
-                        handleShowMergeHistory={handleShowMergeHistory}
-                    />
-                )}
+                {badges}
             </div>
         </span>
+    );
+}
+
+function LotLabel({
+    lotId,
+    isPickup,
+    isPlannedYesterday,
+    isRework,
+    reworkSeq,
+}) {
+    return (
+        <>
+            {isPlannedYesterday && (
+                <span className="text-xs rounded-md bg-secondary/50 px-1 mr-1">
+                    past
+                </span>
+            )}
+
+            {isPickup && (
+                <span className="text-xs rounded-md bg-accent/50 px-1 mr-1">
+                    PICKUP
+                </span>
+            )}
+
+            <span className="truncate">{lotId}</span>
+
+            {isRework && (
+                <span className="badge badge-warning rounded-sm ml-1">
+                    REWORK{reworkSeq > 0 ? ` ${reworkSeq}` : ""}
+                </span>
+            )}
+        </>
     );
 }
 
@@ -74,7 +108,9 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
                 handleShowHistory(rootLotId, isParent, isChild);
             }}
             title={
-                isParent ? "This lot was split" : "This lot came from a split"
+                isParent
+                    ? "This lot was split"
+                    : "This lot came from a split"
             }
             className="inline-flex items-center shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold text-base-content/50 hover:text-primary hover:bg-base-content/10 transition-colors"
         >
@@ -84,7 +120,8 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
 }
 
 function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
-    const { isTarget, isSource, mergeId, mergedInto, mergedFrom } = mergeInfo;
+    const { isTarget, isSource, mergedInto, mergedFrom } = mergeInfo;
+    const relatedLotId = mergedInto ?? mergedFrom;
 
     return (
         <button
@@ -92,7 +129,7 @@ function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
             onClick={(e) => {
                 e.stopPropagation();
                 handleShowMergeHistory(
-                    mergedInto ?? mergedFrom,
+                    relatedLotId,
                     isTarget,
                     isSource,
                 );
@@ -100,7 +137,7 @@ function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
             title={
                 isTarget
                     ? "This lot absorbed another lot's quantity"
-                    : `This lot was merged into ${mergedInto ?? "another lot"}`
+                    : `This lot was merged into ${relatedLotId ?? "another lot"}`
             }
             className="inline-flex items-center shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold text-base-content/50 hover:text-secondary hover:bg-base-content/10 transition-colors"
         >

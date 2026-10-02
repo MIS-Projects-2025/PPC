@@ -1,5 +1,5 @@
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
-import { recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
+import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { useCallback } from "react";
 
 export function useBulkOperations({
@@ -11,7 +11,6 @@ export function useBulkOperations({
     toast,
     setIsDirty,
     clearSelection,
-    baseTimes,
     date,
     syncServerFields,
 }) {
@@ -39,7 +38,7 @@ export function useBulkOperations({
                 .then(({ entries }) => {
                     const patches = targets
                         .map((r) => {
-                            const match = entries?.find((e) => e.id === r.entry_id || e.lot_id === r.lot_id);
+                            const match = entries?.find((e) => e.id === r.entry_id);
                             return match ? { dndId: r._dndId, fields: { entry_id: match.id, lock_version: match.lock_version } } : null;
                         })
                         .filter(Boolean);
@@ -92,9 +91,6 @@ export function useBulkOperations({
 
     const handleBulkFieldUpdate = useCallback(
         (field, value) => {
-
-            console.log("LOG ~ useBulkOperations.js:96 ~ useBulkOperations ~ field:", field);
-            
             runFieldUpdate({
                 filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
                 fields: { [field]: value },
@@ -109,7 +105,8 @@ export function useBulkOperations({
     const handleBulkTransfer = useCallback(
         (targetMachine) => {
             const selected = dataRows.filter((r) => selectedRows.has(r.id));
-            const lotIds = selected.filter((r) => !isBlockRow(r) && r.lot_id).map((r) => r.lot_id);
+            const lotEntryIds = selected.filter((r) => !isBlockRow(r) && r.entry_id).map((r) => r.entry_id);
+            const unplannedLotIds = selected.filter((r) => !isBlockRow(r) && !r.entry_id && r.lot_id).map((r) => r.lot_id);
             const blockEntryIds = selected.filter((r) => isBlockRow(r) && r.entry_id).map((r) => r.entry_id);
 
             const prevSnapshot = dataRows;
@@ -118,53 +115,44 @@ export function useBulkOperations({
             update((prev) => {
                 const next = prev.map((r) => {
                     if (!selectedRows.has(r.id)) return { ...r };
-                    console.log('transferring', r.id, 'from', r.machine, 'to', targetMachine);
                     affectedMachines.add(r.machine);
                     affectedMachines.add(targetMachine);
                     return { ...r, machine: targetMachine, bucket_id: null, bucket_position: null };
                 });
-                console.log('before recompute', next.filter(r => selectedRows.has(r.id)));
-                if (baseTimes) affectedMachines.forEach((m) => recomputeMachine(next, m, baseTimes, date));
-                console.log('after recompute', next.filter(r => selectedRows.has(r.id)));
                 return next;
             });
             setIsDirty(true);
             clearSelection();
 
-            if (lotIds.length === 0 && blockEntryIds.length === 0) return;
+            if (lotEntryIds.length === 0 && unplannedLotIds.length === 0 && blockEntryIds.length === 0) return;
 
             withUpdating(
                 mutate(route("loading-plan.bulk-transfer"), {
-                    body: {
-                        lot_ids: lotIds,
-                        block_entry_ids: blockEntryIds,
-                        target_machine: targetMachine,
-                        scheduled_date: date,
-                    },
+                    body: { lot_ids: unplannedLotIds, entry_ids: lotEntryIds, block_entry_ids: blockEntryIds, target_machine: targetMachine, scheduled_date: date },
                 }),
             )
-                .then((updatedEntries) => {
+                .then(({ entries, affected_timings }) => {
                     const patches = selected
                         .map((r) => {
-                            const match = isBlockRow(r)
-                                ? updatedEntries?.find((e) => e.entry_id === r.entry_id)
-                                : updatedEntries?.find((e) => e.lot_id === r.lot_id);
+                            const match = r.entry_id
+                                ? entries?.find((e) => e.entry_id === r.entry_id)
+                                : entries?.find((e) => e.lot_id === r.lot_id);
                             return match ? { dndId: r._dndId, fields: { ...match } } : null;
                         })
                         .filter(Boolean);
                     syncServerFields?.(patches);
+                    applyAffectedTimings(update, affected_timings, date);
                 })
                 .catch((err) => {
                     console.error("Bulk transfer failed:", err);
                     update(() => {
                         const restored = prevSnapshot.map((r) => ({ ...r }));
-                        if (baseTimes) affectedMachines.forEach((m) => recomputeMachine(restored, m, baseTimes, date));
                         return restored;
                     }, true);
                     toast?.error?.(err?.message ?? "Couldn't transfer the selected rows — reverted.");
                 });
         },
-        [selectedRows, update, dataRows, baseTimes, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [selectedRows, update, dataRows, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkDelete = useCallback(() => {
@@ -172,18 +160,19 @@ export function useBulkOperations({
         const entryIds = targets.map((r) => r.entry_id);
         const prevSnapshot = dataRows;
 
+        const removable = (r) => isBlockRow(r) || r.is_rework;
+
         update((prev) => {
             const affectedMachines = new Set();
             const next = prev
                 .map((r) => {
                     if (!selectedRows.has(r.id)) return r;
-                    if (isBlockRow(r)) return r;
                     affectedMachines.add(r.machine);
+                    if (removable(r)) return r;
                     return { ...r, machine: null, sequence_order: null };
                 })
-                .filter((r) => !(selectedRows.has(r.id) && isBlockRow(r)));
+                .filter((r) => !(selectedRows.has(r.id) && removable(r)));
 
-            if (baseTimes) affectedMachines.forEach((m) => recomputeMachine(next, m, baseTimes, date));
             return next;
         });
 
@@ -193,24 +182,50 @@ export function useBulkOperations({
         if (entryIds.length === 0) return;
 
         withUpdating(mutate(route("loading-plan.bulk-delete"), { body: { ids: entryIds, scheduled_date: date } }))
-            .then(({ unassigned }) => {
+            .then(({ id, affected_timings }) => {
                 const patches = targets
                     .map((r) => {
-                        const match = unassigned?.find((e) => e.id === r.entry_id);
+                        const match = id?.find((e) => e.id === r.entry_id);
                         return match ? { dndId: r._dndId, fields: { lock_version: match.lock_version } } : null;
                     })
                     .filter(Boolean);
                 syncServerFields?.(patches);
+                applyAffectedTimings(update, affected_timings, date)
             })
             .catch((err) => {
                 console.error("Bulk delete failed:", err);
                 update(() => prevSnapshot, true);
                 toast?.error?.("Couldn't delete/unassign — reverted.");
             });
-    }, [selectedRows, update, dataRows, baseTimes, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
+    }, [selectedRows, update, dataRows, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
+
+    const handleRework = useCallback(
+        (row) => {
+            if (!row || isBlockRow(row) || !row.entry_id || row.machine === null) return;
+
+            withUpdating(
+                mutate(route("loading-plan.entries.rework", { id: row.entry_id }), {
+                    body: { machine: row.machine },
+                }),
+            )
+                .then((entry) => {
+                    const { affected_timings, ...row } = entry;
+                    update((prev) => [...prev, { ...row, _dndId: `entry-${row.entry_id}` }]);
+                    applyAffectedTimings(update, affected_timings, date);
+                    setIsDirty(true);
+                    return entry;
+                })
+                .catch((err) => {
+                    console.error("Rework failed:", err);
+                    toast?.error?.(err?.data?.message ?? "Couldn't create the rework row.");
+                });
+        },
+        [withUpdating, mutate, update, date, setIsDirty, clearSelection, toast],
+    );
 
     return {
         handleBulkTag,
+        handleRework,
         handleBulkClearTag,
         handleBulkStatus,
         handleBulkFieldUpdate,

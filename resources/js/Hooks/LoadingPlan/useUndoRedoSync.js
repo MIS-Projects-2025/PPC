@@ -1,5 +1,4 @@
 import { mergeCompoundResponse } from "@/Lib/LoadingPlan/compoundActions";
-import { recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import {
     callRevertMerge,
     callRevertSplit,
@@ -11,7 +10,7 @@ import {
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import { useCallback, useEffect, useRef } from "react";
 
-export function useUndoRedoSync({ store, dataRows, baseTimes, date, mutate, update, toast }) {
+export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }) {
     const dataRowsRef = useRef(dataRows);
     useEffect(() => { dataRowsRef.current = dataRows; }, [dataRows]);
 
@@ -23,17 +22,11 @@ export function useUndoRedoSync({ store, dataRows, baseTimes, date, mutate, upda
 
         const nextSnapshot = store.getState().present.rows.map((r) => ({ ...r }));
 
-        if (baseTimes) {
-            const affectedMachines = new Set([...prevSnapshot.map(r => r.machine), ...nextSnapshot.map(r => r.machine)]);
-            affectedMachines.forEach((m) => { if (m !== null) recomputeMachine(nextSnapshot, m, baseTimes, date); });
-            update(() => nextSnapshot, true);
-        }
-
         const nextIds = new Set(nextSnapshot.map((r) => r._dndId));
         const deletedEntryIds = prevSnapshot.filter((r) => r.entry_id && !nextIds.has(r._dndId)).map((r) => r.entry_id);
 
         await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast, deletedEntryIds, store.getState().syncServerFields);
-    }, [store, baseTimes, date, update, mutate, toast]);
+    }, [store, date, update, mutate, toast]);
 
     const applyCompoundStep = useCallback(async (action, direction) => {
         const isSplit = action.type === "split";
@@ -56,7 +49,9 @@ export function useUndoRedoSync({ store, dataRows, baseTimes, date, mutate, upda
             }
 
             direction === "undo" ? store.getState().undo() : store.getState().redo();
+
             update((prev) => reconcile(prev, result), true);
+            applyAffectedTimings(update, result.affected_timings, date);
         } catch (err) {
             console.error(`${action.type} ${targetState} failed:`, err);
             toast?.error?.(`Couldn't ${direction} that ${action.type}.`);
