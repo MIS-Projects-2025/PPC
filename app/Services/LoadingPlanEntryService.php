@@ -110,7 +110,7 @@ class LoadingPlanEntryService
 
             $anchors = LoadingPlanEntry::whereKey(array_filter([$beforeEntryId, $afterEntryId]))->get();
             if ($anchors->contains(fn($a) => $a->machine_id !== $targetMachineId)) {
-                throw new \InvalidArgumentException('The drop position is not on the target machine.');
+                abort(409, 'The drop position is not on the target machine.');
             }
 
             $dateSource = $existing->values()->concat($anchors);
@@ -225,6 +225,111 @@ class LoadingPlanEntryService
             return [
                 'entries'          => $entries,
                 'affected_timings' => self::timingsFor($machinesToLock, $date),
+            ];
+        });
+    }
+
+    /*
+    * This function assumes that the block (setup/conversion) is correctly placed
+    * Lot will only be sorted, not these blocks.
+    * 
+    */
+    public function autoSortCycleTime(string $targetMachine, string $date)
+    {
+        return DB::transaction(function () use ($targetMachine, $date) {
+            $targetMachineId = $this->resolveMachineId($targetMachine);
+            if ($targetMachineId === null) {
+                throw new \InvalidArgumentException("Target machine [{$targetMachine}] does not exist.");
+            }
+
+            $lotEntries = $this->lockMachineRows([$targetMachineId], $date);
+
+            $wip = CustomerDataWip::query()
+                ->whereDate('import_date', $date)
+                ->get()
+                ->unique(function ($item) {
+                    return $item->Lot_Id . '_' . Carbon::parse($item->import_date)->toDateString();
+                });
+
+            $entries = $lotEntries->map(function ($entry) use ($wip) {
+                $wipEntry = $wip->first(function ($item) use ($entry) {
+                    return $item->Lot_Id == $entry->lot_id
+                        && Carbon::parse($item->import_date)->isSameDay($entry->scheduled_date);
+                });
+
+                $wipDerivatives = LoadingPlanFormulas::make($wipEntry);
+
+                return [
+                    'lot_entry'      => $entry,
+                    'wip'            => $wipEntry,
+                    'wipDerivatives' => $wipDerivatives,
+                    'sort' => [
+                        'is_manual_expedite'            => (bool) $entry->is_manual_expedite,
+                        'cycle_time_exceed'          => (bool) data_get($wipDerivatives, 'cycleTimeExceed'),
+                        'cycle_time_exceed_residual' => (bool) data_get($wipDerivatives, 'cycleTimeExceedResidual'),
+                        'is_res'                     => strtoupper(trim((string) data_get($wipEntry, 'CR3'))) === 'RES',
+                        'ct'                         => data_get($wipDerivatives, 'ct'),
+                        'entry_days'                 => data_get($wipEntry, 'Lot_Entry_Time_Days'),
+                        'seq'                        => $entry->sequence_order,
+                    ],
+                ];
+            });
+
+            $entries = LotPrioritySorter::sortSegments(
+                $entries,
+                fn($row) => strtolower(trim((string) $row['lot_entry']->entry_type)) === 'block'
+            );
+
+            // Slots = the sequence_order values as they were, in their original order.
+            // $lotEntries is already ordered by sequence_order from lockMachineRows().
+            $slots = $lotEntries->pluck('sequence_order')->values();
+
+            $positions = [];
+            $firstChangedId = null;
+
+            foreach ($entries as $i => $row) {
+                $entry  = $row['lot_entry'];
+                $newSeq = (float) $slots[$i];
+
+                if (abs((float) $entry->sequence_order - $newSeq) > 1e-9) {
+                    $positions[] = ['entry_id' => $entry->id, 'sequence_order' => $newSeq];
+                    $firstChangedId ??= $entry->id; // $i ascends, so first hit = earliest changed position
+                }
+            }
+
+            if ($positions) {
+                // stages -id temp values, then writes real ones in one statement
+                // (also bumps lock_version, so the fresh rows below carry the new one)
+                $this->applyPositionsInBulk($positions, $targetMachineId, $date);
+            }
+
+            $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => []]);
+            if ($firstChangedId) {
+                // must be a fresh model: findPredecessor() reads its new sequence_order
+                $calc->recomputeTimeStartAndEnd(LoadingPlanEntry::findOrFail($firstChangedId), $targetMachineId);
+            }
+
+            $loadingPlanService = new LoadingPlanService($date, "I Do not need location");
+
+            $fresh = LoadingPlanEntry::with(['machineModel', 'lotQuantity'])
+                ->whereIn('id', $entries->pluck('lot_entry.id'))
+                ->get()
+                ->keyBy('id');
+
+            // 3. Map into createPlannedLot() structure
+            $updated = $entries->map(function ($row) use ($loadingPlanService, $fresh) {
+                $lotEntry = $fresh[$row['lot_entry']->id];
+
+                return $loadingPlanService->createPlannedLot(
+                    wipRow: $row['wip'],
+                    entry: $lotEntry,
+                    quantity: $lotEntry->lotQuantity,
+                );
+            })->values();
+
+            return [
+                'entries'          => $updated,
+                'affected_timings' => self::timingsFor([$targetMachineId], $date),
             ];
         });
     }
@@ -1026,6 +1131,7 @@ class LoadingPlanEntryService
                 'sequence_order' => $newOrder,
                 'status'         => 'NONE',
                 'lock_version'   => 1,
+                // 'is_pickup'      => true,
                 ...$entryFields,
             ]);
 
@@ -1729,7 +1835,7 @@ class LoadingPlanEntryService
 
         // Mirrors bulkTransfer()'s unplannedLotIds branch — this is a WIP lot
         // being placed for the first time, not a synthetic manual lot, so pull
-        // package/part/qty from CustomerDataWip the same way that path does.
+        // packageLocation/part/qty from CustomerDataWip the same way that path does.
         $wipItem = CustomerDataWip::query()
             ->where('Lot_Id', $lotId)
             ->whereDate('import_date', $date)
@@ -2228,17 +2334,13 @@ class LoadingPlanEntryService
      */
     public static function getToday(string $date, array $allowedPackages): Collection
     {
-        if (empty($allowedPackages)) {
-            return collect();
-        }
-
         return LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
             ->where('scheduled_date', $date)
-            ->where(function ($query) use ($allowedPackages) {
-                $query->whereIn('package_name', $allowedPackages)
-                    ->orWhere('entry_type', 'block'); // Ensure block rows are fetched
-            })
-            ->get();
+            ->where(function ($q) use ($allowedPackages) {
+                $q->whereNotNull('machine_id')          // placed: any location
+                    ->orWhere('entry_type', 'block');
+                if ($allowedPackages) $q->orWhereIn('package_name', $allowedPackages); // unassigned: own location only
+            })->get();
     }
 
     /**
@@ -2250,10 +2352,6 @@ class LoadingPlanEntryService
      */
     public static function getTodayLeaked(string $previousDate, array $allowedPackages): Collection
     {
-        if (empty($allowedPackages)) {
-            return collect();
-        }
-
         // logger()->debug('DB check', [
         //     'db' => DB::connection()->getDatabaseName(),
         //     'host' => DB::connection()->getConfig('host'),
@@ -2264,10 +2362,6 @@ class LoadingPlanEntryService
             ->select('id')
             ->selectRaw('SUM(accu_time) OVER (PARTITION BY machine_id ORDER BY sequence_order) AS running_total')
             ->where('loading_plan_entries.scheduled_date', $previousDate)
-            ->where(function ($query) use ($allowedPackages) {
-                $query->whereIn('package_name', $allowedPackages)
-                    ->orWhere('entry_type', 'block'); // Ensure block rows are fetched
-            })
             ->whereNotNull('machine_id');
 
         $leakedIds = DB::query()
@@ -2318,13 +2412,14 @@ class LoadingPlanEntryService
         // $changedBy = auth()->id();
         $changedBy = null;
 
+        $floor = Carbon::parse("{$date} 06:00:00");
+        $clamp = fn(Carbon $t) => $t->lt($floor) ? $floor->copy() : $t;
+
         // --- pass 1: resolve continuity anchor per machine (bounded by
         // machine count, not lot count) ---
         // machine count, not lot count) ---
         $dayStartByMachine = [];
         foreach (array_keys($plan) as $machineId) {
-            // Frozen/in-progress entries that survived the open()->delete() pass
-            // anchor both the time cursor and the sequence counter for today.
             $frozenToday = LoadingPlanEntry::where('machine_id', $machineId)
                 ->where('scheduled_date', $date)
                 ->orderByDesc('sequence_order')
@@ -2332,7 +2427,7 @@ class LoadingPlanEntryService
 
             if ($frozenToday && $frozenToday->getRawOriginal('time_end') !== null) {
                 $dayStartByMachine[$machineId] = [
-                    'cursor' => Carbon::parse($frozenToday->getRawOriginal('time_end')),
+                    'cursor' => $clamp(Carbon::parse($frozenToday->getRawOriginal('time_end'))),
                     'isBootstrap' => false,
                     'seqStart' => $frozenToday->sequence_order + self::GAP_SEED,
                 ];
@@ -2347,7 +2442,7 @@ class LoadingPlanEntryService
 
             if ($predecessor && $predecessor->getRawOriginal('time_end') !== null) {
                 $dayStartByMachine[$machineId] = [
-                    'cursor' => Carbon::parse($predecessor->getRawOriginal('time_end')),
+                    'cursor' => $clamp(Carbon::parse($predecessor->getRawOriginal('time_end'))),
                     'isBootstrap' => false,
                     'seqStart' => self::GAP_SEED,
                 ];
@@ -2360,8 +2455,8 @@ class LoadingPlanEntryService
                 ->first();
 
             $dayStartByMachine[$machineId] = $row
-                ? ['cursor' => Carbon::parse("{$date} {$row->day_start_time}"), 'isBootstrap' => false, 'seqStart' => self::GAP_SEED]
-                : ['cursor' => Carbon::parse("{$date} 00:00:00"), 'isBootstrap' => true, 'seqStart' => self::GAP_SEED];
+                ? ['cursor' => $clamp(Carbon::parse("{$date} {$row->day_start_time}")), 'isBootstrap' => false, 'seqStart' => self::GAP_SEED]
+                : ['cursor' => $floor->copy(), 'isBootstrap' => true, 'seqStart' => self::GAP_SEED];
         }
 
         // dd($dayStartByMachine);
@@ -2390,6 +2485,7 @@ class LoadingPlanEntryService
                         'machine_id' => $machineId,
                         'sequence_order' => $seq,
                         'status' => null,
+                        'is_manual_expedite' => false,
                         'block_label' => $row['label'],
                         'is_pickup' => false,
                         'accu_time' => $row['duration'],
@@ -2418,6 +2514,7 @@ class LoadingPlanEntryService
                         'is_pickup' => $row['is_pickup'] ?? false,
                         'accu_time' => $metrics['accu_time'],
                         'time_start' => $timeStart,
+                        'is_manual_expedite' => $row['is_manual_expedite'] ?? false,
                         'time_end' => $timeEnd,
                         'lock_version' => 1,
                         'created_at' => $now,
@@ -2535,13 +2632,27 @@ class LoadingPlanEntryService
     {
         return DB::transaction(function () use ($lotIds, $bucketId, $date, $prevLotId, $nextLotId) {
             $this->assertDateNotFinalized($date);
-            LoadingPlanBucket::findOrFail($bucketId);
+            $location = LoadingPlanBucket::find($bucketId)->location;
+
+            // TODO: block also on the client, prevent user to park lots with different location to current parking.
 
             $entries = LoadingPlanEntry::where('scheduled_date', $date)
                 ->where('entry_type', 'lot')
                 ->where('rework_seq', 0)
                 ->whereIn('lot_id', $lotIds)
                 ->get();
+
+            $invalid = $entries->filter(
+                fn($entry) => PackageLocation::for($entry->package_name) !== $location
+            );
+
+            if ($invalid->isNotEmpty()) {
+                $list = $invalid
+                    ->map(fn($e) => "{$e->lot_id} ({$e->package_name})")
+                    ->implode(', ');
+
+                abort(422, "Package location mismatch for bucket location {$location}: {$list}");
+            }
 
             $hasRework = LoadingPlanEntry::where('scheduled_date', $date)
                 ->whereIn('lot_id', $lotIds)->where('rework_seq', '>', 0)->exists();

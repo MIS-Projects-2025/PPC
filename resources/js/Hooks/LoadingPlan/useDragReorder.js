@@ -22,6 +22,7 @@ export function useDragReorder({
     clearSelection,
     setIsDirty,
     syncServerFields, // <- new
+    selectedLocation,
     store,
 }) {
     const [activeId, setActiveId] = useState(null);
@@ -449,6 +450,10 @@ export function useDragReorder({
                         },
                     ]);
                     applyAffectedTimings(update, entry.affected_timings, date);
+
+                    if (toMachine === null && moved.location && moved.location !== selectedLocation) {
+                        toast?.info?.(`lot(s) returned to Unassigned. all rows other than in ${selectedLocation} will not be visible anymore.`);
+                    }
                     if (leftBucket) store.getState().reset(store.getState().present.rows);
                 })
                 .catch((err) => {

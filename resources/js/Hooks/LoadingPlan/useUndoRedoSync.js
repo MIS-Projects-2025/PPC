@@ -9,6 +9,7 @@ import {
 } from "@/Lib/LoadingPlan/splitMergeApi";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import { useCallback, useEffect, useRef } from "react";
+import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 
 export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }) {
     const dataRowsRef = useRef(dataRows);

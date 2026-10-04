@@ -216,7 +216,7 @@ function renderCollapsedCell(key, row) {
 // — `hoveredRowId` was never referenced in the body (the drag-over row
 // highlight is applied via `rowClass` in the parent, not per-column).
 // Dropped here; update the call site accordingly.
-export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch) {
+export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation) {
     return [
         SelectColumn,
         {
@@ -331,6 +331,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                                     isPlannedYesterday={row.is_leaked} 
                                     isRework={row.is_rework}
                                     reworkSeq={row.rework_seq}
+                                    otherLocation={row.location && row.location !== selectedLocation ? row.location : null}
                                 />
                             </div>
                         );

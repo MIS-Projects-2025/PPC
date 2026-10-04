@@ -24,6 +24,7 @@ class LoadingPlanService
     public readonly Collection $todayLeakedWipRows;
     public readonly Collection $todayLeakedPlannedLotEntries;
     public readonly Collection $todayPlannedLotEntries;
+    public readonly Collection $extraTodayWipRows;
 
     /**
      * Keys createPlannedLot needs to find when $entry is passed as an array,
@@ -166,6 +167,14 @@ class LoadingPlanService
         $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
         $this->todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot($this->todayLeakedPlannedLotEntries->pluck('lot_id')->all());
         $this->todayPlannedLotEntries = LoadingPlanEntryService::getToday($this->date, $this->selectedPackages);
+
+        $missingLotIds = $this->todayPlannedLotEntries
+            ->where('entry_type', 'lot')->pluck('lot_id')->filter()->unique()
+            ->reject(fn($id) => $this->todayWipRows->has($id))->values()->all();
+
+        $this->extraTodayWipRows = empty($missingLotIds) ? collect() : CustomerDataWip::query()
+            ->forDate($this->date)->loadingPlanStations()->excludingPostTnr()
+            ->whereIn('Lot_Id', $missingLotIds)->get()->keyBy('Lot_Id');
     }
 
     public function initEntries()
@@ -186,20 +195,22 @@ class LoadingPlanService
             ->toBase()
             ->except($todayPlannedLotIds);
 
-        $filterLocation = fn($entry) => $entry->machineModel?->location === null
-            || $entry->machineModel?->location === $this->selectedLocation;
+        // $filterLocation = fn($entry) => $entry->machineModel?->location === null
+        //     || $entry->machineModel?->location === $this->selectedLocation;
 
-        $todayPlannedBlockEntries = $this->todayPlannedLotEntries->where('entry_type', 'block')->filter($filterLocation);
-        $todayLeakedPlannedBlockEntries = $this->todayLeakedPlannedLotEntries->where('entry_type', 'block')->filter($filterLocation);
+        $allTodayWip = $this->todayWipRows->toBase()->union($this->extraTodayWipRows->toBase());
+
+        $todayPlannedBlockEntries = $this->todayPlannedLotEntries->where('entry_type', 'block'); // remove filterLocation
+        $todayLeakedPlannedBlockEntries = $this->todayLeakedPlannedLotEntries->where('entry_type', 'block'); // remove filterLocation
 
         // 3. Separate WIP-backed vs Manual Lot Entries via O(1) Lookups
         $todayWipPlannedEntries = $this->todayPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->filter(fn($entry) => $this->todayWipRows->has($entry->lot_id));
+            ->filter(fn($e) => $allTodayWip->has($e->lot_id));
 
         $todayManualPlannedEntries = $this->todayPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->reject(fn($entry) => $this->todayWipRows->has($entry->lot_id));
+            ->reject(fn($e) => $allTodayWip->has($e->lot_id));
 
         $todayLeakedWipPlannedEntries = $this->todayLeakedPlannedLotEntries
             ->where('entry_type', 'lot')
@@ -245,7 +256,7 @@ class LoadingPlanService
 
         // 5. Transform All Groups via createPlannedLot
         $lotResults = $todayWipPlannedEntries
-            ->map(fn($entry) => $buildLotPayload($entry, $this->todayWipRows->get($entry->lot_id)));
+            ->map(fn($entry) => $buildLotPayload($entry, $allTodayWip->get($entry->lot_id)));
 
         $leakedLotResults = $todayLeakedWipPlannedEntries
             ->map(fn($entry) => $buildLotPayload($entry, $this->todayLeakedWipRows->get($entry->lot_id)));
@@ -479,6 +490,8 @@ class LoadingPlanService
         $isLeaked = $scheduledDate === $this->previousDate;
 
         return [
+            'location' => PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name),
+
             // Entry Metadata
             'entry_id'                   => $entry?->id,
             'entry_type'                 => $entry?->entry_type,
@@ -627,6 +640,7 @@ class LoadingPlanService
             'lead_count'   => $wip->Lead_Count,
             'body_size'    => $wip->Body_Size,
             'is_expedite'  => false,               // TODO no source identified — see below
+            'is_pickup'    => false,
         ];
     }
 

@@ -104,6 +104,9 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
 
     Route::post('entries/bulk-move', [LoadingPlanEntryController::class, 'bulkMove'])->name('bulk-move');
 
+    Route::post('auto-sort/{machine}', [LoadingPlanEntryController::class, 'autoSortCycleTime'])
+        ->name('auto-sort');
+
     Route::post('buckets/park', [LoadingPlanBucketController::class, 'park'])->name('buckets.park');
     Route::post('buckets/unpark', [LoadingPlanBucketController::class, 'unpark'])->name('buckets.unpark');
     Route::post('buckets', [LoadingPlanBucketController::class, 'store'])->name('buckets.store');

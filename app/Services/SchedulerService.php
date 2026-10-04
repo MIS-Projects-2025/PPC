@@ -397,7 +397,7 @@ class SchedulerService
                 'isExpedite'   => $item['is_expedite'] ?? false,
                 'aboveCT'      => false, // pickups have no CT history to compute this from
                 'CT'           => null,  // no sortable CT value for pickups either
-                'is_pickup'    => true,
+                'is_pickup'    => $item['is_pickup'] ?? true,
             ]);
         }
 
@@ -1393,6 +1393,7 @@ class SchedulerService
     protected function hydrateLotFromEntry(LoadingPlanEntry $entry, ?CustomerDataWip $wip): ?object
     {
         $lotQty = $entry->lotQuantity;
+        $formulas = LoadingPlanFormulas::make($wip);
 
         if ($entry->is_pickup) {
             if (!$lotQty) {
@@ -1417,18 +1418,18 @@ class SchedulerService
                 'Ramp_Time' => $partInfo->allocation,
                 'CR3' => null,
                 'Lot_Type' => null,
-                'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
+                'isExpedite' => (bool) $entry->is_manual_expedite,
                 'aboveCT' => false,
                 'CT' => null,
-                'is_pickup' => false,
+                'is_pickup' => true,
+                'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
+                'Lot_Entry_Time_Days'     => $wip->Lot_Entry_Time_Days,
             ];
         }
 
         if (!$wip) {
             return null;
         }
-
-        $formulas = LoadingPlanFormulas::make($wip);
 
         return (object) [
             'Lot_Id' => $entry->lot_id,
@@ -1442,10 +1443,32 @@ class SchedulerService
             'Ramp_Time' => $wip->Ramp_Time,
             'CR3' => $wip->CR3,
             'Lot_Type' => $wip->Lot_Type,
-            'isExpedite' => (strcasecmp($entry->tag ?? '', 'expedite') === 0),
+            'isExpedite' => (bool) $entry->is_manual_expedite,
             'aboveCT' => $formulas->cycleTimeExceedOverall,
             'CT' => $formulas->ct ?? null,
             'is_pickup' => false,
+        ];
+    }
+
+    protected function planLotRow(object $lot): array
+    {
+        return [
+            'type' => 'lot',
+            'lot_id' => $lot->Lot_Id ?? ('PICKUP-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4))),
+            'package_name' => $lot->Package_Name,
+            'part_name' => $lot->Part_Name,
+            'qty' => $lot->Qty,
+            'is_pickup' => $lot->is_pickup ?? false,
+            'is_manual_expedite' => (bool) ($lot->isExpedite ?? false),
+            'sort' => [
+                'is_manual_expedite'         => (bool) ($lot->isExpedite ?? false),
+                'cycle_time_exceed'          => (bool) ($lot->aboveCT ?? false),
+                'cycle_time_exceed_residual' => (bool) ($lot->cycleTimeExceedResidual ?? false),
+                'is_res'                     => ($lot->CR3 ?? null) === 'RES',
+                'ct'                         => $lot->CT ?? null,
+                'entry_days'                 => $lot->Lot_Entry_Time_Days ?? null,
+                'seq'                        => 0, // overwritten below
+            ],
         ];
     }
 
@@ -1499,14 +1522,7 @@ class SchedulerService
                 ];
             }
 
-            $this->plan[$machineId][] = [
-                'type' => 'lot',
-                'lot_id' => $lot->Lot_Id ?? ('PICKUP-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4))),
-                'package_name' => $lot->Package_Name,
-                'part_name' => $lot->Part_Name,
-                'qty' => $lot->Qty,
-                'is_pickup' => $lot->is_pickup ?? false,
-            ];
+            $this->plan[$machineId][] = $this->planLotRow($lot);
 
             $anchorStateByMachine[$machineId] = $choice['resulting_setup_state_id'];
             $remainingCapacityByMachine[$machineId] = ($remainingCapacityByMachine[$machineId] ?? 0) - ($this->estimateCommit($lot) ?? 0);
@@ -1618,14 +1634,9 @@ class SchedulerService
                     'duration' => $bestChoice['est_duration_minutes'],
                 ];
             }
-            $this->plan[$machineId][] = [
-                'type' => 'lot',
-                'lot_id' => $lot->Lot_Id ?? ('PICKUP-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4))),
-                'package_name' => $lot->Package_Name,
-                'part_name' => $lot->Part_Name,
-                'qty' => $lot->Qty,
-                'is_pickup' => $lot->is_pickup ?? false,
-            ];
+
+            $this->plan[$machineId][] = $this->planLotRow($lot);
+
             $anchorStateByMachine[$machineId] = $bestChoice['resulting_setup_state_id'];
             $remainingCapacityByMachine[$machineId] =
                 ($remainingCapacityByMachine[$machineId] ?? 0) - ($this->estimateCommit($lot) ?? 0);
@@ -1722,6 +1733,16 @@ class SchedulerService
 
         $dateString = $targetDate->toDateString();
 
+        $staleUnassigned = LoadingPlanEntry::query()
+            ->where('scheduled_date', $dateString)
+            ->where('entry_type', 'lot')
+            ->where('rework_seq', 0)
+            ->whereNull('machine_id')
+            ->whereIn('lot_id', $pickupLots->pluck('Lot_Id')->filter()->all())
+            ->get();
+
+        $staleUnassigned->each->delete(); // model delete so history observers fire
+
         return DB::transaction(function () use (
             $candidateMachineIds,
             $pickupLots,
@@ -1782,6 +1803,7 @@ class SchedulerService
                 ->with('lotQuantity')
                 ->whereIn('machine_id', $candidateMachineIds)
                 ->whereDate('scheduled_date', $targetDate)
+                ->where('rework_seq', 0)
                 ->open()
                 ->where('entry_type', 'lot')
                 ->get();
@@ -2020,34 +2042,33 @@ class SchedulerService
 
             $start = $logTimer('Hydrate existing lots');
 
-            $existingLots = $entries
-                ->map(function ($entry) use (
-                    $wipLookup,
-                    $rootLotIdByEntry
-                ) {
-                    $rootLotId = $rootLotIdByEntry[$entry->id];
+            $hydrated = $entries->map(function ($entry) use ($wipLookup, $rootLotIdByEntry) {
+                $rootLotId = $rootLotIdByEntry[$entry->id];
+                $dateStr = $entry->scheduled_date->toDateString();
+                $wip = $wipLookup["{$dateStr}:{$rootLotId}"] ?? null;
 
-                    $dateStr = $entry
-                        ->scheduled_date
-                        ->toDateString();
+                return [
+                    'entry_id' => $entry->id,
+                    'lot'      => $this->hydrateLotFromEntry($entry, $wip),
+                ];
+            });
 
-                    $wip = $wipLookup["{$dateStr}:{$rootLotId}"] ?? null;
+            $existingLots     = $hydrated->pluck('lot')->filter()->values();
+            $hydratedEntryIds = $hydrated->filter(fn($h) => $h['lot'] !== null)->pluck('entry_id')->all();
+            $skippedEntryIds  = $hydrated->filter(fn($h) => $h['lot'] === null)->pluck('entry_id')->all();
 
-                    return $this->hydrateLotFromEntry(
-                        $entry,
-                        $wip
-                    );
-                })
-                ->filter()
-                ->values();
-
-            // dump($existingLots);
+            if (!empty($skippedEntryIds)) {
+                Log::warning('Rebuild: open entries could not be hydrated, leaving them in place', [
+                    'entry_ids' => $skippedEntryIds,
+                ]);
+            }
 
             $logTimer(
                 'Hydrate existing lots',
                 $start,
                 [
                     'existing_lot_count' => $existingLots->count(),
+                    'skipped_count'      => count($skippedEntryIds),
                 ]
             );
 
@@ -2057,17 +2078,7 @@ class SchedulerService
     |--------------------------------------------------------------------------
     */
 
-            $start = $logTimer('Delete existing open entries');
-
-            $deletedCount = LoadingPlanEntry::whereIn('id', $entries->pluck('id'))->delete();
-
-            $logTimer(
-                'Delete existing open entries',
-                $start,
-                [
-                    'deleted_count' => $deletedCount,
-                ]
-            );
+            $deletedCount = LoadingPlanEntry::whereIn('id', $hydratedEntryIds)->delete();
 
             /*
     |--------------------------------------------------------------------------
@@ -2319,6 +2330,26 @@ class SchedulerService
                 'Create LotScheduleCalculator',
                 $start
             );
+
+
+            /*
+    |--------------------------------------------------------------------------
+    | then apply sort before applying bulk place plan
+    |--------------------------------------------------------------------------
+    */
+            foreach ($this->plan as $machineId => $rows) {
+                foreach ($rows as $i => &$row) {
+                    if ($row['type'] === 'lot') {
+                        $row['sort']['seq'] = $i; // placement order as the final tie-break
+                    }
+                }
+                unset($row);
+
+                $this->plan[$machineId] = LotPrioritySorter::sortSegments(
+                    collect($rows),
+                    fn($r) => $r['type'] === 'block'
+                )->all();
+            }
 
             /*
     |--------------------------------------------------------------------------

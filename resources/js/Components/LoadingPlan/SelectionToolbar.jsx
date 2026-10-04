@@ -7,6 +7,7 @@ import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import MergeModal from "./MergeModal";
 import SplitModal from "./SplitModal";
 import TransferModal from "./TransferModal";
+import { useToast } from "@/Hooks/useToast";
 
 export default function SelectionToolbar({
     selectedIds,
@@ -29,6 +30,7 @@ export default function SelectionToolbar({
     onUngroup,
     date,
 }) {
+    const toast = useToast();
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
@@ -36,6 +38,19 @@ export default function SelectionToolbar({
     const transferModalRef = useRef(null);
     const splitModalRef = useRef(null);
     const mergeModalRef = useRef(null);
+
+    const guard = (reason, fn) => (e) => {
+        if (reason) {
+            e.preventDefault();
+            toast.info(reason, { id: "toolbar-blocked" });
+            return;
+        }
+        fn?.(e);
+    };
+
+    const blockedCls = (reason) => (reason ? "opacity-50 cursor-not-allowed" : "");
+
+    const busy = disabled ? "Another action is still in progress." : null;
 
     const selectedMachines = useMemo(() => {
         const s = new Set();
@@ -57,17 +72,22 @@ export default function SelectionToolbar({
         () => allData.find((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
     );
+    console.log("🚀 ~ SelectionToolbar ~ selectedRow:", selectedRow)
     
     const selectedRows = useMemo(
         () => allData.filter((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
     );
 
+    const canDelete = selectedRows.every(
+        (r) => r.machine !== null || Number.isInteger(r.bucket_id),
+    );
+
     const reworkedLotIds = useMemo(
         () => new Set(allData.filter((r) => r.is_rework).map((r) => r.lot_id)),
         [allData],
     );
-    
+
     const canGroup =
         selectedRows.length > 0 &&
         selectedRows.every((r) => !isBlockRow(r) && r.lot_id && !r.is_leaked && !r.is_rework && !reworkedLotIds.has(r.lot_id));
@@ -77,17 +97,42 @@ export default function SelectionToolbar({
     const canRework =
         count === 1 && selectedRow && !isBlockRow(selectedRow) && selectedRow.entry_id &&
         selectedRow.machine !== null && !selectedRow.is_leaked;
+    console.log("🚀 ~ SelectionToolbar ~ canRework:", canRework)
 
     const isSelectedRowsUnassigned = useMemo(
         () => selectedRows.some((r) => r.machine === null),
         [selectedRows],
     );
 
+    const reasons = {
+        group: busy
+            || ((buckets ?? []).length === 0 ? "No groups exist yet. Create one first." : null)
+            || (!canGroup ? "Only regular lots can be grouped. Leaked, rework and block rows are excluded." : null),
+        bulk: busy
+            || (isSelectedRowsUnassigned ? "Unassigned rows can't be edited in bulk. Place them on a machine first." : null),
+        split: busy
+            || (count !== 1 ? "Select exactly 1 lot to split." : null)
+            || (isSelectedRowsUnassigned ? "Unassigned lots can't be split." : null)
+            || (hasReworkSelected ? "Rework lots can't be split." : null),
+        merge: busy
+            || (count !== 2 ? "Select exactly 2 lots to merge." : null)
+            || (isSelectedRowsUnassigned ? "Unassigned lots can't be merged." : null)
+            || (hasReworkSelected ? "Rework lots can't be merged." : null),
+        rework: busy
+            || (count !== 1 ? "Select exactly 1 lot to rework." : null)
+            || (!canRework ? "Only placed, non-leaked lots can be reworked." : null),
+        delete: busy
+            || (!canDelete ? "Unassigned rows cannot be deleted." : null),
+    };
+
+    console.log("🚀 ~ SelectionToolbar ~ isSelectedRowsUnassigned:", isSelectedRowsUnassigned)
+
     const transferLotIds = useMemo(
         () => [...new Set(selectedRows.map((r) => r.lot_id).filter(Boolean))],
         [selectedRows],
     );
 
+    console.log("🚀 ~ SelectionToolbar ~ count:", count)
     if (count === 0) {
         return null;
     }
@@ -110,10 +155,11 @@ export default function SelectionToolbar({
                     <div className="w-px h-5 bg-base-content/20" />
 
                     <button
-                        className="btn btn-sm text-xs font-medium"
+                        className={`btn btn-sm text-xs font-medium ${blockedCls(reasons.group)}`}
                         popoverTarget="bucket-popover"
                         style={{ anchorName: "--bucket-anchor" }}
-                        disabled={disabled || !canGroup || (buckets ?? []).length === 0}
+                        aria-disabled={!!reasons.group}
+                        onClick={guard(reasons.group)}
                     >
                         Move to group ▾
                     </button>
@@ -140,10 +186,10 @@ export default function SelectionToolbar({
 
                     {/* Popover Trigger Button */}
                     <button
-                        className="btn btn-sm text-xs font-medium"
+                        className={`btn btn-sm text-xs font-medium ${blockedCls(reasons.bulk)}`}
                         popoverTarget="tag-expedite-popover"
                         style={{ anchorName: "--tag-expedite-anchor" }}
-                        disabled={disabled || isSelectedRowsUnassigned}
+                        aria-disabled={!!reasons.bulk}
                     >
                         Bulk Actions ▾
                     </button>
@@ -161,12 +207,12 @@ export default function SelectionToolbar({
                         }}
                     >
                         {/* Category Label: Tags */}
-                        <li className="menu-title text-[10px] uppercase font-semibold text-base-content/50 px-2 py-1">
+                        {/* <li className="menu-title text-[10px] uppercase font-semibold text-base-content/50 px-2 py-1">
                             Mark Tag
-                        </li>
+                        </li> */}
 
                         {/* Tag Items */}
-                        {Object.entries(TAGS).map(([key, cfg]) => (
+                        {/* {Object.entries(TAGS).map(([key, cfg]) => (
                             <li key={key}>
                                 <button
                                     type="button"
@@ -178,10 +224,10 @@ export default function SelectionToolbar({
                                     {cfg.label}
                                 </button>
                             </li>
-                        ))}
+                        ))} */}
 
                         {/* Clear Tag Action */}
-                        <li>
+                        {/* <li>
                             <button
                                 type="button"
                                 onClick={onClearTag}
@@ -191,7 +237,7 @@ export default function SelectionToolbar({
                                 <span className="w-2 h-2 rounded-full border border-base-content/30" />
                                 Clear tag
                             </button>
-                        </li>
+                        </li> */}
 
                         {/* Divider */}
                         <div className="divider my-0.5" />
@@ -228,24 +274,11 @@ export default function SelectionToolbar({
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    <div
-                        className="tooltip"
-                        data-tip={
-                            count > 1
-                                ? "This action is for one selection only"
-                                : count === 0
-                                  ? "Select a lot to split"
-                                  : "Split lot"
-                        }
-                    >
+                    <div className="tooltip" data-tip={reasons.split ?? "Split lot"}>
                         <button
-                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
-                                count > 1 || isSelectedRowsUnassigned ? "cursor-not-allowed opacity-50" : ""
-                            }`}
-                            disabled={count !== 1 || isSelectedRowsUnassigned || hasReworkSelected}
-                            onClick={() => {
-                                splitModalRef.current?.showModal();
-                            }}
+                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.split)}`}
+                            aria-disabled={!!reasons.split}
+                            onClick={guard(reasons.split, () => splitModalRef.current?.showModal())}
                         >
                             <GoRepoForked size={16} /> split
                         </button>
@@ -253,31 +286,24 @@ export default function SelectionToolbar({
 
                     <div
                         className="tooltip"
-                        data-tip={
-                            count !== 2
-                                ? "Select exactly 2 lots to merge"
-                                : "Merge lots"
-                        }
+                        data-tip={reasons.merge ?? "Merge lots"}
                     >
                         <button
-                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${
-                                count !== 2 || isSelectedRowsUnassigned
-                                    ? "cursor-not-allowed opacity-50"
-                                    : ""
-                            }`}
-                            disabled={count !== 2 || isSelectedRowsUnassigned || hasReworkSelected}
-                            onClick={() => {
-                                mergeModalRef.current?.showModal();
-                            }}
+                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1  ${blockedCls(reasons.merge)}`}
+                            aria-disabled={!!reasons.merge}
+                            onClick={guard(reasons.merge, () => mergeModalRef.current?.showModal())}
                         >
                             <GoGitMerge size={16} /> merge
                         </button>
                     </div>
 
-                    <div className="tooltip" data-tip={canRework ? "Duplicate this lot as a rework" : "Select one placed lot to rework"}>
+                    <div 
+                        className="tooltip"
+                        data-tip={reasons.rework ?? "Duplicate this lot as a rework"}
+                    >
                         <button
-                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20"
-                            disabled={disabled || !canRework}
+                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 ${blockedCls(reasons.rework)}`}
+                            aria-disabled={!!reasons.rework}
                             onClick={() => onRework(selectedRow)}
                         >
                             Rework
@@ -287,12 +313,12 @@ export default function SelectionToolbar({
                     {/* Bulk status */}
                     <div className="relative">
                         <button
-                            onClick={() => {
+                            onClick={guard(reasons.group, () => {
                                 transferModalRef.current?.close();
                                 setStatusOpen((v) => !v);
                                 setTransferOpen(false);
-                            }}
-                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1"
+                            })}
+                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.bulk)}`}
                             disabled={disabled || isSelectedRowsUnassigned}
                         >
                             Set status
@@ -363,11 +389,11 @@ export default function SelectionToolbar({
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    <div className="tooltip" data-tip="delete selected">
+                    <div className="tooltip" data-tip={reasons.delete ?? "Delete selected"}>
                         <button
-                            onClick={onDelete}
-                            className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30"
-                            disabled={disabled || isSelectedRowsUnassigned}
+                            onClick={guard(reasons.delete, onDelete)}
+                            aria-disabled={!!reasons.delete}
+                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-error/20 text-error hover:bg-error/30 ${blockedCls(reasons.delete)}`}
                         >
                             <FaTrash />
                         </button>

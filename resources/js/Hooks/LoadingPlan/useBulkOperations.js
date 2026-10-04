@@ -156,7 +156,11 @@ export function useBulkOperations({
     );
 
     const handleBulkDelete = useCallback(() => {
-        const targets = dataRows.filter((r) => selectedRows.has(r.id) && r.entry_id);
+        console.log("🚀 ~ useBulkOperations ~ selectedRows:", selectedRows)
+        const targets = dataRows.filter((r) => {
+            return selectedRows.has(r.id) && r.entry_id;
+        });
+        console.log("🚀 ~ useBulkOperations ~ targets:", targets)
         const entryIds = targets.map((r) => r.entry_id);
         const prevSnapshot = dataRows;
 
@@ -182,15 +186,13 @@ export function useBulkOperations({
         if (entryIds.length === 0) return;
 
         withUpdating(mutate(route("loading-plan.bulk-delete"), { body: { ids: entryIds, scheduled_date: date } }))
-            .then(({ id, affected_timings }) => {
-                const patches = targets
-                    .map((r) => {
-                        const match = id?.find((e) => e.id === r.entry_id);
-                        return match ? { dndId: r._dndId, fields: { lock_version: match.lock_version } } : null;
-                    })
-                    .filter(Boolean);
+            .then(({ unassigned, affected_timings }) => {
+                const patches = targets.map((r) => {
+                    const m = unassigned?.find((e) => e.id === r.entry_id);
+                    return m ? { dndId: r._dndId, fields: { lock_version: m.lock_version } } : null;
+                }).filter(Boolean);
                 syncServerFields?.(patches);
-                applyAffectedTimings(update, affected_timings, date)
+                applyAffectedTimings(update, affected_timings, date);
             })
             .catch((err) => {
                 console.error("Bulk delete failed:", err);

@@ -331,6 +331,26 @@ class LoadingPlanEntryController extends Controller
         }
     }
 
+    public function autoSortCycleTime(Request $request, string $machine): JsonResponse
+    {
+        $data = $request->validate([
+            'scheduled_date' => 'required|date',
+        ]);
+
+        try {
+            $result = $this->service->autoSortCycleTime($machine, $data['scheduled_date']);
+            return response()->json($result);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            Log::error('autoSortCycleTime failed', ['exception' => $e]);
+            return response()->json([
+                'error'   => 'server_error',
+                'message' => 'failed to auto sort. Nothing was saved.',
+            ], 500);
+        }
+    }
+
     public function batchSync(Request $request): JsonResponse
     {
         $data = $request->validate([

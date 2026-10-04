@@ -9,6 +9,7 @@ export function LotIdCell({
     isPlannedYesterday,
     isRework,
     reworkSeq,
+    otherLocation,
 }) {
     const {
         handleShowHistory = noop,
@@ -32,9 +33,19 @@ export function LotIdCell({
         </>
     );
 
+    const otherLocationBadge = otherLocation && (
+        <span
+            className="badge badge-secondary badge-xs font-mono uppercase mr-1"
+            title={`Belongs to ${otherLocation}`}
+        >
+            {otherLocation}
+        </span>
+    );
+
     if (!splitInfo && !mergeInfo) {
         return (
             <span className="font-mono">
+                {otherLocationBadge}
                 <LotLabel
                     lotId={lotId}
                     isPickup={isPickup}
@@ -49,6 +60,7 @@ export function LotIdCell({
     return (
         <span className="flex items-center justify-between gap-1.5 min-w-0 w-full">
             <div className="font-mono truncate min-w-0">
+                {otherLocationBadge}
                 <LotLabel
                     lotId={lotId}
                     isPickup={isPickup}

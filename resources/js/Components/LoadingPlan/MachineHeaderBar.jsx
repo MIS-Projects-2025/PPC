@@ -47,24 +47,26 @@ export function MachineHeaderBar({
         // disableAddRowBlock,
         // scrollParentRef,
 		onAddBucket,
+        onAutoSort,
 		serverMachines,
         machineCapacity,
         machineTotalDoable,
+        machineSectionDoable,
         machineTotalQuantity,
 		otherPackageCounts,
 		expandedMachines,
-		onToggleExpandOthers
+		onToggleExpandOthers,
     } = useContext(TableInteractionContext);
 
 	const otherCount = otherPackageCounts?.[machine] ?? 0;
 	const showingOthers = expandedMachines?.has(machine);
 
-	const machineFactory = serverMachines[machineID]?.factory;
+	// const machineFactory = serverMachines[machineID]?.factory;
+    const machineFactory = serverMachines?.find((m) => m.id === machineID)?.factory;
 
 	const factoryColor = getFactoryColor(machineFactory);
 	
 	const totalQty = machineTotalQuantity[machine];
-	const totalDoable = machineTotalDoable[machine];
 
     const capacityData = machineCapacity?.[machine];
     const CAPACITY = capacityData?.capacity ?? 0;
@@ -72,9 +74,9 @@ export function MachineHeaderBar({
         ? capacityData.effective_from.split("T")[0]
         : null;
 
-    const sectionDoable = totalDoable ?? 0;
-    const overallDoable = machineTotalDoable?.[machine] ?? sectionDoable;
-    const otherDoable = Math.max(0, overallDoable - sectionDoable);
+    const overallDoable = machineTotalDoable?.[machine] ?? 0;
+    const sectionDoable = machineSectionDoable?.[machine] ?? 0;
+    const otherDoable   = Math.max(0, overallDoable - sectionDoable);
 
     const isExceeded = useMemo(() => {
         if (isUnassigned || isManual) return false;
@@ -102,7 +104,7 @@ export function MachineHeaderBar({
             ref={innerRef}
         >
 			<div className="sticky left-9 flex gap-2 h-full items-center">	
-				<div className="w-50 h-full font-extrabold whitespace-nowrap flex items-center gap-2">
+				<div className="w-80 h-full font-extrabold whitespace-nowrap flex justify-between items-center gap-2">
 					<button
 						type="button"
 						onClick={(e) => {
@@ -120,7 +122,37 @@ export function MachineHeaderBar({
 						<span key={toggleKey} className="text-[20px] font-mono animate-slide-down inline-block">
 							{machineLabel}
 						</span>
+                        {row?.machineLocation && <span className="badge badge-outline badge-sm font-mono">{row.machineLocation}</span>}
 					</button>
+                    
+                    <button
+                        className="btn"
+                        popoverTarget={`--${toggleKey}-machine-header-bar-menu-popover`}
+                        style={{
+                            anchorName: `--${toggleKey}-machine-header-bar-menu-anchor`
+                        }}
+                    >
+                        ⋮
+                    </button>
+
+                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={`--${toggleKey}-machine-header-bar-menu-popover`} style={{ positionAnchor: `--${toggleKey}-machine-header-bar-menu-anchor` } /* as React.CSSProperties */ }>
+                        {onAddBucket && machine !== null && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
+                                    + Group
+                                </button>
+                            </li>
+                        )}
+                        {onAutoSort && machine !== null && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); onAutoSort(machine); }}>
+                                    Auto Sort
+                                </button>
+                            </li>
+                        )}
+                    </ul>
 				</div>
 
 				<div className="w-65">
@@ -135,13 +167,6 @@ export function MachineHeaderBar({
 						{totalQty?.toLocaleString()}
 					</span>
 				</div>
-
-				{onAddBucket && machine !== MACHINE_MANUAL && (
-					<button type="button" className="btn btn-ghost btn-xs"
-						onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
-						+ Group
-					</button>
-				)}
 
 				{onToggleExpandOthers && !isPseudo && otherCount > 0 && (
 					<button

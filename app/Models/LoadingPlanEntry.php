@@ -186,7 +186,7 @@ class LoadingPlanEntry extends Model
     {
         $entry = static::where('id', $id)->lockForUpdate()->firstOrFail();
 
-        if ($entry->is_finalized) {
+        if ($entry->finalized_at !== null) {
             throw new \RuntimeException("Loading plan entry for the lot is already finalized.");
         }
 
