@@ -1423,7 +1423,7 @@ class SchedulerService
                 'CT' => null,
                 'is_pickup' => true,
                 'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
-                'Lot_Entry_Time_Days'     => $wip->Lot_Entry_Time_Days,
+                'Lot_Entry_Time_Days'     => $wip?->Lot_Entry_Time_Days,
             ];
         }
 
@@ -1445,6 +1445,8 @@ class SchedulerService
             'Lot_Type' => $wip->Lot_Type,
             'isExpedite' => (bool) $entry->is_manual_expedite,
             'aboveCT' => $formulas->cycleTimeExceedOverall,
+            'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
+            'Lot_Entry_Time_Days'     => $wip?->Lot_Entry_Time_Days,
             'CT' => $formulas->ct ?? null,
             'is_pickup' => false,
         ];
@@ -1598,6 +1600,7 @@ class SchedulerService
 
             if ($choice === null) {
                 $results['unassigned']->push($lot);
+                unset($contextByIdx[$idx], $candidateMachinesByIdx[$idx]);
                 continue;
             }
 
@@ -1636,6 +1639,7 @@ class SchedulerService
             }
 
             $this->plan[$machineId][] = $this->planLotRow($lot);
+            $anchorBefore  = $anchorStateByMachine[$machineId] ?? null;
 
             $anchorStateByMachine[$machineId] = $bestChoice['resulting_setup_state_id'];
             $remainingCapacityByMachine[$machineId] =
@@ -1650,13 +1654,12 @@ class SchedulerService
             unset($cacheByIdx[$bestIdx], $candidateMachinesByIdx[$bestIdx], $contextByIdx[$bestIdx]);
             $placedCount++;
 
-            $anchorBefore  = $anchorStateByMachine[$machineId] ?? null;
             // ... commit placement, update anchor/capacity ...
             $anchorChanged = $anchorBefore !== $bestChoice['resulting_setup_state_id'];
 
             // --- invalidate only lots whose candidate set includes $machineId ---
             foreach ($candidateMachinesByIdx as $idx => $machineIds) {
-                if (!$machineIds->contains($machineId)) {
+                if (!isset($cacheByIdx[$idx]) || !$machineIds->contains($machineId)) {
                     continue;
                 }
 
