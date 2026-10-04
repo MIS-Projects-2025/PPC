@@ -1,4 +1,4 @@
-import { recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
+import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import {
     callMerge,
     callRevertMerge,
@@ -20,7 +20,7 @@ import { useCallback, useState } from "react";
  * stub. Removed here; loadMergeHistory now behaves like loadSplitHistory
  * (loading stays true until the fetch settles).
  */
-export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate, baseTimes, date, toast, setIsDirty, syncServerFields }) {
+export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate, date, toast, setIsDirty, syncServerFields }) {
     const [splitHistoryData, setSplitHistoryData] = useState(null);
     const [mergeHistoryData, setMergeHistoryData] = useState(null);
     const [currentLotRole, setCurrentLotRole] = useState({ isParent: false, isChild: false });
@@ -73,7 +73,6 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 toast?.error?.("Couldn't find the split lot — please refresh.");
                 return;
             }
-            const affectedMachine = childRow.machine;
 
             withUpdating(
                 mutate(route("loading-plan.splits.destroy", splitId), {
@@ -99,12 +98,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                                           }
                                         : r,
                                 );
-                            if (baseTimes && affectedMachine) recomputeMachine(next, affectedMachine, baseTimes, date);
+
                             return next;
                         },
                         false,
                         { type: "split", splitId, resultingState: "reverted" },
                     );
+                    applyAffectedTimings(update, result.affected_timings, date);
                     // parent survives the operation — its lock_version needs to
                     // reach past/future snapshots too, same as any field patch
                     if (result.parent) {
@@ -120,7 +120,7 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 })
                 .finally(() => onDone?.());
         },
-        [dataRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const revertMerge = useCallback(
@@ -136,8 +136,6 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 toast?.error?.(`Couldn't find merge record for lot ${targetLotId} — please refresh.`);
                 return;
             }
-            const affectedTarget = targetRow.machine;
-            const affectedSource = sourceRow.machine;
 
             withUpdating(
                 mutate(route("loading-plan.merges.destroy", mergeId), {
@@ -174,15 +172,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                                 }
                                 return row;
                             });
-                            if (baseTimes) {
-                                if (affectedTarget) recomputeMachine(next, affectedTarget, baseTimes, date);
-                                if (affectedSource) recomputeMachine(next, affectedSource, baseTimes, date);
-                            }
+                           
                             return next;
                         },
                         false,
                         { type: "merge", mergeId, resultingState: "reverted" },
                     );
+                    applyAffectedTimings(update, result.affected_timings, date);
                     syncServerFields?.([
                         { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },
                         { dndId: `entry-${source.entry_id}`, fields: { lock_version: source.lock_version } },
@@ -195,7 +191,7 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 })
                 .finally(() => onDone?.());
         },
-        [dataRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const mergeRows = useCallback(
@@ -206,8 +202,6 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 toast?.error?.("Couldn't find the lots to merge — please refresh.");
                 return;
             }
-            const affectedTarget = targetRow.machine;
-            const affectedSource = sourceRow.machine;
 
             withUpdating(
                 mutate(route("loading-plan.merges.store"), {
@@ -227,15 +221,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                                 if (row.entry_id === source.entry_id) return { ...row, ...source };
                                 return row;
                             });
-                            if (baseTimes) {
-                                if (affectedTarget) recomputeMachine(next, affectedTarget, baseTimes, date);
-                                if (affectedSource) recomputeMachine(next, affectedSource, baseTimes, date);
-                            }
+
                             return next;
                         },
                         false,
                         { type: "merge", mergeId: result.merge.id, resultingState: "active" },
                     );
+                    applyAffectedTimings(update, result.affected_timings, date);
                     syncServerFields?.([
                         { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },
                         { dndId: `entry-${source.entry_id}`, fields: { lock_version: source.lock_version } },
@@ -247,7 +239,7 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                     toast?.error?.(err?.message ?? "Couldn't merge the lots — please try again.");
                 });
         },
-        [dataRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const splitRow = useCallback(
@@ -257,7 +249,6 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 toast?.error?.("Couldn't find the lot to split — please refresh.");
                 return;
             }
-            const parentMachine = parentRow.machine;
 
             withUpdating(
                 mutate(route("loading-plan.splits.store"), {
@@ -283,15 +274,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                                 status: child.status ?? parentRow.status ?? "NONE",
                                 _dndId: `entry-${child.entry_id}`,
                             });
-                            if (baseTimes) {
-                                if (parentMachine) recomputeMachine(next, parentMachine, baseTimes, date);
-                                if (targetMachine !== parentMachine) recomputeMachine(next, targetMachine, baseTimes, date);
-                            }
+                           
                             return next;
                         },
                         false,
                         { type: "split", splitId: result.split.id, resultingState: "active" },
                     );
+                    applyAffectedTimings(update, result.affected_timings, date);
                     // parent survives; propagate its new lock_version to old snapshots.
                     // child is brand new — nothing stale to fix for it.
                     syncServerFields?.([
@@ -304,7 +293,7 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                     toast?.error?.(err?.message ?? "Couldn't split the lot — please try again.");
                 });
         },
-        [dataRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     return {

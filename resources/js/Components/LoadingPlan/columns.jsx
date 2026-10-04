@@ -3,11 +3,13 @@ import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { createContext } from 'react';
 import { SelectColumn } from "react-data-grid";
 import { isBlockRow } from "../../Lib/LoadingPlan/helpers";
+import { BucketHeaderCell } from "./BucketHeaderBar";
 import { CellEditor } from "./CellEditor";
 import { DoableCell } from "./DoableCell";
 import { MachineHeaderCell } from "./MachineHeaderCell";
 import { OvenHeaderCell } from "./OvenHeaderCell";
 import { RowDropTargetCell } from "./RowDropTargetCell";
+import TimeCell from "./TimeCell";
 
 export const TableActionsContext = createContext(null);
 
@@ -120,8 +122,8 @@ export const DATA_COLUMNS = [
     { key: "assy_site", editable: false, name: "Assy Site" },
     { key: "stock_position", editable: false, name: "Stock Position" }, // NEW — needs backend fix (see below)
     { key: "bake_time_temp", editable: false, name: "Bake Time Temp" },
-    { key: "sequence_order", editable: false, name: "Seq" },
-    { key: "doable_status", editable: false, name: "Doable Status" },
+    // { key: "sequence_order", editable: false, name: "Seq" },
+    // { key: "doable_status", editable: false, name: "Doable Status" },
     { key: "remarks", editable: true, name: "Remarks" },
 ];
 
@@ -196,12 +198,25 @@ export function makeBakeColumns(highlightedMatch, onToggleCollapse) {
     ];
 }
 
+function renderCollapsedCell(key, row) {
+    if (key === "package_name") {
+        return (
+            <span className="truncate" title={row.__packages.join(", ")}>
+                {row.__count === 1 ? "1 entry" : `+ ${row.__count} entries`}
+            </span>
+        );
+    }
+    if (key === "time_start" || key === "time_end") return row[key];
+
+    return null;
+}
+
 // NOTE: the original signature was
 // makeColumns(hoveredRowId, isUpdating, onStatusClick, onToggleCollapse, highlightedMatch)
 // — `hoveredRowId` was never referenced in the body (the drag-over row
 // highlight is applied via `rowClass` in the parent, not per-column).
 // Dropped here; update the call site accordingly.
-export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch) {
+export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation) {
     return [
         SelectColumn,
         {
@@ -217,14 +232,9 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
             },
             renderCell({ row }) {
                 if (row.__type === "header") {
-                    return (
-                        <MachineHeaderCell
-                            row={row}
-                            rowCount={row.__rowCount}
-                            lotCount={row.__lotCount}
-                            onToggleCollapse={onToggleCollapse}
-                        />
-                    );
+                    return row.__headerKind === "bucket"
+                        ? <BucketHeaderCell row={row} onToggleCollapse={onToggleCollapse} />
+                        : <MachineHeaderCell row={row} rowCount={row.__rowCount} lotCount={row.__lotCount} onToggleCollapse={onToggleCollapse} />;
                 }
                 return <RowDropTargetCell rowId={row.id} />;
             },
@@ -232,6 +242,8 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
         ...DATA_COLUMNS.map((col) => {
             const getDynamicCellClass = (row) => {
                 if (row.__type === "header") return "";
+
+                if (row.__type === "collapsed") return "bg-base-200 italic text-base-content/60";
 
                 const classes = [];
 
@@ -266,6 +278,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     ...col,
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
+                        if (row.__type === "collapsed") return renderCollapsedCell(col.key, row);
                         
                         if (row.__type === "header") {
                             return null;
@@ -298,8 +311,8 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     ...col,
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
-                        console.log("HEHE ~ columns.jsx:264 ~ makeColumns ~ row:", row);
-                        
+                        if (row.__type === "collapsed") return renderCollapsedCell(col.key, row);
+
                         if (row.__type === "header") {
                             return null;
                         }
@@ -309,13 +322,18 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         return (
-                            <LotIdCell
-                                lotId={row.lot_id}
-                                isPickup={row.is_pickup}
-                                splitInfo={row.split_info}
-                                mergeInfo={row.merge_info}
-                                isPlannedYesterday={row.is_leaked}
-                            />
+                            <div className="flex items-center gap-1">
+                                <LotIdCell 
+                                    lotId={row.lot_id} 
+                                    isPickup={row.is_pickup} 
+                                    splitInfo={row.split_info}
+                                    mergeInfo={row.merge_info} 
+                                    isPlannedYesterday={row.is_leaked} 
+                                    isRework={row.is_rework}
+                                    reworkSeq={row.rework_seq}
+                                    otherLocation={row.location && row.location !== selectedLocation ? row.location : null}
+                                />
+                            </div>
                         );
                     },
                 };
@@ -326,6 +344,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     ...col,
                     cellClass: (row) => getDynamicCellClass(row),
                     renderCell({ row }) {
+                        if (row.__type === "collapsed") return renderCollapsedCell(col.key, row);
 
                         if (row.__type === "header") {
                             return null;
@@ -358,6 +377,8 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                 width: col.width,
                 cellClass: (row) => getDynamicCellClass(row),
                 renderCell({ row }) {
+                    if (row.__type === "collapsed") return renderCollapsedCell(col.key, row);
+
                     if (row.__type === "header") return null;
 
                     if (isBlockRow(row)) {
@@ -377,7 +398,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         if (["accu_time", "time_start", "time_end"].includes(col.key)) {
-                            return row[col.key];
+                            return col.key === "accu_time" ? row[col.key] : <TimeCell row={row} field={col.key} />;
                         }
 
                         return null; // blank every other cell for a block row
@@ -387,12 +408,17 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         return row.machine ?? "Unassigned";
                     }
 
+                    if (col.key === "time_start" || col.key === "time_end") {
+                        return <TimeCell row={row} field={col.key} />;
+                    }
+
                     return row[col.key];
                 },
                 ...(EDITABLE_COLUMNS[col.key] && {
                     renderEditCell: CellEditor,
                     editable: (row) =>
                         !isUpdating &&
+                        row.__type !== "collapsed" &&
                         row.__type !== "header" &&
                         !(isBlockRow(row) && col.key !== "accu_time"),
                 }),

@@ -1,5 +1,6 @@
 import { forwardRef } from "react";
 import { GoGitMerge } from "react-icons/go";
+import LotEndpoint from "./LotEndpoint";
 
 function formatDate(dateStr) {
     if (!dateStr) return "—";
@@ -68,17 +69,15 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
                                         }`}
                                     >
                                         <div className="flex items-center justify-between mb-2">
-                                            <div className="flex items-center gap-2 text-sm">
-                                                <span className="font-mono text-secondary">
-                                                    {merge.sourceLotId}
-                                                </span>
-                                                <GoGitMerge
-                                                    size={12}
-                                                    className="text-base-content/30"
+                                            <div className="flex items-center gap-3">
+                                                <LotEndpoint lotId={merge.fromLotId} machine={merge.fromMachine} className="text-secondary" />
+                                                <GoGitMerge size={12} className="text-base-content/30" />
+                                                <LotEndpoint 
+                                                    lotId={merge.toLotId} 
+                                                    machine={merge.toMachine} 
+                                                    machineNow={merge.toMachineNow}
+                                                    approx={!merge.snapshotExact}
                                                 />
-                                                <span className="font-mono">
-                                                    {merge.targetLotId}
-                                                </span>
                                             </div>
 
                                             {merge.revertedAt && (
@@ -108,24 +107,22 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
                                             )}
                                         </div>
 
-                                        {(isTarget || isSource) && (
-                                            <div className="mb-2">
-                                                {isCurrentTarget && (
-                                                    <span className="badge badge-sm badge-primary badge-outline font-mono">
-                                                        This lot is TARGET,
-                                                        absorbed{" "}
-                                                        {merge.sourceLotId}
-                                                    </span>
-                                                )}
-                                                {isCurrentSource && (
-                                                    <span className="badge badge-sm badge-secondary badge-outline font-mono">
-                                                        This lot is SOURCE,
-                                                        merged into{" "}
-                                                        {merge.targetLotId}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        )}
+                                        <div className="mb-2">
+                                            {isCurrentTarget && (
+                                                <span className="badge badge-sm badge-primary badge-outline font-mono">
+                                                    This lot is TARGET,
+                                                    absorbed{" "}
+                                                    {merge.sourceLotId}
+                                                </span>
+                                            )}
+                                            {isCurrentSource && (
+                                                <span className="badge badge-sm badge-secondary badge-outline font-mono">
+                                                    This lot is SOURCE,
+                                                    merged into{" "}
+                                                    {merge.targetLotId}
+                                                </span>
+                                            )}
+                                        </div>
 
                                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-base-content/60">
                                             <div>
@@ -160,7 +157,7 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
                                         </div>
 
                                         {merge.revertedAt && (
-                                            <div className="mt-2 pt-2 border-t border-base-content/10 text-xs text-base-content/40">
+                                            <div className="pt-2 border-t border-base-content/10 text-xs text-base-content/40">
                                                 Reverted{" "}
                                                 {formatDateTime(
                                                     merge.revertedAt,

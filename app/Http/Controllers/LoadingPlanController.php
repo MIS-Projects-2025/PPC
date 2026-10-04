@@ -9,9 +9,13 @@ use App\Models\QdnMachine;
 use App\Models\LotQuantity;
 use App\Models\MachineDayStart;
 use App\Models\SchedulerRun;
+use App\Models\LotBucketItem;
+use App\Models\LoadingPlanBucket;
 use App\Models\PpcPackageMaster;
+use App\Models\CustomerDataWip;
 use App\Models\MachineCapacity;
 use App\Services\SchedulerService;
+use App\Services\PackageLocation;
 use App\Services\LoadingPlanPackageCoverage;
 use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
@@ -55,7 +59,6 @@ class LoadingPlanController extends Controller
         $props['baseTimes'] = $baseTimes;
         $props['schedulerHistory'] = Inertia::defer(
             fn() => SchedulerRun::query()
-                ->where('location', $selectedLocation)
                 ->where('date', $date)
                 ->latest()
                 ->limit(20)
@@ -140,13 +143,8 @@ class LoadingPlanController extends Controller
         $selectedLocation = $request->get('location', 'PL1');
         $previousDate = Carbon::parse($date)->subDay()->toDateString();
 
-        $packageLineMap = Cache::remember('package-line-map', now()->addMinutes(10), function () {
-            return PpcPackageMaster::query()
-                ->where('is_telford', 1)
-                ->where('is_active', 1)
-                ->get()
-                ->mapWithKeys(fn($row) => [trim($row->package) => $row->default_pl]);
-        });
+        $packageLineMap = PackageLocation::map();
+
         $mark('packageLineMap');
 
         [$activeMachines] = $this->computeActiveMachinesAndBaseTimes($selectedLocation, $date);
@@ -157,19 +155,19 @@ class LoadingPlanController extends Controller
         $mark('initWipAndEntries');
 
         $result = $loadingPlanService->initEntries();
+        $result = $this->attachBuckets($result, $date);
         $mark('initEntries (1st call)');
 
         $groups = app(\App\Services\PackageGroups::class);
         $groupMap = $groups->reverseMap();
 
         $packages = $result
-            ->filter(fn($row) => !$row['is_block'])
+            ->filter(fn($row) => !$row['is_block'] && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION)
             ->pluck('package_name')
             ->filter()->unique()
             ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
             ->map(fn($pkg) => $groupMap[$pkg] ?? $pkg)
             ->unique()->sort()->values();
-        $mark('build packages list');
 
         $mark('build packages list');
 
@@ -183,10 +181,12 @@ class LoadingPlanController extends Controller
             return $packageListPromise ??= $partnameIntegrity->lookupPackageList($wipRows);
         };
 
-        $bakeLots = (new BakeLotService())->getActiveBake();
+        // $bakeLots = (new BakeLotService())->getActiveBake();
         $mark('getActiveBake');
 
         Log::info('Request memory peak', ['mb' => memory_get_peak_usage(true) / 1048576]);
+
+        $machineNameById = QdnMachine::pluck('machine_num', 'id');
 
         $props = [
             'data'              => $result,
@@ -196,7 +196,18 @@ class LoadingPlanController extends Controller
             'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
             'status'            => $status,
-            'bakeLots'          => $bakeLots,
+            // 'bakeLots'          => $bakeLots,
+
+            'buckets' => LoadingPlanBucket::where('location', $selectedLocation)
+                ->orderBy('sort_order')
+                ->get()
+                ->map(fn($b) => [
+                    'id'         => $b->id,
+                    'label'      => $b->label,
+                    'sort_order' => $b->sort_order,
+                    'machine'    => $b->machine_id ? ($machineNameById[$b->machine_id] ?? null) : null,
+                ])
+                ->values(),
 
             'partnameMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList) {
                 return $partnameIntegrity->findMismatches($wipRows, $getPackageList());
@@ -210,6 +221,7 @@ class LoadingPlanController extends Controller
                     ->pluck('lot_id');
                 $relevantLotIds = $wipRows->pluck('Lot_Id')->merge($entryLotIds)->filter()->unique();
                 $lotQuantities = LotQuantity::whereIn('scheduled_date', [$date, $previousDate])
+                    ->where('rework_seq', 0)
                     ->whereIn('lot_id', $relevantLotIds)
                     ->get()
                     ->keyBy('lot_id');
@@ -305,8 +317,8 @@ class LoadingPlanController extends Controller
     private function computeActiveMachinesAndBaseTimes(string $selectedLocation, string $date): array
     {
         $machines = QdnMachine::active()
-            ->where('location', $selectedLocation)
-            ->select('id', 'machine_num', 'machine_platform', 'location')
+            // ->where('location', $selectedLocation)
+            ->select('id', 'machine_num', 'machine_platform', 'location', 'factory')
             ->get();
 
         $baseTimes = $machines
@@ -352,16 +364,38 @@ class LoadingPlanController extends Controller
                     default => $machine->machine_platform,
                 },
                 'location' => $machine->location,
+                'factory'  => $machine->factory,
+                'id'       => $machine->id,
             ])
             ->values();
 
         return [$activeMachines, $baseTimes];
     }
 
+    private function attachBuckets($rows, string $date)
+    {
+        $items = LotBucketItem::where('scheduled_date', $date)->get()->keyBy('lot_id');
+        \Log::info('attachBuckets', [
+            'date'          => $date,
+            'items'         => $items->keys()->all(),
+            'rows_matching' => $rows->whereIn('lot_id', $items->keys()->all())
+                ->map(fn($r) => [$r['lot_id'], $r['is_leaked'] ?? null, $r['entry_id'] ?? null])
+                ->values()->all(),
+        ]);
+
+        return $rows->map(function ($row) use ($items) {
+            $item = (!($row['is_leaked'] ?? false) && $row['lot_id'] && !($row['rework_seq'] ?? 0))
+                ? $items->get($row['lot_id'])
+                : null;
+            $row['bucket_id'] = $item?->bucket_id;
+            $row['bucket_position'] = $item?->position;
+            return $row;
+        });
+    }
+
     public function runScheduler(Request $request)
     {
         $date = $request->get('date', ShiftDay::current());
-        $selectedLocation = $request->get('location', 'PL1');
         $previousDate = Carbon::parse($date)->subDay()->toDateString();
         $isVisitingYesterday = $date === ShiftDay::yesterday();
 
@@ -369,7 +403,7 @@ class LoadingPlanController extends Controller
             return back()->with('error', 'Cannot run scheduler on a past date.');
         }
 
-        $lockKey = "scheduler-run-lock:{$selectedLocation}:{$date}";
+        $lockKey = "scheduler-run-lock:{$date}";
         $lock = Cache::lock($lockKey, 60); // hold for max 60s
 
         if (!$lock->get()) {
@@ -377,27 +411,47 @@ class LoadingPlanController extends Controller
         }
 
         try {
-            $loadingPlanService = new LoadingPlanService($date, $selectedLocation, $previousDate);
+            $loadingPlanService = new LoadingPlanService($date, null, $previousDate);
             $loadingPlanService->initWipAndEntries();
             $result = $loadingPlanService->initEntries();
+            $result = $this->attachBuckets($result, $date);
 
             $unassignedRows = $result->filter(
-                fn($row) =>
-                !$row['is_block'] && ($row['entry_id'] === null || $row['machine'] === null)
+                fn($row) => !$row['is_block']
+                    && $row['bucket_id'] === null   // <- new
+                    && ($row['entry_id'] === null || $row['machine'] === null)
             )->values();
 
-            $unassignedWipOnly = $unassignedRows->filter(fn($row) => $row['entry_id'] === null);
+            $unassignedWipOnly = $unassignedRows->filter(
+                fn($row) => $row['entry_id'] === null
+                    && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION
+            );
+
+            $unassignedWipOnly = $unassignedRows->filter(
+                fn($row) => ($row['station'] ?? null) !== CustomerDataWip::RES_STATION
+                    && !($row['is_leaked'] ?? false)
+                    && (int) ($row['rework_seq'] ?? 0) === 0
+            );
+
             $unassignedLotIds = $unassignedWipOnly->pluck('lot_id')->filter()->all();
 
             $wipRowsToSchedule = $loadingPlanService->todayWipRows->toBase()->only($unassignedLotIds);
+
+            $expediteByLot = $unassignedWipOnly->pluck('is_manual_expedite', 'lot_id');
+
             $pickup = $wipRowsToSchedule
-                ->map(fn($wip) => $loadingPlanService->mapWipToPickupPayload($wip))
+                ->map(function ($wip) use ($loadingPlanService, $expediteByLot) {
+                    $payload = $loadingPlanService->mapWipToPickupPayload($wip);
+                    $payload['is_expedite'] = (bool) ($expediteByLot[$wip->Lot_Id] ?? false);
+                    return $payload;
+                })
                 ->values()
                 ->all();
 
             if (empty($pickup)) {
                 SchedulerRun::create([
-                    'location'   => $selectedLocation,
+                    // 'location'   => $selectedLocation,
+                    'location'   => "All",
                     'date'       => $date,
                     // 'user_id'    => auth()->id(),
                     'user_id'    => null,
@@ -411,7 +465,8 @@ class LoadingPlanController extends Controller
             $schedulerResult = $schedulerService->rebuildForPickupArrival($pickup, Carbon::parse($date));
 
             SchedulerRun::create([
-                'location'          => $selectedLocation,
+                // 'location'          => $selectedLocation,
+                'location'          => "All",
                 'date'              => $date,
                 // 'user_id'           => auth()->id(),
                 'user_id'           => null,
@@ -429,7 +484,8 @@ class LoadingPlanController extends Controller
             return back()->with('success', 'Scheduler run complete.');
         } catch (\Throwable $e) {
             SchedulerRun::create([
-                'location' => $selectedLocation,
+                // 'location' => $selectedLocation,
+                'location'          => "All",
                 'date'     => $date,
                 // 'user_id'  => auth()->id(),
                 'user_id'           => null,

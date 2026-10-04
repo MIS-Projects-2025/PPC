@@ -12,6 +12,18 @@ export const TableInteractionContext = createContext({
     disableAddRowBlock: false,
 });
 
+const getFactoryColor = (factory) => {
+    const value = factory?.trim().toUpperCase() ?? "";
+
+    if (value.includes("F1")) return "bg-sky-200/60";
+    if (value.includes("F2")) return "bg-emerald-200/60";
+    if (value.includes("F3")) return "bg-orange-200/60";
+    if (value.includes("RES")) return "bg-amber-200/60";
+    if (value.includes("BRAND")) return "bg-cyan-200/60";
+
+    return "bg-slate-200/60";
+};
+
 export function MachineHeaderBar({
     row,
 	rowCount,
@@ -24,6 +36,7 @@ export function MachineHeaderBar({
 }) {
 	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
     const machine = row?.machine;
+	const machineID = row?.machineId;
 	const machineLabel = row?.machineLabel;
     const isUnassigned = (String (machineLabel)).toLowerCase() === "Unassigned" || machine === null;
     const isManual = machine === MACHINE_MANUAL;
@@ -33,13 +46,27 @@ export function MachineHeaderBar({
         // disableAddRowLot,
         // disableAddRowBlock,
         // scrollParentRef,
+		onAddBucket,
+        onAutoSort,
+		serverMachines,
         machineCapacity,
         machineTotalDoable,
+        machineSectionDoable,
         machineTotalQuantity,
+		otherPackageCounts,
+		expandedMachines,
+		onToggleExpandOthers,
     } = useContext(TableInteractionContext);
 
+	const otherCount = otherPackageCounts?.[machine] ?? 0;
+	const showingOthers = expandedMachines?.has(machine);
+
+	// const machineFactory = serverMachines[machineID]?.factory;
+    const machineFactory = serverMachines?.find((m) => m.id === machineID)?.factory;
+
+	const factoryColor = getFactoryColor(machineFactory);
+	
 	const totalQty = machineTotalQuantity[machine];
-	const totalDoable = machineTotalDoable[machine];
 
     const capacityData = machineCapacity?.[machine];
     const CAPACITY = capacityData?.capacity ?? 0;
@@ -47,9 +74,9 @@ export function MachineHeaderBar({
         ? capacityData.effective_from.split("T")[0]
         : null;
 
-    const sectionDoable = totalDoable ?? 0;
-    const overallDoable = machineTotalDoable?.[machine] ?? sectionDoable;
-    const otherDoable = Math.max(0, overallDoable - sectionDoable);
+    const overallDoable = machineTotalDoable?.[machine] ?? 0;
+    const sectionDoable = machineSectionDoable?.[machine] ?? 0;
+    const otherDoable   = Math.max(0, overallDoable - sectionDoable);
 
     const isExceeded = useMemo(() => {
         if (isUnassigned || isManual) return false;
@@ -69,7 +96,7 @@ export function MachineHeaderBar({
 
     return (
         <div
-            className={`w-full h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
+            className={`w-full ${factoryColor} h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
                 isOver
                     ? "outline-2 outline-dashed outline-[#7dd3fc] outline-offset-[-2px]"
                     : "outline-none"
@@ -77,7 +104,7 @@ export function MachineHeaderBar({
             ref={innerRef}
         >
 			<div className="sticky left-9 flex gap-2 h-full items-center">	
-				<div className="w-50 h-full font-extrabold whitespace-nowrap flex items-center gap-2">
+				<div className="w-80 h-full font-extrabold whitespace-nowrap flex justify-between items-center gap-2">
 					<button
 						type="button"
 						onClick={(e) => {
@@ -95,7 +122,37 @@ export function MachineHeaderBar({
 						<span key={toggleKey} className="text-[20px] font-mono animate-slide-down inline-block">
 							{machineLabel}
 						</span>
+                        {row?.machineLocation && <span className="badge badge-outline badge-sm font-mono">{row.machineLocation}</span>}
 					</button>
+                    
+                    <button
+                        className="btn"
+                        popoverTarget={`--${toggleKey}-machine-header-bar-menu-popover`}
+                        style={{
+                            anchorName: `--${toggleKey}-machine-header-bar-menu-anchor`
+                        }}
+                    >
+                        ⋮
+                    </button>
+
+                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={`--${toggleKey}-machine-header-bar-menu-popover`} style={{ positionAnchor: `--${toggleKey}-machine-header-bar-menu-anchor` } /* as React.CSSProperties */ }>
+                        {onAddBucket && machine !== null && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
+                                    + Group
+                                </button>
+                            </li>
+                        )}
+                        {onAutoSort && machine !== null && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); onAutoSort(machine); }}>
+                                    Auto Sort
+                                </button>
+                            </li>
+                        )}
+                    </ul>
 				</div>
 
 				<div className="w-65">
@@ -110,6 +167,17 @@ export function MachineHeaderBar({
 						{totalQty?.toLocaleString()}
 					</span>
 				</div>
+
+				{onToggleExpandOthers && !isPseudo && otherCount > 0 && (
+					<button
+						type="button"
+						className={`btn btn-xs ${showingOthers ? "btn-warning" : "btn-ghost"}`}
+						onClick={(e) => { e.stopPropagation(); onToggleExpandOthers(machine); }}
+						title={showingOthers ? "Hide rows outside this tab" : "Show rows outside this tab"}
+					>
+						{showingOthers ? "Hide" : "Show"} +{otherCount} other
+					</button>
+				)}
 
 				{/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
 				{!isUnassigned && !isManual && (

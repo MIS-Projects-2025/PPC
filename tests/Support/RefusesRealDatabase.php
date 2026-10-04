@@ -18,7 +18,7 @@ use RuntimeException;
  * (If PHP complains the refreshApplication() declaration is incompatible,
  * add ": void" to match your Laravel version's parent signature.)
  */
-trait RefusesRealDatabases
+trait RefusesRealDatabase
 {
     protected function refreshApplication()
     {

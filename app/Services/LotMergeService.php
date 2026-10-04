@@ -24,8 +24,12 @@ class LotMergeService
                 throw new InvalidMergeException("Cannot merge an entry into itself.");
             }
 
-            $entryA = LoadingPlanEntry::findOrFail($entryIdA);
-            $entryB = LoadingPlanEntry::findOrFail($entryIdB);
+            $entryA = LoadingPlanEntry::with('machineModel')->findOrFail($entryIdA);
+            $entryB = LoadingPlanEntry::with('machineModel')->findOrFail($entryIdB);
+
+            if ($entryA->rework_seq > 0 || $entryB->rework_seq > 0) {
+                throw new InvalidMergeException('Rework rows cannot be merged.');
+            }
 
             // Derive and validate that both entries share the exact same scheduled date
             $date = $this->assertConsistentDates([$entryA, $entryB]);
@@ -57,6 +61,9 @@ class LotMergeService
                 ? [$entryA, $entryB, $quantityA, $quantityB, $qtyA, $qtyB]
                 : [$entryB, $entryA, $quantityB, $quantityA, $qtyB, $qtyA];
 
+            $sourceMachine = $sourceEntry->getMachineName();
+            $targetMachine = $targetEntry->getMachineName();
+
             $targetLotId = $targetEntry->lot_id;
             $sourceLotId = $sourceEntry->lot_id;
 
@@ -69,6 +76,8 @@ class LotMergeService
             $merge = LotMerge::create([
                 'target_lot_id'   => $targetLotId,
                 'source_lot_id'   => $sourceLotId,
+                'source_machine'  => $sourceMachine,
+                'target_machine'   => $targetMachine,
                 'scheduled_date'  => $date,
                 'transferred_qty' => $sourceQty,
                 'created_by'      => $createdBy,
@@ -101,6 +110,8 @@ class LotMergeService
                 'merge'  => $merge->fresh(),
                 'target' => $targetEnriched,
                 'source' => $sourceEnriched,
+
+                'affected_timings' => LoadingPlanEntryService::timingsFor([$targetEntry->machine_id, $sourceEntry->machine_id], $date),
             ];
         });
     }
@@ -114,9 +125,9 @@ class LotMergeService
             $this->assertDateNotFinalized($date);
 
             $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)
-                ->where('scheduled_date', $merge->scheduled_date)->first();
+                ->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
             $sourceQuantity = LotQuantity::where('lot_id', $merge->source_lot_id)
-                ->where('scheduled_date', $merge->scheduled_date)->first();
+                ->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
 
             if ($targetQuantity) {
                 $targetQuantity->update([
@@ -136,6 +147,8 @@ class LotMergeService
 
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
             $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+
+            $machineIds = [$targetEntry?->machine_id, $sourceEntry?->machine_id];
 
             $calc = app(LotScheduleCalculator::class, [
                 'dates' => [$date],
@@ -167,6 +180,7 @@ class LotMergeService
                 'merge'  => $merge->fresh(),
                 'target' => $targetEntry,
                 'source' => $sourceEntry,
+                'affected_timings' => LoadingPlanEntryService::timingsFor($machineIds, $date),
             ];
         });
     }
@@ -180,8 +194,8 @@ class LotMergeService
             $this->assertDateNotFinalized($date);
 
             // re-apply the same qty transfer revert() undid
-            $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
-            $sourceQuantity = LotQuantity::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+            $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $sourceQuantity = LotQuantity::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
 
             if (!$targetQuantity || !$sourceQuantity) {
                 throw new InvalidMergeException("Missing quantity record for one of these lots — can't restore merge.");
@@ -200,6 +214,8 @@ class LotMergeService
 
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
             $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+
+            $machineIds = [$targetEntry?->machine_id, $sourceEntry?->machine_id];
 
             $calc = app(LotScheduleCalculator::class, [
                 'dates' => [$date],
@@ -227,7 +243,12 @@ class LotMergeService
                 $sourceEntry['merge_info'] = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
             }
 
-            return ['merge' => $merge->fresh(), 'target' => $targetEntry, 'source' => $sourceEntry];
+            return [
+                'merge' => $merge->fresh(),
+                'target' => $targetEntry,
+                'source' => $sourceEntry,
+                'affected_timings' => LoadingPlanEntryService::timingsFor($machineIds, $date),
+            ];
         });
     }
 
@@ -277,20 +298,53 @@ class LotMergeService
 
     public function historyFor(string $lotId): \Illuminate\Support\Collection
     {
-        return LotMerge::where('target_lot_id', $lotId)
+        $merges = LotMerge::where('target_lot_id', $lotId)
             ->orWhere('source_lot_id', $lotId)
             ->orderBy('created_at')
+            ->get();
+
+        $lotIds = $merges->pluck('source_lot_id')->concat($merges->pluck('target_lot_id'))->unique();
+
+        $entries = LoadingPlanEntry::with('machineModel')
+            ->whereIn('lot_id', $lotIds)
+            ->where('rework_seq', 0)
             ->get()
-            ->map(fn($m) => [
-                'mergeId'         => $m->id,
-                'targetLotId'     => $m->target_lot_id,
-                'sourceLotId'     => $m->source_lot_id,
-                'scheduledDate'   => $m->scheduled_date->toDateString(),
-                'transferredQty'  => $m->transferred_qty,
-                'createdBy'       => $m->created_by,
-                'createdAt'       => $m->created_at,
-                'revertedAt'      => $m->reverted_at,
-                'revertedBy'      => $m->reverted_by,
-            ]);
+            ->groupBy('lot_id');
+
+        $machineOn = function (string $id, string $date) use ($entries): ?string {
+            $e = $entries->get($id, collect())
+                ->first(fn($e) => $e->scheduled_date->toDateString() === $date);
+            if (!$e) return null;
+            return $e->finalized_at ? $e->machine_snapshot : $e->getMachineName();
+        };
+
+        $currentMachine = function (string $id) use ($entries): ?string {
+            $e = $entries->get($id, collect())->sortByDesc('scheduled_date')->first();
+            if (!$e) return null;
+            return $e->finalized_at ? $e->machine_snapshot : $e->getMachineName();
+        };
+
+        return $merges->map(function ($m) use ($machineOn, $currentMachine) {
+            $date = $m->scheduled_date->toDateString();
+            $active = is_null($m->reverted_at);
+
+            return [
+                'mergeId'        => $m->id,
+                'fromLotId'      => $m->source_lot_id,
+                'fromMachine'    => $m->source_machine ?? $machineOn($m->source_lot_id, $date), // at merge time
+                'toLotId'        => $m->target_lot_id,
+                'toMachine'      => $m->target_machine ?? $machineOn($m->target_lot_id, $date), // at merge time
+                'toMachineNow'   => $active ? $currentMachine($m->target_lot_id) : null,        // live, target only
+                'snapshotExact'  => !is_null($m->source_machine) && !is_null($m->target_machine),
+                'targetLotId'    => $m->target_lot_id,
+                'sourceLotId'    => $m->source_lot_id,
+                'scheduledDate'  => $date,
+                'transferredQty' => $m->transferred_qty,
+                'createdBy'      => $m->created_by,
+                'createdAt'      => $m->created_at,
+                'revertedAt'     => $m->reverted_at,
+                'revertedBy'     => $m->reverted_by,
+            ];
+        })->values();
     }
 }

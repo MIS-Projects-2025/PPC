@@ -14,6 +14,8 @@ class CustomerDataWip extends Model
     protected $table = 'customer_data_wip';
     public $timestamps = false;
 
+    public const RES_STATION = 'GTTRES_T';
+
     protected $fillable = [
         'Plant',
         'Part_Name',
@@ -70,6 +72,15 @@ class CustomerDataWip extends Model
     {
         return $q->whereIn('Station', config('wip.tape_reel_stations'))
             ->where('Station', '!=', 'GTTRES_T');
+    }
+
+    public function scopeLoadingPlanStations(Builder $q): Builder
+    {
+        // Grouped closure is required: without it, the orWhere would escape
+        // the AND chain (excludingPostTnr, forDate, whereIn Package_Name).
+        return $q->where(fn($w) => $w
+            ->whereIn('Station', config('wip.tape_reel_stations'))
+            ->orWhere('Station', self::RES_STATION));
     }
 
     // the 3 stations pulled into the "Post TNR WIP" block

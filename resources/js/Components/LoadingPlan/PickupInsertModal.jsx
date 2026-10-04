@@ -471,8 +471,6 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
 
     const [expediteRows, setExpediteRows] = useState(() => new Set());
 
-    console.log("LOG ~ PickupInsertModal.jsx:492 ~ PickupInsertModal ~ expediteRows:", expediteRows);
-
     const toggleExpediteRow = useCallback((rowId, checked) => {
         setExpediteRows((prev) => {
             const next = new Set(prev);
@@ -950,7 +948,6 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                 date: new Date().toISOString().split('T')[0],
                 pickups: payload,
             });
-            console.log('Scheduled', data);
             onClose(); // or however you want to close/reset on success
         } catch (err) {
             console.error('Pickup submit failed', err);

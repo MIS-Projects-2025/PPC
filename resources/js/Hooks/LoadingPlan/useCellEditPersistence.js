@@ -1,5 +1,5 @@
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
-import { applyTimeStartEdit, recomputeMachine } from "@/Lib/LoadingPlan/loadingPlanSchedule";
+import { applyAffectedTimings, applyTimeStartEdit } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import toSnakeCase from "@/Utils/toSnakeCase";
 import { useCallback } from "react";
@@ -56,7 +56,6 @@ export function useCellEditPersistence({
                     return;
                 }
 
-                recomputeMachine(withGap, prevRow.machine, baseTimes, date);
                 const prevSnapshot = dataRows;
                 update(() => withGap);
                 setIsDirty(true);
@@ -65,13 +64,7 @@ export function useCellEditPersistence({
                 return;
             }
 
-            update((prev) => {
-                const next = prev.map((r) => (r.id !== changedRow.id ? r : { ...r, [field]: value }));
-                if (field === "accu_time" && baseTimes) {
-                    recomputeMachine(next, prevRow.machine, baseTimes, date);
-                }
-                return next;
-            });
+            update((prev) => prev.map((r) => (r.id !== changedRow.id ? r : { ...r, [field]: value })));
             setIsDirty(true);
 
             const backendField = toSnakeCase(field);
@@ -92,6 +85,7 @@ export function useCellEditPersistence({
                     syncServerFields?.([
                         { dndId: prevRow._dndId, fields: { entry_id: entry.id, lock_version: entry.lock_version } },
                     ]);
+                    applyAffectedTimings(update, entry.affected_timings, date);
                 })
                 .catch((err) => {
                     if (err.status === 409) {
