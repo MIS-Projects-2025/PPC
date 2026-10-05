@@ -17,6 +17,7 @@ use App\Models\MachineCapacity;
 use App\Services\SchedulerService;
 use App\Services\PackageLocation;
 use App\Services\LoadingPlanPackageCoverage;
+use App\Support\Probe;
 use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
 use Illuminate\Support\Facades\Log;
@@ -45,31 +46,16 @@ class LoadingPlanController extends Controller
      */
     public function index(Request $request)
     {
-        [$props, $mark] = $this->buildLoadingPlanProps($request);
+        [$props, $mark] = $this->buildLoadingPlanProps($request, withBaseTimes: true);
 
-        $selectedLocation = $props['selectedLocation'];
-        $date = $props['date'];
-
-        $machinesCacheKey = "loading-plan:machines-base-times:{$selectedLocation}:{$date}";
-        [, $baseTimes] = Cache::remember($machinesCacheKey, now()->addSeconds(30), function () use ($selectedLocation, $date) {
-            return $this->computeActiveMachinesAndBaseTimes($selectedLocation, $date);
-        });
-        $mark('baseTimes (cache block)');
-
-        $props['baseTimes'] = $baseTimes;
         $props['schedulerHistory'] = Inertia::defer(
             fn() => SchedulerRun::query()
-                ->where('date', $date)
-                ->latest()
-                ->limit(20)
-                ->get()
+                ->where('date', $request->get('date', ShiftDay::current()))
+                ->latest()->limit(20)->get()
         );
         $props['readOnly'] = false;
 
-        $response = Inertia::render('Deemo', $props);
-        $mark('Inertia::render (build response, excludes deferred props)');
-
-        return $response;
+        return Inertia::render('Deemo', $props);
     }
 
     /**
@@ -130,91 +116,39 @@ class LoadingPlanController extends Controller
      * function props from a hypothetical parent, not real Inertia props —
      * they never came from the server): onLotTransfer, onReorder.
      */
-    private function buildLoadingPlanProps(Request $request): array
+    private function buildLoadingPlanProps(Request $request, bool $withBaseTimes = false): array
     {
-        $t0 = microtime(true);
-        $mark = function ($label) use (&$t0) {
-            $now = microtime(true);
-            Log::info("[TIMING] {$label}: " . round(($now - $t0) * 1000) . "ms");
-            $t0 = $now;
-        };
+        $isPartial = $request->header('X-Inertia-Partial-Data') !== null
+            && $request->header('X-Inertia-Partial-Component') === 'Deemo';
 
-        $date = $request->get('date', ShiftDay::current());
+        Probe::start('buildLoadingPlanProps ' . ($isPartial ? 'PARTIAL' : 'FULL'));
+        $mark = fn($label) => Probe::mark($label);
+
+        $date             = $request->get('date', ShiftDay::current());
         $selectedLocation = $request->get('location', 'PL1');
-        $previousDate = Carbon::parse($date)->subDay()->toDateString();
+        $previousDate     = Carbon::parse($date)->subDay()->toDateString();
 
-        $packageLineMap = PackageLocation::map();
+        // Needed by both the full load and the deferred follow-up
+        $svc = new LoadingPlanService($date, $selectedLocation, $previousDate);
+        $svc->initWip();
+        $mark('initWip');
 
-        $mark('packageLineMap');
+        $wipRows = $svc->todayWipRows->concat($svc->todayLeakedWipRows);
 
-        [$activeMachines] = $this->computeActiveMachinesAndBaseTimes($selectedLocation, $date);
-        $mark('activeMachines');
-
-        $loadingPlanService = new LoadingPlanService($date, $selectedLocation, $previousDate);
-        $loadingPlanService->initWipAndEntries();
-        $mark('initWipAndEntries');
-
-        $result = $loadingPlanService->initEntries();
-        $result = $this->attachBuckets($result, $date);
-        $mark('initEntries (1st call)');
-
-        $groups = app(\App\Services\PackageGroups::class);
-        $groupMap = $groups->reverseMap();
-
-        $packages = $result
-            ->filter(fn($row) => !$row['is_block'] && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION)
-            ->pluck('package_name')
-            ->filter()->unique()
-            ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
-            ->map(fn($pkg) => $groupMap[$pkg] ?? $pkg)
-            ->unique()->sort()->values();
-
-        $mark('build packages list');
-
-        $wipRows = $loadingPlanService->todayWipRows
-            ->concat($loadingPlanService->todayLeakedWipRows);
-        $status = $wipRows->isEmpty() ? 'not_imported' : 'ok';
-
-        $partnameIntegrity = new LoadingPlanPartnameIntegrity();
+        $partnameIntegrity  = new LoadingPlanPartnameIntegrity();
         $packageListPromise = null;
         $getPackageList = function () use ($partnameIntegrity, $wipRows, &$packageListPromise) {
             return $packageListPromise ??= $partnameIntegrity->lookupPackageList($wipRows);
         };
 
-        // $bakeLots = (new BakeLotService())->getActiveBake();
-        $mark('getActiveBake');
-
-        Log::info('Request memory peak', ['mb' => memory_get_peak_usage(true) / 1048576]);
-
-        $machineNameById = QdnMachine::pluck('machine_num', 'id');
-
-        $props = [
-            'data'              => $result,
-            'date'              => $date,
-            'machines'          => $activeMachines,
-            'packageGroupNames' => $packages,
-            'packageGroups'     => $groups->grouped(),
-            'selectedLocation'  => $selectedLocation,
-            'status'            => $status,
-            // 'bakeLots'          => $bakeLots,
-
-            'buckets' => LoadingPlanBucket::where('location', $selectedLocation)
-                ->orderBy('sort_order')
-                ->get()
-                ->map(fn($b) => [
-                    'id'         => $b->id,
-                    'label'      => $b->label,
-                    'sort_order' => $b->sort_order,
-                    'machine'    => $b->machine_id ? ($machineNameById[$b->machine_id] ?? null) : null,
-                ])
-                ->values(),
-
-            'partnameMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList) {
-                return $partnameIntegrity->findMismatches($wipRows, $getPackageList());
-            }),
-            'unknownPackages' => Inertia::defer(function () use ($date) {
-                return (new LoadingPlanPackageCoverage())->findUnknownPackages($date);
-            }),
+        $deferred = [
+            'partnameMismatches' => Inertia::defer(
+                fn() =>
+                $partnameIntegrity->findMismatches($wipRows, $getPackageList())
+            ),
+            'unknownPackages' => Inertia::defer(
+                fn() => (new LoadingPlanPackageCoverage())->findUnknownPackages($date)
+            ),
             'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $date, $previousDate) {
                 $entryLotIds = LoadingPlanEntry::whereIn('scheduled_date', [$date, $previousDate])
                     ->where('entry_type', 'lot')
@@ -228,19 +162,134 @@ class LoadingPlanController extends Controller
 
                 return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $lotQuantities);
             }),
-            'machineCapacity' => Inertia::defer(function () use ($date) {
-                return MachineCapacity::with('machine')
+            'machineCapacity' => Inertia::defer(
+                fn() =>
+                MachineCapacity::with('machine')
                     ->asOf($date)
                     ->get()
                     ->keyBy(fn($item) => $item->machine?->machine_num)
                     ->map(fn($item) => [
-                        'capacity' => $item->capacity,
+                        'capacity'       => $item->capacity,
                         'effective_from' => $item->effective_from,
-                    ]);
-            }),
+                    ])
+            ),
         ];
 
+        // Deferred follow-up: nothing below is requested, so skip it all.
+        if ($isPartial) {
+            return [$deferred, $mark];
+        }
+
+        // ── Full load only ──────────────────────────────────────────────
+        $packageLineMap = PackageLocation::map();
+        $mark('packageLineMap');
+
+        $activeMachines = $this->getActiveMachines();
+        $mark('activeMachines');
+
+        $svc->initPlanned();
+        $mark('initPlanned');
+
+        $result = $this->attachBuckets($svc->initEntries(), $date);
+        $mark('initEntries + attachBuckets');
+
+        $groups   = app(PackageGroups::class);
+        $groupMap = $groups->reverseMap();
+
+        $packages = $result
+            ->filter(fn($row) => !$row['is_block'] && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION)
+            ->pluck('package_name')
+            ->filter()->unique()
+            ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
+            ->map(fn($pkg) => $groupMap[$pkg] ?? $pkg)
+            ->unique()->sort()->values();
+        $mark('packages list');
+
+        $machineNameById = QdnMachine::pluck('machine_num', 'id');
+
+        $props = [
+            'data'              => $result,
+            'date'              => $date,
+            'machines'          => $activeMachines,
+            'packageGroupNames' => $packages,
+            'packageGroups'     => $groups->grouped(),
+            'selectedLocation'  => $selectedLocation,
+            'status'            => $wipRows->isEmpty() ? 'not_imported' : 'ok',
+            'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)
+                ->orderBy('sort_order')
+                ->get()
+                ->map(fn($b) => [
+                    'id'         => $b->id,
+                    'label'      => $b->label,
+                    'sort_order' => $b->sort_order,
+                    'machine'    => $b->machine_id ? ($machineNameById[$b->machine_id] ?? null) : null,
+                ])
+                ->values(),
+        ] + $deferred;
+
+        if ($withBaseTimes) {
+            $props['baseTimes'] = $this->getBaseTimes($activeMachines, $date);
+            $mark('baseTimes');
+        }
+
         return [$props, $mark];
+    }
+
+    private function getActiveMachines()
+    {
+        return Cache::remember(
+            'lp:active-machines',
+            60,
+            fn() =>
+            QdnMachine::active()
+                ->select('id', 'machine_num', 'machine_platform', 'location', 'factory')
+                ->get()
+                ->map(fn($m) => [
+                    'name'     => $m->machine_num,
+                    'platform' => match (strtoupper($m->machine_platform)) {
+                        'GRAVITY' => 'G6L',
+                        'TRAY'    => 'Vitrox',
+                        'TURRET'  => 'HSI',
+                        default   => $m->machine_platform,
+                    },
+                    'location' => $m->location,
+                    'factory'  => $m->factory,
+                    'id'       => $m->id,
+                ])
+                ->values()
+        );
+    }
+
+    private function getBaseTimes($activeMachines, string $date): array
+    {
+        return Cache::remember("lp:base-times:{$date}", 30, function () use ($activeMachines, $date) {
+            $targetDate = Carbon::parse($date)->toDateString();
+            $prevDate   = Carbon::parse($targetDate)->subDay()->toDateString();
+            $ids        = $activeMachines->pluck('id');
+
+            $leaked = LoadingPlanEntry::whereIn('machine_id', $ids)
+                ->where('scheduled_date', $prevDate)
+                ->where('time_end', '>=', $targetDate)
+                ->whereNotNull('time_start')
+                ->orderBy('sequence_order')
+                ->get()->groupBy('machine_id')->map->first();
+
+            $dayStarts = MachineDayStart::whereIn('machine_id', $ids)
+                ->where('scheduled_date', $targetDate)
+                ->pluck('day_start_time', 'machine_id');
+
+            return $activeMachines->mapWithKeys(function ($m) use ($leaked, $dayStarts, $targetDate) {
+                if ($l = $leaked->get($m['id'])) {
+                    return [$m['name'] => $l->time_start->format('Y-m-d H:i:s')];
+                }
+                // Still 1 query per machine. Send me findFirstRemainingRow and I'll batch it.
+                $first = LoadingPlanEntryService::findFirstRemainingRow($m['id'], $targetDate);
+                if ($first?->time_start) {
+                    return [$m['name'] => $first->time_start->format('Y-m-d H:i:s')];
+                }
+                return [$m['name'] => $targetDate . ' ' . ($dayStarts[$m['id']] ?? '00:00:00')];
+            })->all();
+        });
     }
 
     public function transferCandidates(Request $request, SchedulerService $scheduler)
@@ -308,80 +357,9 @@ class LoadingPlanController extends Controller
         return response()->json($result->concat($incompatibleRest)->sortBy('tier')->values());
     }
 
-    /**
-     * Unchanged from the original index() — factored out only so
-     * readOnly() doesn't need to duplicate it (readOnly() doesn't call
-     * this at all, since it has no use for baseTimes; index() still
-     * calls it, wrapped in its own Cache::remember exactly as before).
-     */
-    private function computeActiveMachinesAndBaseTimes(string $selectedLocation, string $date): array
-    {
-        $machines = QdnMachine::active()
-            // ->where('location', $selectedLocation)
-            ->select('id', 'machine_num', 'machine_platform', 'location', 'factory')
-            ->get();
-
-        $baseTimes = $machines
-            ->mapWithKeys(function ($machine) use ($date) {
-                $targetDate = Carbon::parse($date)->toDateString();
-
-                $leakedPredecessor = LoadingPlanEntry::where('machine_id', $machine->id)
-                    ->where('scheduled_date', Carbon::parse($targetDate)->subDay()->toDateString())
-                    ->where('time_end', '>=', $targetDate)
-                    ->whereNotNull('time_start')
-                    ->orderBy('sequence_order', 'asc')
-                    ->first();
-
-                if ($leakedPredecessor && $leakedPredecessor->time_start !== null) {
-                    return [$machine->machine_num => $leakedPredecessor->time_start->format('Y-m-d H:i:s')];
-                }
-
-                $firstRow = LoadingPlanEntryService::findFirstRemainingRow($machine->id, $targetDate);
-
-                if ($firstRow && $firstRow->time_start !== null) {
-                    return [$machine->machine_num => $firstRow->time_start->format('Y-m-d H:i:s')];
-                }
-
-                // No existing rows to derive a start from — fall back to this
-                // machine's configured day-start for this date, defaulting to
-                // midnight if no row exists in machine_day_starts either.
-                $dayStart = MachineDayStart::where('machine_id', $machine->id)
-                    ->where('scheduled_date', $targetDate)
-                    ->value('day_start_time');
-
-                return [$machine->machine_num => $targetDate . ' ' . ($dayStart ?? '00:00:00')];
-            })
-            ->filter()
-            ->all();
-
-        $activeMachines = $machines
-            ->map(fn($machine) => [
-                'name' => $machine->machine_num,
-                'platform' => match (strtoupper($machine->machine_platform)) {
-                    'GRAVITY' => 'G6L',
-                    'TRAY' => 'Vitrox',
-                    'TURRET' => 'HSI',
-                    default => $machine->machine_platform,
-                },
-                'location' => $machine->location,
-                'factory'  => $machine->factory,
-                'id'       => $machine->id,
-            ])
-            ->values();
-
-        return [$activeMachines, $baseTimes];
-    }
-
     private function attachBuckets($rows, string $date)
     {
         $items = LotBucketItem::where('scheduled_date', $date)->get()->keyBy('lot_id');
-        \Log::info('attachBuckets', [
-            'date'          => $date,
-            'items'         => $items->keys()->all(),
-            'rows_matching' => $rows->whereIn('lot_id', $items->keys()->all())
-                ->map(fn($r) => [$r['lot_id'], $r['is_leaked'] ?? null, $r['entry_id'] ?? null])
-                ->values()->all(),
-        ]);
 
         return $rows->map(function ($row) use ($items) {
             $item = (!($row['is_leaked'] ?? false) && $row['lot_id'] && !($row['rework_seq'] ?? 0))

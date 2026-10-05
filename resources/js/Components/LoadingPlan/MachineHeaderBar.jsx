@@ -56,9 +56,14 @@ export function MachineHeaderBar({
 		otherPackageCounts,
 		expandedMachines,
 		onToggleExpandOthers,
+		otherLocationCounts, 
+		expandedLocations, 
+		onToggleExpandLocations,
     } = useContext(TableInteractionContext);
 
 	const otherCount = otherPackageCounts?.[machine] ?? 0;
+	const otherLocCount = otherLocationCounts?.[machine] ?? 0;
+    const showingOtherLoc = expandedLocations?.has(machine);
 	const showingOthers = expandedMachines?.has(machine);
 
 	// const machineFactory = serverMachines[machineID]?.factory;
@@ -175,7 +180,18 @@ export function MachineHeaderBar({
 						onClick={(e) => { e.stopPropagation(); onToggleExpandOthers(machine); }}
 						title={showingOthers ? "Hide rows outside this tab" : "Show rows outside this tab"}
 					>
-						{showingOthers ? "Hide" : "Show"} +{otherCount} other
+						{showingOthers ? "Hide" : "Show"} +{otherCount} other package
+					</button>
+				)}
+
+				{onToggleExpandLocations && !isPseudo && otherLocCount > 0 && (
+					<button
+						type="button"
+						className={`btn btn-xs ${showingOtherLoc ? "btn-warning" : "btn-ghost"}`}
+						onClick={(e) => { e.stopPropagation(); onToggleExpandLocations(machine); }}
+						title={showingOtherLoc ? "Hide rows from other locations" : "Show rows from other locations"}
+					>
+						{showingOtherLoc ? "Hide" : "Show"} +{otherLocCount} other location
 					</button>
 				)}
 

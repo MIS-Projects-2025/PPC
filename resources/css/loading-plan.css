@@ -36,6 +36,11 @@
   background-color: #ce1c1c9c !important;
 }
 
+.bg-red {
+  background-color: #dc2626 !important; 
+  color: #000 !important;
+}
+
 /* Yellow fill for CT >= 2 days */
 .bg-yellow-highlight {
   background-color: #fef08a !important; 

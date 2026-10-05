@@ -1,5 +1,6 @@
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { TAGS } from "@/Components/LoadingPlan/Tag";
+import { useToast } from "@/Hooks/useToast";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FaTrash } from "react-icons/fa";
@@ -7,7 +8,6 @@ import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import MergeModal from "./MergeModal";
 import SplitModal from "./SplitModal";
 import TransferModal from "./TransferModal";
-import { useToast } from "@/Hooks/useToast";
 
 export default function SelectionToolbar({
     selectedIds,
@@ -268,6 +268,26 @@ export default function SelectionToolbar({
                             >
                                 <span className="w-2 h-2 rounded-full border border-base-content/30" />
                                 Remove expedite
+                            </button>
+                        </li>
+
+                        <div className="divider my-0.5" />
+                        
+                        <li className="menu-title text-[10px] uppercase font-semibold text-base-content/50 px-2 py-1">
+                            SCM
+                        </li>
+                        <li>
+                            <button type="button" onClick={() => onBulkFieldUpdate('is_scm', true)}
+                                className="flex items-center gap-2 text-xs font-medium py-1.5" disabled={disabled}>
+                                <span className="w-2 h-2 rounded-full bg-red-500" />
+                                Mark SCM
+                            </button>
+                        </li>
+                        <li>
+                            <button type="button" onClick={() => onBulkFieldUpdate('is_scm', false)}
+                                className="flex items-center gap-2 text-xs font-medium py-1.5 text-base-content/60" disabled={disabled}>
+                                <span className="w-2 h-2 rounded-full border border-base-content/30" />
+                                Remove SCM
                             </button>
                         </li>
                     </ul>

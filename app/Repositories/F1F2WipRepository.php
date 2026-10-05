@@ -4,7 +4,7 @@ namespace App\Repositories;
 
 use App\Models\CustomerDataWip;
 use App\Models\F3Wip;
-use App\Models\Partname;
+use App\Models\PartName;
 use App\Models\LotQuantity;
 use App\Traits\PackageAliasTrait;
 use App\Traits\TrendAggregationTrait;

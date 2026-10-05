@@ -23,6 +23,7 @@ import { SearchBar } from "@/Components/LoadingPlan/SearchBar";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+import { ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
 import { packagesInGroup } from "@/Constants/loadingPlanPackageGroups.js";
 import { MACHINE_MANUAL, hasTimeline } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
@@ -39,7 +40,7 @@ import { useMutation } from "@/Hooks/useMutation";
 import { useToast } from "@/Hooks/useToast";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { downloadExcelBuffer, exportLoadingPlanToExcel } from "@/Lib/LoadingPlan/loadingPlanExcelExporter";
-import { timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
+import { applyAffectedTimings, timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
@@ -54,8 +55,6 @@ import { BsGear, BsSearch } from "react-icons/bs";
 import { FaGear } from "react-icons/fa6";
 import { GoAlert } from "react-icons/go";
 import { PiOvenDuotone } from "react-icons/pi";
-import { ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
-import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 
 /**
  * DEMO: machine-grouped lot table (react-data-grid based)
@@ -518,6 +517,18 @@ export default function Deemo({
         setSelectedRows(new Set());
     }, []);
 
+    const [expandedLocations, setExpandedLocations] = usePersistedSet('expandedLocations');
+
+    const toggleExpandedLocation = useCallback((machine) => {
+        setExpandedLocations((prev) => {
+            const next = new Set(prev);
+            if (next.has(machine)) next.delete(machine);
+            else next.add(machine);
+            return next;
+        });
+        setSelectedRows(new Set());
+    }, []);
+
     const activePackageGroup = useMemo(() => {
         if (
             activePackage === "Unassigned" ||
@@ -603,7 +614,7 @@ export default function Deemo({
         [readOnly, writesLocked],
     );
 
-    const handleAutoSortMachine = async ({ machine }) => {
+    const autoSortMachine = async ({ machine }) => {
         try {
             const res = await mutate(
                 route("loading-plan.auto-sort", { machine }),
@@ -658,6 +669,8 @@ export default function Deemo({
             return false;
         }
     };
+
+    const handleAutoSortMachine = ({ machine }) => withUpdating(autoSortMachine({ machine }));
 
     const handleStatusChange = useCallback(
         (newStatus) => {
@@ -958,20 +971,14 @@ export default function Deemo({
     const handleColumnWidthsChange = useCallback(
         (next) => {
             setColumnWidths((prev) => {
-                const out = {};
+                const out = { ...prev };
+                let changed = false;
                 next.forEach((entry, key) => {
-                    if (dataColumnKeys.has(key) && entry.type === "resized") {
-                        out[key] = Math.max(MIN_COLUMN_WIDTH, entry.width);
-                    }
+                    if (!dataColumnKeys.has(key) || entry.type !== "resized") return;
+                    const w = Math.max(MIN_COLUMN_WIDTH, entry.width);
+                    if (out[key] !== w) { out[key] = w; changed = true; }
                 });
-
-                const prevKeys = Object.keys(prev);
-                const outKeys = Object.keys(out);
-                const same =
-                    prevKeys.length === outKeys.length &&
-                    outKeys.every((k) => prev[k] === out[k]);
-
-                return same ? prev : out; // same reference -> no re-render, loop ends
+                return changed ? out : prev;
             });
         },
         [dataColumnKeys],
@@ -1087,9 +1094,18 @@ export default function Deemo({
     }, [activePackage, activePackageGroup]);
 
     const rowInActiveTab = useCallback((r) => {
-        if (r.machine !== null && !isResRow(r) && isOtherLoc(r)) return true; // always visible
+        if (r.machine !== null && r.machine !== MACHINE_MANUAL && isOtherLoc(r)) return false; // lives in the "other location" group
         return rowInActiveTabOwn(r);
     }, [isOtherLoc, rowInActiveTabOwn]);
+
+    const otherLocationCounts = useMemo(() => {
+        const result = {};
+        dataRows.forEach((r) => {
+            if (r.machine === null || isBlockRow(r) || isParked(r) || !isOtherLoc(r)) return;
+            result[r.machine] = (result[r.machine] ?? 0) + 1;
+        });
+        return result;
+    }, [dataRows, isParked, isOtherLoc]);
 
     // ── Migrated from LoadingPlanTable.jsx: otherPackageCounts ─────────────
     // How many rows sit on a machine but are hidden by the current package
@@ -1100,12 +1116,12 @@ export default function Deemo({
         const result = {};
         dataRows.forEach((r) => {
             if (r.machine === null) return;
-            if (isBlockRow(r) || isParked(r)) return;
+            if (isBlockRow(r) || isParked(r) || isOtherLoc(r)) return;
             if (rowInActiveTab(r)) return;
             result[r.machine] = (result[r.machine] ?? 0) + 1;
         });
         return result;
-    }, [dataRows, rowInActiveTab, isParked]);
+    }, [dataRows, rowInActiveTab, isParked, isOtherLoc]);
 
     const machineSectionDoable = useMemo(() => {
         const result = {};
@@ -1242,13 +1258,18 @@ export default function Deemo({
             const isManual = m === MACHINE_MANUAL;
             const canCollapse = !isUnassigned && !isManual;
             const showAll = canCollapse && expandedMachines.has(m);
+            const showLoc = !canCollapse || expandedLocations.has(m);
 
             if (isManual && activePackage !== "MANUAL" && !isAll) return [];
 
             const machineRows = dataRows.filter(
                 (r) => r.machine === m && !isParked(r) && !(isUnassigned && isOtherLoc(r)),
             );
-            const isHidden = (r) => !isBlockRow(r) && !rowInActiveTab(r);
+            const hiddenKind = (r) => {
+                if (isBlockRow(r)) return null;
+                if (isOtherLoc(r)) return showLoc ? null : "location";
+                return showAll || rowInActiveTabOwn(r) ? null : "package";
+            };
             const matchingLots = machineRows.filter(
                 (r) => !isBlockRow(r) && !isOtherLoc(r) && rowInActiveTabOwn(r),
             ).length;
@@ -1257,6 +1278,7 @@ export default function Deemo({
             // Consecutive hidden rows collapse into one display-only row.
             const shown = [];
             let run = [];
+            let runKind = null;
             const flushRun = () => {
                 if (!run.length) return;
                 const first = run[0];
@@ -1264,26 +1286,31 @@ export default function Deemo({
                 shown.push({
                     id: `collapsed-${first.id}`,
                     __type: "collapsed",
+                    __kind: runKind,                       // "package" | "location"
                     isLocked: true,
                     machine: m,
                     firstRowId: first.id,
                     lastRowId: last.id,
                     __count: run.length,
                     __packages: [...new Set(run.map((r) => r.package_name).filter(Boolean))],
-                    // the timeline is contiguous, so first start / last end = min / max
+                    __locations: [...new Set(run.map((r) => r.location).filter(Boolean))],
                     time_start: first.time_start,
                     time_start_day_offset: first.time_start_day_offset,
                     time_end: last.time_end,
                     time_end_day_offset: last.time_end_day_offset,
                 });
                 run = [];
+                runKind = null;
             };
 
             machineRows.forEach((r) => {
-                if (!isHidden(r) || showAll) {
+                const kind = hiddenKind(r);
+                if (!kind) {
                     flushRun();
                     shown.push({ ...r, __type: "data" });
                 } else if (canCollapse) {
+                    if (runKind && runKind !== kind) flushRun(); // package and location runs never merge
+                    runKind = kind;
                     run.push(r);
                 } // Unassigned / MANUAL: hidden rows are dropped, as before
             });
@@ -1334,6 +1361,7 @@ export default function Deemo({
         otherPackageCounts,
         collapsedMachines,
         bucketsByMachine,
+        expandedLocations,
     ]);
 
     const collapsedRunsById = useMemo(
@@ -1521,7 +1549,10 @@ export default function Deemo({
 
     const rowClass = useCallback(
         (row) => {
-            const other = row.__type === "data" && isOtherLoc(row) ? "bg-secondary/10" : "";
+            const isData = row.__type === "data";
+            const scm = isData && row.is_scm && !selectedRows.has(row.id) ? "bg-error/25" : "";
+
+            const other = isData && isOtherLoc(row) ? "bg-secondary/10" : "";
             const rowDropId = `row-${row.id}`;
             if (!readOnly && hoveredRowId === rowDropId)
                 return "bg-pink-500 relative drop-target-row";
@@ -1531,10 +1562,12 @@ export default function Deemo({
                 return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
             if (isBlockRow(row) && !selectedRows.has(row.id))
                 return "block-row-bg border-l-4 border-warning/60";
-            if (row.is_rework && !selectedRows.has(row.id)) return clsx("border-l-4 border-info/60", other);
-            return other || undefined;
+            if (row.is_rework && !selectedRows.has(row.id))
+                return clsx("border-l-4 border-info/60", scm || other);
+            console.log("LOG ~ Deemo.jsx:1555 ~ Deemo ~ scm:", scm); //
+            return clsx(scm || other) || undefined;
         },
-        [readOnly, hoveredRowId, selectedRows],
+        [readOnly, hoveredRowId, selectedRows, isOtherLoc],
     );
 
     const [bucketModalMachine, setBucketModalMachine] = useState(null);
@@ -1568,6 +1601,9 @@ export default function Deemo({
             expandedMachines,
             onToggleExpandOthers: toggleExpandedMachine,
             machineSectionDoable,
+            otherLocationCounts,
+            expandedLocations,
+            onToggleExpandLocations: toggleExpandedLocation,
         }),
         [
             serverMachines,
@@ -1586,6 +1622,9 @@ export default function Deemo({
             handleAddBlock,
             writesLocked,
             machineSectionDoable,
+            otherLocationCounts, 
+            expandedLocations, 
+            toggleExpandedLocation,
         ],
     );
 
@@ -2507,6 +2546,7 @@ export default function Deemo({
                                                 : "failed"}
                                         </span>
                                         <span className="text-base-content/40 text-xs">
+                                            at
                                             {new Date(run.created_at).toLocaleTimeString([], {
                                                 hour: "2-digit",
                                                 minute: "2-digit",
