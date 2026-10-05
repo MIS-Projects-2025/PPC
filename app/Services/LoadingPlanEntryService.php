@@ -24,8 +24,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
-use function Illuminate\Log\log;
-
 class LoadingPlanEntryService
 {
     use ValidatesLoadingPlanEntries;
@@ -234,37 +232,69 @@ class LoadingPlanEntryService
     * Lot will only be sorted, not these blocks.
     * 
     */
+
     public function autoSortCycleTime(string $targetMachine, string $date)
     {
-        return DB::transaction(function () use ($targetMachine, $date) {
+        $prev = $start = microtime(true);
+        $queries = 0;
+        $queryMs = 0.0;
+
+        DB::listen(function ($q) use (&$queries, &$queryMs) {
+            $queries++;
+            $queryMs += $q->time;
+        });
+
+        $lap = function (string $label) use (&$prev, &$queries, &$queryMs) {
+            $now = microtime(true);
+            Log::debug("[autoSort] {$label}", [
+                'ms'       => round(($now - $prev) * 1000, 1),
+                'queries'  => $queries,
+                'query_ms' => round($queryMs, 1),
+            ]);
+            $prev = $now;
+            $queries = 0;
+            $queryMs = 0.0;
+        };
+
+        return DB::transaction(function () use ($targetMachine, $date, $lap, $start) {
             $targetMachineId = $this->resolveMachineId($targetMachine);
             if ($targetMachineId === null) {
                 throw new \InvalidArgumentException("Target machine [{$targetMachine}] does not exist.");
             }
+            $lap('resolveMachineId');
 
             $lotEntries = $this->lockMachineRows([$targetMachineId], $date);
+            $dayStart = Carbon::parse($date)->startOfDay();
+
+            $lap('lockMachineRows (rows=' . $lotEntries->count() . ')');
 
             $wip = CustomerDataWip::query()
-                ->whereDate('import_date', $date)
+                ->where('import_date', '>=', $dayStart)
+                ->where('import_date', '<', $dayStart->copy()->addDay())
+                ->whereIn('Lot_Id', $lotEntries->pluck('lot_id')->unique()->values())
                 ->get()
-                ->unique(function ($item) {
-                    return $item->Lot_Id . '_' . Carbon::parse($item->import_date)->toDateString();
-                });
+                ->unique('Lot_Id')   // same date window, so Lot_Id alone is the key
+                ->keyBy('Lot_Id');
+            $lap('wip load + unique (rows=' . $wip->count() . ')');
 
-            $entries = $lotEntries->map(function ($entry) use ($wip) {
-                $wipEntry = $wip->first(function ($item) use ($entry) {
-                    return $item->Lot_Id == $entry->lot_id
-                        && Carbon::parse($item->import_date)->isSameDay($entry->scheduled_date);
-                });
+            $formulaMs = 0.0;
+            $lookupMs  = 0.0;
 
+            $entries = $lotEntries->map(function ($entry) use ($wip, &$formulaMs, &$lookupMs) {
+                $t = microtime(true);
+                $wipEntry = $wip->get($entry->lot_id);
+                $lookupMs += (microtime(true) - $t) * 1000;
+
+                $t = microtime(true);
                 $wipDerivatives = LoadingPlanFormulas::make($wipEntry);
+                $formulaMs += (microtime(true) - $t) * 1000;
 
                 return [
                     'lot_entry'      => $entry,
                     'wip'            => $wipEntry,
                     'wipDerivatives' => $wipDerivatives,
                     'sort' => [
-                        'is_manual_expedite'            => (bool) $entry->is_manual_expedite,
+                        'is_manual_expedite'         => (bool) $entry->is_manual_expedite,
                         'cycle_time_exceed'          => (bool) data_get($wipDerivatives, 'cycleTimeExceed'),
                         'cycle_time_exceed_residual' => (bool) data_get($wipDerivatives, 'cycleTimeExceedResidual'),
                         'is_res'                     => strtoupper(trim((string) data_get($wipEntry, 'CR3'))) === 'RES',
@@ -274,14 +304,14 @@ class LoadingPlanEntryService
                     ],
                 ];
             });
+            $lap(sprintf('map entries (wip lookup=%.1fms, formulas=%.1fms)', $lookupMs, $formulaMs));
 
             $entries = LotPrioritySorter::sortSegments(
                 $entries,
                 fn($row) => strtolower(trim((string) $row['lot_entry']->entry_type)) === 'block'
             );
+            $lap('LotPrioritySorter::sortSegments');
 
-            // Slots = the sequence_order values as they were, in their original order.
-            // $lotEntries is already ordered by sequence_order from lockMachineRows().
             $slots = $lotEntries->pluck('sequence_order')->values();
 
             $positions = [];
@@ -293,30 +323,33 @@ class LoadingPlanEntryService
 
                 if (abs((float) $entry->sequence_order - $newSeq) > 1e-9) {
                     $positions[] = ['entry_id' => $entry->id, 'sequence_order' => $newSeq];
-                    $firstChangedId ??= $entry->id; // $i ascends, so first hit = earliest changed position
+                    $firstChangedId ??= $entry->id;
                 }
             }
+            $lap('diff positions (changed=' . count($positions) . ')');
 
             if ($positions) {
-                // stages -id temp values, then writes real ones in one statement
-                // (also bumps lock_version, so the fresh rows below carry the new one)
                 $this->applyPositionsInBulk($positions, $targetMachineId, $date);
             }
+            $lap('applyPositionsInBulk');
 
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => []]);
+            $lap('LotScheduleCalculator construct');
+
             if ($firstChangedId) {
-                // must be a fresh model: findPredecessor() reads its new sequence_order
                 $calc->recomputeTimeStartAndEnd(LoadingPlanEntry::findOrFail($firstChangedId), $targetMachineId);
             }
+            $lap('recomputeTimeStartAndEnd');
 
             $loadingPlanService = new LoadingPlanService($date, "I Do not need location");
+            $lap('LoadingPlanService construct');
 
-            $fresh = LoadingPlanEntry::with(['machineModel', 'lotQuantity'])
+            $fresh = LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
                 ->whereIn('id', $entries->pluck('lot_entry.id'))
                 ->get()
                 ->keyBy('id');
+            $lap('fresh reload');
 
-            // 3. Map into createPlannedLot() structure
             $updated = $entries->map(function ($row) use ($loadingPlanService, $fresh) {
                 $lotEntry = $fresh[$row['lot_entry']->id];
 
@@ -326,10 +359,16 @@ class LoadingPlanEntryService
                     quantity: $lotEntry->lotQuantity,
                 );
             })->values();
+            $lap('createPlannedLot x' . $updated->count());
+
+            $timings = self::timingsFor([$targetMachineId], $date);
+            $lap('timingsFor');
+
+            Log::debug('[autoSort] TOTAL', ['ms' => round((microtime(true) - $start) * 1000, 1)]);
 
             return [
                 'entries'          => $updated,
-                'affected_timings' => self::timingsFor([$targetMachineId], $date),
+                'affected_timings' => $timings,
             ];
         });
     }
