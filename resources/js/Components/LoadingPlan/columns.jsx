@@ -431,7 +431,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         !isUpdating &&
                         row.__type !== "collapsed" &&
                         row.__type !== "header" &&
-                        !(isBlockRow(row) && col.key !== "accu_time"),
+                        !(isBlockRow(row) && col.key === "remarks"),
                 }),
             };
         }),
