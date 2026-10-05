@@ -2334,13 +2334,34 @@ class LoadingPlanEntryService
      */
     public static function getToday(string $date, array $allowedPackages): Collection
     {
-        return LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
+        $entries = LoadingPlanEntry::with('machineModel')
             ->where('scheduled_date', $date)
             ->where(function ($q) use ($allowedPackages) {
-                $q->whereNotNull('machine_id')          // placed: any location
-                    ->orWhere('entry_type', 'block');
-                if ($allowedPackages) $q->orWhereIn('package_name', $allowedPackages); // unassigned: own location only
+                $q->whereNotNull('machine_id')->orWhere('entry_type', 'block');
+                if ($allowedPackages) $q->orWhereIn('package_name', $allowedPackages);
             })->get();
+
+        $lotIds = $entries->where('entry_type', 'lot')->pluck('lot_id')->filter()->unique()->values();
+
+        $quantities = collect();
+        foreach ($lotIds->chunk(500) as $chunk) {
+            $quantities = $quantities->concat(
+                LotQuantity::with('packageListEntry')
+                    ->where('scheduled_date', $date)
+                    ->whereIn('lot_id', $chunk)
+                    ->get()
+            );
+        }
+        $quantities = $quantities->keyBy(fn($q) => $q->lot_id . '|' . (int) $q->rework_seq);
+
+        foreach ($entries as $e) {
+            $e->setRelation(
+                'lotQuantity',
+                $e->lot_id ? $quantities->get($e->lot_id . '|' . (int) $e->rework_seq) : null
+            );
+        }
+
+        return $entries;
     }
 
     /**
