@@ -200,9 +200,12 @@ export function makeBakeColumns(highlightedMatch, onToggleCollapse) {
 
 function renderCollapsedCell(key, row) {
     if (key === "package_name") {
+        const isLoc = row.__kind === "location";
+        const names = isLoc ? row.__locations : row.__packages;
         return (
-            <span className="truncate" title={row.__packages.join(", ")}>
+            <span className="truncate" title={names.join(", ")}>
                 {row.__count === 1 ? "1 entry" : `+ ${row.__count} entries`}
+                {isLoc && ` · ${names.join("/")}`}
             </span>
         );
     }
@@ -252,13 +255,18 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                 }
 
                 // Rule 8 & 12: Color range from Part Name to Qty
-                if (PARTNAME_TO_QTY_KEYS.has(col.key)) {
+                if (PARTNAME_TO_QTY_KEYS.has(col.key) && !row?.is_scm) {
                     if (row.cycle_time_exceed) {
                         classes.push("bg-yellow-highlight");
                     }
                     if (row.cycle_time_exceed_residual || row.is_manual_expedite) {
                         classes.push("bg-amber-highlight");
                     }
+                }
+
+                if (row?.is_scm === true) {
+                    console.log("LOG ~ columns.jsx:268 ~ getDynamicCellClass ~ row?.is_scm:", row?.is_scm);
+                    classes.push("bg-red");
                 }
 
                 // Rule 11: Color range from Part Name to Bake Time/Temp (Red Font)

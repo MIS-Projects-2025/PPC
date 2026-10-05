@@ -10,6 +10,7 @@ use Carbon\Carbon;
 use Carbon\CarbonInterface;
 //TODO: distinguish Collection from Eloquence and Support
 use Illuminate\Support\Collection;
+use App\Support\Probe;
 
 class LoadingPlanService
 {
@@ -25,6 +26,14 @@ class LoadingPlanService
     public readonly Collection $todayLeakedPlannedLotEntries;
     public readonly Collection $todayPlannedLotEntries;
     public readonly Collection $extraTodayWipRows;
+
+    // at the top of the class
+    public static array $acc = [];
+
+    private static function tick(string $k, float $t0): void
+    {
+        self::$acc[$k] = (self::$acc[$k] ?? 0) + (microtime(true) - $t0);
+    }
 
     /**
      * Keys createPlannedLot needs to find when $entry is passed as an array,
@@ -150,22 +159,26 @@ class LoadingPlanService
         ]);
     }
 
-    public function initWipAndEntries()
+    public function initWip(): void
     {
-        //TODO: do you need loadPackageList here?
         $this->selectedPackages = PpcPackageMaster::query()
             ->activeTelford()
             ->when($this->selectedLocation !== null, fn($q) => $q->where('default_pl', $this->selectedLocation))
             ->pluck('package')
             ->map(fn($p) => trim((string) $p))
             ->all();
-        // var_dump("LOG ~ LoadingPlanService.php:124 ~ LoadingPlanService ~ __construct ~ selectedPackages:", $this->selectedPackages);
 
         $this->initSplitsAndMerges();
 
         $this->todayWipRows = $this->getWipRowsForToday($this->selectedPackages);
         $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
-        $this->todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot($this->todayLeakedPlannedLotEntries->pluck('lot_id')->all());
+        $this->todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot(
+            $this->todayLeakedPlannedLotEntries->pluck('lot_id')->all()
+        );
+    }
+
+    public function initPlanned(): void
+    {
         $this->todayPlannedLotEntries = LoadingPlanEntryService::getToday($this->date, $this->selectedPackages);
 
         $missingLotIds = $this->todayPlannedLotEntries
@@ -175,6 +188,13 @@ class LoadingPlanService
         $this->extraTodayWipRows = empty($missingLotIds) ? collect() : CustomerDataWip::query()
             ->forDate($this->date)->loadingPlanStations()->excludingPostTnr()
             ->whereIn('Lot_Id', $missingLotIds)->get()->keyBy('Lot_Id');
+    }
+
+    // keep for runScheduler() and anything else that calls it
+    public function initWipAndEntries(): void
+    {
+        $this->initWip();
+        $this->initPlanned();
     }
 
     public function initEntries()
@@ -243,6 +263,7 @@ class LoadingPlanService
             ->where('rework_seq', 0)
             ->get()
             ->keyBy('lot_id');
+        Probe::mark('  unassigned LotQuantity query (+packageListEntry)');
 
         $unassignedResults = $unassignedTodayWip->map(function ($wip) use ($buildLotPayload, $unassignedTodayWipLotQuantities) {
             return $buildLotPayload(
@@ -251,23 +272,30 @@ class LoadingPlanService
                 quantity: $unassignedTodayWipLotQuantities->get($wip->Lot_Id)
             );
         });
+        Probe::mark('  unassignedResults createPlannedLot loop');
+
 
         // var_dump("LOG ~ LoadingPlanService.php:207 ~ LoadingPlanService ~ initEntries ~ unassignedResults:", $unassignedResults);
 
         // 5. Transform All Groups via createPlannedLot
         $lotResults = $todayWipPlannedEntries
             ->map(fn($entry) => $buildLotPayload($entry, $allTodayWip->get($entry->lot_id)));
+        Probe::mark('  lotResults createPlannedLot loop');
 
         $leakedLotResults = $todayLeakedWipPlannedEntries
             ->map(fn($entry) => $buildLotPayload($entry, $this->todayLeakedWipRows->get($entry->lot_id)));
+        Probe::mark('  leakedLotResults loop');
 
         $manualLotResults = $todayLeakedManualPlannedEntries
             ->concat($todayManualPlannedEntries)
             ->map(fn($entry) => $buildLotPayload($entry, null));
 
+        Probe::mark('  manualLotResults loop');
+
         $blockResults = $todayPlannedBlockEntries
             ->concat($todayLeakedPlannedBlockEntries)
             ->map(fn($entry) => $buildLotPayload($entry, null));
+        Probe::mark('  blockResults loop');
 
         // 6. Merge All Streams and Apply Machine/Sequence Sorting
         $result =
@@ -277,7 +305,9 @@ class LoadingPlanService
             ->concat($manualLotResults)
             ->concat($blockResults);
 
-        return self::sortEntriesByMachineAndSequence($result);
+        $sorted = self::sortEntriesByMachineAndSequence($result);
+        Probe::mark('  sortEntriesByMachineAndSequence');
+        return $sorted;
     }
 
     /**
@@ -457,15 +487,47 @@ class LoadingPlanService
         * Array-shaped entries already contain the resolved machine name.
         * Real LoadingPlanEntry models still use the existing model logic.
         */
+        $t = microtime(true);
         $machine = $entryIsArray
             ? $resolvedMachine
             : ($entry?->finalized_at
                 ? $entry->machine_snapshot
                 : $entry?->getMachineName());
+        self::tick('getMachineName', $t);
 
+        $t = microtime(true);
         $formulas = LoadingPlanFormulas::make($wipRow);
+        self::tick('Formulas::make', $t);
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
+
+
+        $t = microtime(true);
+        $loc = PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name);
+        self::tick('PackageLocation::for', $t);   // then use $loc in the array
+
+        /*
+        * Array-shaped scheduled_date is already a Y-m-d string.
+        * A real LoadingPlanEntry uses a Carbon instance.
+        */
+        $scheduledDate = $entryIsArray
+            ? $resolvedScheduledDate
+            : ($entry?->scheduled_date?->toDateString() ?? null);
+
+        $t = microtime(true);
+        $split = LotSplitService::buildSplitMeta(
+            $lotId,
+            $this->splitsByParent ?? null,
+            $this->splitsByChild ?? null,
+            $scheduledDate
+        );
+        $merge = LotMergeService::buildMergeMeta(
+            $lotId,
+            $this->mergesByTarget ?? null,
+            $this->mergesBySource ?? null,
+            $scheduledDate
+        );
+        self::tick('split+merge meta', $t);       // then use $split/$merge in the array
 
         /*
         * Array-shaped entries already contain H:i strings.
@@ -479,18 +541,10 @@ class LoadingPlanService
             ? Carbon::parse($entry->time_end)
             : null;
 
-        /*
-        * Array-shaped scheduled_date is already a Y-m-d string.
-        * A real LoadingPlanEntry uses a Carbon instance.
-        */
-        $scheduledDate = $entryIsArray
-            ? $resolvedScheduledDate
-            : ($entry?->scheduled_date?->toDateString() ?? null);
-
         $isLeaked = $scheduledDate === $this->previousDate;
 
         return [
-            'location' => PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name),
+            'location'                   => $loc,
 
             // Entry Metadata
             'entry_id'                   => $entry?->id,
@@ -499,6 +553,7 @@ class LoadingPlanService
             'is_block'                   => $isBlocked,
             'is_leaked'                  => $isLeaked,
             'is_manual_expedite'         => $entry?->is_manual_expedite,
+            'is_scm'                     => (bool) ($entry?->is_scm ?? false),
             'is_for_bake'                => $formulas->isBakeHighlight,
 
             // IMPORTANT:
@@ -612,19 +667,8 @@ class LoadingPlanService
             'rework_of_entry_id'         => $entry?->rework_of_entry_id ?? null,
 
             // Split & Merge Metadata
-            'split_info' => LotSplitService::buildSplitMeta(
-                $lotId,
-                $this->splitsByParent ?? null,
-                $this->splitsByChild ?? null,
-                $scheduledDate
-            ),
-
-            'merge_info' => LotMergeService::buildMergeMeta(
-                $lotId,
-                $this->mergesByTarget ?? null,
-                $this->mergesBySource ?? null,
-                $scheduledDate
-            ),
+            'split_info'                 => $split,
+            'merge_info'                 => $merge,
         ];
     }
 
