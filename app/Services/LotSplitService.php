@@ -460,6 +460,8 @@ class LotSplitService
                 'createdAt'       => $split->created_at,
                 'revertedAt'      => $split->reverted_at,
                 'revertedBy'      => $split->reverted_by,
+                'parentQtyBefore' => $split->parent_qty_before,
+                'parentQtyAfter'  => $split->parent_qty_before !== null ? $split->parent_qty_before - $split->child_qty : null,
                 'parentAppearances' => $parentEntries->map(function ($e) use ($quantities) {
                     $q = $quantities->get($e->lot_id, collect())
                         ->firstWhere('scheduled_date', $e->scheduled_date);

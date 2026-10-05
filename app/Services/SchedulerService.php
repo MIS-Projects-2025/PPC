@@ -1417,6 +1417,8 @@ class SchedulerService
                 'is_auto_part' => (bool) $partInfo->is_auto_part,
                 'Ramp_Time' => $partInfo->allocation,
                 'CR3' => null,
+                'Station'    => $wip->Station,
+                'Lot_Status' => $wip->Lot_Status,
                 'Lot_Type' => null,
                 'isExpedite' => (bool) $entry->is_manual_expedite,
                 'aboveCT' => false,
@@ -1463,6 +1465,8 @@ class SchedulerService
             'is_pickup' => $lot->is_pickup ?? false,
             'is_manual_expedite' => (bool) ($lot->isExpedite ?? false),
             'sort' => [
+                // TODO: GTREEL_T is a business logic, might refactor
+                'is_running_gtreel'          => strtoupper(trim((string) ($lot->Station ?? ''))) === 'GTREEL_T' && strtoupper(trim((string) ($lot->Lot_Status ?? ''))) === 'RUN',
                 'is_manual_expedite'         => (bool) ($lot->isExpedite ?? false),
                 'cycle_time_exceed'          => (bool) ($lot->aboveCT ?? false),
                 'cycle_time_exceed_residual' => (bool) ($lot->cycleTimeExceedResidual ?? false),

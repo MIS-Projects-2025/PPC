@@ -7,6 +7,7 @@ import { FaTrash } from "react-icons/fa";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import MergeModal from "./MergeModal";
 import SplitModal from "./SplitModal";
+import { STATUS_OPTIONS } from "./StatusMenu.jsx";
 import TransferModal from "./TransferModal";
 
 export default function SelectionToolbar({
@@ -355,15 +356,7 @@ export default function SelectionToolbar({
                         </button>
                         {statusOpen && (
                             <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36 z-50">
-                                {[
-                                    "DONE",
-                                    "RUNNING",
-                                    "FOR PROCESS",
-                                    "FVI",
-                                    "BOXING",
-                                    "LWAIT",
-                                    "NONE",
-                                ].map((s) => (
+                                {STATUS_OPTIONS.map((s) => (
                                     <button
                                         key={s}
                                         className="btn btn-ghost w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"

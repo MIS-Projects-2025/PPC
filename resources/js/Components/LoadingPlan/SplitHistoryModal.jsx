@@ -166,6 +166,15 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
                                             </div>
                                         </div>
 
+                                        {split.parentQtyBefore != null && (
+                                            <div className="col-span-2">
+                                                <span className="text-base-content/40">Original qty</span>{" "}
+                                                <b>{split.parentQtyBefore.toLocaleString()}</b> →{" "}
+                                                <span className="font-mono">{split.parentLotId}</span> {split.parentQtyAfter.toLocaleString()} +{" "}
+                                                <span className="font-mono">{split.childLotId}</span> {split.childQty.toLocaleString()}
+                                            </div>
+                                        )}
+
                                         {split.childAppearances?.length > 0 && (
                                             <div className="mt-2 pt-2 border-t border-base-content/10">
                                                 <div className="text-[10px] font-semibold text-base-content/40 uppercase tracking-wide mb-1">

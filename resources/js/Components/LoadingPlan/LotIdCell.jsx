@@ -1,6 +1,8 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import React, { useContext } from "react";
 
+const noop = () => {};
+
 export function LotIdCell({
     lotId,
     isPickup,
@@ -21,12 +23,14 @@ export function LotIdCell({
             {splitInfo && (
                 <SplitBadge
                     splitInfo={splitInfo}
+                    lotId={lotId}
                     handleShowHistory={handleShowHistory}
                 />
             )}
             {mergeInfo && (
                 <MergeBadge
                     mergeInfo={mergeInfo}
+                    lotId={lotId}
                     handleShowMergeHistory={handleShowMergeHistory}
                 />
             )}
@@ -109,7 +113,7 @@ function LotLabel({
     );
 }
 
-function SplitBadge({ splitInfo, handleShowHistory }) {
+function SplitBadge({ splitInfo, lotId, handleShowHistory }) {
     const { isParent, isChild, rootLotId } = splitInfo;
 
     return (
@@ -117,7 +121,7 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
             type="button"
             onClick={(e) => {
                 e.stopPropagation();
-                handleShowHistory(rootLotId, isParent, isChild);
+                handleShowHistory(rootLotId, isParent, isChild, lotId);
             }}
             title={
                 isParent
@@ -131,7 +135,7 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
     );
 }
 
-function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
+function MergeBadge({ mergeInfo, lotId, handleShowMergeHistory }) {
     const { isTarget, isSource, mergedInto, mergedFrom } = mergeInfo;
     const relatedLotId = mergedInto ?? mergedFrom;
 
@@ -144,6 +148,7 @@ function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
                     relatedLotId,
                     isTarget,
                     isSource,
+                    lotId
                 );
             }}
             title={

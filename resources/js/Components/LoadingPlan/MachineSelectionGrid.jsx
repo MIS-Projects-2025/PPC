@@ -165,6 +165,7 @@ export default function MachineSelectionGrid({
     searchPlaceholder = "Search machine…",
     transferCandidates = null, // null = not in transfer mode, falls back to platform grouping
     transferLoading = false,
+    inputRef,
 }) {
     const [query, setQuery] = useState("");
     const [internalSelected, setInternalSelected] = useState(defaultSelectedMachine);
@@ -206,6 +207,7 @@ export default function MachineSelectionGrid({
     return (
         <div className="relative mb-3">
             <input
+                ref={inputRef}
                 autoFocus
                 type="text"
                 placeholder={searchPlaceholder}

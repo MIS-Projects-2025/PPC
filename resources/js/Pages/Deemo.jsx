@@ -22,7 +22,7 @@ import ScrollableTabs from "@/Components/LoadingPlan/ScrollableTabs";
 import { SearchBar } from "@/Components/LoadingPlan/SearchBar";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
-import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+import StatusMenu from "@/Components/LoadingPlan/StatusMenu";
 import { ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
 import { packagesInGroup } from "@/Constants/loadingPlanPackageGroups.js";
 import { MACHINE_MANUAL, hasTimeline } from "@/Constants/machines.js";
@@ -609,7 +609,7 @@ export default function Deemo({
             if (readOnly) return; // no status-change menu in read-only mode
             if (writesLocked) return;
             const rect = e.currentTarget.getBoundingClientRect();
-            setStatusMenu({ entryId, x: rect.left, y: rect.bottom + 4 });
+            setStatusMenu({ entryId, anchor: e.currentTarget });
         },
         [readOnly, writesLocked],
     );
@@ -891,23 +891,26 @@ export default function Deemo({
         revertSplit,
         revertMerge,
         mergeRows,
-        splitRow 
+        splitRow,
+        currentLotId: currentLotIdForSplitMergeHistory,
     } = useSplitMergeOperations({ dataRows, update, withUpdating, mutate, date, toast, setIsDirty, syncServerFields });
 
     const handleShowSplitHistory = useCallback(
-        (rootLotId, isParent, isChild) =>
+        (rootLotId, isParent, isChild, lotId) =>
             loadSplitHistory(rootLotId, isParent, isChild, {
                 onOpen: () => splitHistoryModalRef.current?.showModal(),
                 onError: () => splitHistoryModalRef.current?.close(),
+                lotId,
             }),
         [loadSplitHistory],
     );
 
     const handleShowMergeHistory = useCallback(
-        (targetLotId, isParent, isChild) =>
+        (targetLotId, isParent, isChild, lotId) =>
             loadMergeHistory(targetLotId, isParent, isChild, {
                 onOpen: () => mergeHistoryModalRef.current?.showModal(),
                 onError: () => mergeHistoryModalRef.current?.close(),
+                lotId,
             }),
         [loadMergeHistory],
     );
@@ -1652,6 +1655,7 @@ export default function Deemo({
             // selectedIds,
             // handleRowSelect,
             writesLocked,
+            isUpdating: writesLocked,
             // anchorIdRef,
         }),
         [
@@ -2184,6 +2188,7 @@ export default function Deemo({
                             onClose={() => splitHistoryModalRef.current?.close()}
                             isParent={currentLotRole.isParent}
                             isChild={currentLotRole.isChild}
+                            currentLotId={currentLotIdForSplitMergeHistory}
                         />
                     )}
 
@@ -2211,6 +2216,7 @@ export default function Deemo({
                             onClose={() => mergeHistoryModalRef.current?.close()}
                             isTarget={currentLotRole.isParent}
                             isSource={currentLotRole.isChild}
+                            currentLotId={currentLotIdForSplitMergeHistory}
                         />
                     )}
 
@@ -2226,52 +2232,13 @@ export default function Deemo({
 
             {/* ── Single-row status dropdown (portal-style, fixed) ── */}
             {!readOnly && statusMenu && (
-                <>
-                    <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setStatusMenu(null)}
-                    />
-                    <div
-                        className="fixed z-50 bg-base-100 border border-base-300 rounded-lg shadow-lg p-1 grid grid-cols-2 gap-1 min-w-72"
-                        style={{ top: statusMenu.y, left: statusMenu.x }}
-                    >
-                        {[
-                            "DONE",
-                            "RUNNING",
-                            "FOR PROCESS",
-                            "FVI",
-                            "BOXING",
-                            "LWAIT",
-                            "NONE",
-                            "OQA",
-                            "BUY-OFF",
-                            "ON BAKE",
-                            "FOR BAKE",
-                            "ON SORT",
-                            "FOR SORT",
-                            "FOR BRAND",
-                            "ON BRAND",
-                            "FOR LPI",
-                            "ON LPI",
-                            "FOR LLI",
-                            "ON LLI",
-                            "FOR LEADCON",
-                            "ON LEADCON"
-                        ].map((s) => (
-                            <button
-                                key={s}
-                                className={clsx(
-                                    "btn btn-sm btn-ghost w-full justify-start px-2 text-sm flex items-center gap-2",
-                                    !writesLocked && "hover:bg-base-200",
-                                )}
-                                onClick={() => handleStatusChange(s)}
-                                disabled={writesLocked}
-                            >
-                                <StatusBadge status={s} />
-                            </button>
-                        ))}
-                    </div>
-                </>
+                <StatusMenu
+                    anchor={statusMenu.anchor}
+                    current={dataRows.find((r) => r.entry_id === statusMenu.entryId)?.status}
+                    disabled={writesLocked}
+                    onPick={handleStatusChange}
+                    onClose={() => setStatusMenu(null)}
+                />
             )}
 
             {!readOnly && (
@@ -2599,13 +2566,13 @@ export default function Deemo({
                                 </span>
                             </div>
 
-                            <div className="flex flex-col gap-1 overflow-y-auto pr-1">
+                            <div className="flex flex-col overflow-y-auto pr-1">
                                 {visibleCols.map((col) => {
                                     const isHidden = isColHidden(col.key);
                                     return (
                                         <label
                                             key={col.key}
-                                            className={`flex items-center justify-between gap-1 px-3 rounded-md cursor-pointer border-l-4 transition-colors ${
+                                            className={`flex items-center justify-between gap-1 py-2 px-3 rounded-md cursor-pointer border-l-4 transition-colors ${
                                                 isHidden
                                                     ? 'bg-warning/10 border-warning hover:bg-warning/20'
                                                     : 'border-transparent hover:bg-base-200'

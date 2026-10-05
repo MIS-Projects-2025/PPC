@@ -47,6 +47,7 @@ class LotPrioritySorter
         $ct = fn($row) => (float) ($s($row)['ct'] ?? PHP_INT_MIN);
 
         return $segment->sortBy([
+            fn($a, $b) => (int) ($s($b)['is_running_gtreel'] ?? false) <=> (int) ($s($a)['is_running_gtreel'] ?? false),
             fn($a, $b) => (int) $s($a)['is_res'] <=> (int) $s($b)['is_res'],
             fn($a, $b) => $rank($a) <=> $rank($b),
             fn($a, $b) => $metric($b) <=> $metric($a),

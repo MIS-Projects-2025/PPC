@@ -156,6 +156,25 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
                                             </div>
                                         </div>
 
+                                        <div className="mt-2 pt-2 border-t border-base-content/10 text-xs text-base-content/60 space-y-0.5">
+                                            <div>
+                                                <span className="text-base-content/40">Merged in</span>{" "}
+                                                <span className="font-mono">{merge.sourceLotId}</span>:{" "}
+                                                <b>{(merge.sourceQtyBefore ?? merge.transferredQty).toLocaleString()}</b> units
+                                            </div>
+                                            <div>
+                                                <span className="text-base-content/40">Merged with</span>{" "}
+                                                <span className="font-mono">{merge.targetLotId}</span>:{" "}
+                                                {merge.targetQtyBefore != null ? (
+                                                    <>
+                                                        <b>{merge.targetQtyBefore.toLocaleString()}</b> → <b>{merge.targetQtyAfter.toLocaleString()}</b> units
+                                                    </>
+                                                ) : (
+                                                    <span className="italic text-base-content/40">prior qty not recorded</span>
+                                                )}
+                                            </div>
+                                        </div>
+
                                         {merge.revertedAt && (
                                             <div className="pt-2 border-t border-base-content/10 text-xs text-base-content/40">
                                                 Reverted{" "}

@@ -21,14 +21,16 @@ import { useCallback, useState } from "react";
  * (loading stays true until the fetch settles).
  */
 export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate, date, toast, setIsDirty, syncServerFields }) {
+    const [currentLotId, setCurrentLotId] = useState(null);
     const [splitHistoryData, setSplitHistoryData] = useState(null);
     const [mergeHistoryData, setMergeHistoryData] = useState(null);
     const [currentLotRole, setCurrentLotRole] = useState({ isParent: false, isChild: false });
     const [historyLoading, setHistoryLoading] = useState(false);
 
     const loadSplitHistory = useCallback(
-        async (rootLotId, isParent, isChild, { onOpen, onError } = {}) => {
+        async (rootLotId, isParent, isChild, { onOpen, onError, lotId } = {}) => {
             onOpen?.();
+            setCurrentLotId(lotId ?? null);
             setHistoryLoading(true);
             setSplitHistoryData(null);
             setCurrentLotRole({ isParent, isChild });
@@ -47,8 +49,9 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
     );
 
     const loadMergeHistory = useCallback(
-        async (targetLotId, isParent, isChild, { onOpen, onError } = {}) => {
+        async (targetLotId, isParent, isChild, { onOpen, onError, lotId } = {}) => {
             onOpen?.();
+            setCurrentLotId(lotId ?? null);
             setHistoryLoading(true);
             setMergeHistoryData(null);
             setCurrentLotRole({ isParent, isChild });
@@ -307,5 +310,6 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
         revertMerge,
         mergeRows,
         splitRow,
+        currentLotId,
     };
 }

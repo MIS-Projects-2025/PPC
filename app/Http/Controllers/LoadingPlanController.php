@@ -237,11 +237,12 @@ class LoadingPlanController extends Controller
 
     private function getActiveMachines()
     {
-        return Cache::remember(
-            'lp:active-machines',
-            60,
-            fn() =>
-            QdnMachine::active()
+        return Cache::remember('lp:active-machines:v2', 60, function () {
+            $factoryRank = function (?string $f): int {
+                return preg_match('/F\s*(\d+)/i', (string) $f, $m) ? (int) $m[1] : 99;
+            };
+
+            return QdnMachine::active()
                 ->select('id', 'machine_num', 'machine_platform', 'location', 'factory')
                 ->get()
                 ->map(fn($m) => [
@@ -256,8 +257,13 @@ class LoadingPlanController extends Controller
                     'factory'  => $m->factory,
                     'id'       => $m->id,
                 ])
-                ->values()
-        );
+                ->sort(
+                    fn($a, $b) =>
+                    [$factoryRank($a['factory']), 0] <=> [$factoryRank($b['factory']), 0]
+                        ?: strnatcasecmp($a['name'], $b['name'])
+                )
+                ->values();
+        });
     }
 
     private function getBaseTimes($activeMachines, string $date): array

@@ -1,5 +1,5 @@
 import { useMutation } from "@/Hooks/useMutation";
-import { forwardRef, useEffect, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import MachineSelectionGrid from "./MachineSelectionGrid";
 
 const TransferModal = forwardRef(function TransferModal(
@@ -9,7 +9,28 @@ const TransferModal = forwardRef(function TransferModal(
     const [pendingMachine, setPendingMachine] = useState(undefined);
     const [candidates, setCandidates] = useState(null); // null = not loaded yet
 
+    const searchRef = useRef(null);
+    const confirmRef = useRef(null);
+    const [nudge, setNudge] = useState(false);
+
     const { mutate, isLoading, errorMessage } = useMutation();
+
+    useEffect(() => {
+        if (!open) return;
+        setPendingMachine(undefined);
+        const id = requestAnimationFrame(() => {
+            searchRef.current?.focus();
+            searchRef.current?.select();
+        });
+        return () => cancelAnimationFrame(id);
+    }, [open]);
+
+    // after a machine is picked: focus Confirm so Enter works, and bounce it
+    useEffect(() => {
+        if (pendingMachine === undefined) return;
+        confirmRef.current?.focus();
+        setNudge(true);
+    }, [pendingMachine]);
 
     // Fetch compatibility/capacity preview whenever the set of lots being
     // transferred changes (i.e. right before the modal is shown).
@@ -63,7 +84,16 @@ const TransferModal = forwardRef(function TransferModal(
 
     return (
         <dialog ref={ref} id="transfer_modal" className="modal">
-            <div className="modal-box bg-base-300 w-11/12 max-w-3xl max-h-[80vh] flex flex-col">
+            <div
+                className="modal-box bg-base-300 w-11/12 max-w-3xl max-h-[80vh] flex flex-col"
+                onKeyDown={(e) => {
+                    // Enter from the search box confirms too; buttons handle their own Enter
+                    if (e.key === "Enter" && pendingMachine !== undefined && e.target.tagName === "INPUT") {
+                        e.preventDefault();
+                        handleConfirm();
+                    }
+                }}
+            >
                 <h3 className="font-bold text-lg mb-3">Transfer to…</h3>
 
                 {errorMessage && (
@@ -74,6 +104,7 @@ const TransferModal = forwardRef(function TransferModal(
 
                 <div className="overflow-y-auto flex-1">
                     <MachineSelectionGrid
+                        inputRef={searchRef}
                         machines={machines}
                         machinePlatform={machinePlatform}
                         selectedMachine={pendingMachine}
@@ -89,12 +120,14 @@ const TransferModal = forwardRef(function TransferModal(
                         Cancel
                     </button>
                     <button
+                        ref={confirmRef}
                         type="button"
                         disabled={pendingMachine === undefined}
                         onClick={handleConfirm}
-                        className="btn btn-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                        onAnimationEnd={() => setNudge(false)}
+                        className={`btn btn-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${nudge ? "animate-confirm-nudge" : ""}`}
                     >
-                        Confirm
+                        Confirm <kbd className="kbd kbd-xs ml-1">Enter</kbd>
                     </button>
                 </div>
             </div>

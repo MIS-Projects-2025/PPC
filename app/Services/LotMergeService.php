@@ -79,7 +79,9 @@ class LotMergeService
                 'source_machine'  => $sourceMachine,
                 'target_machine'   => $targetMachine,
                 'scheduled_date'  => $date,
-                'transferred_qty' => $sourceQty,
+                'transferred_qty'   => $sourceQty,
+                'target_qty_before' => $targetQty,
+                'source_qty_before' => $sourceQty,
                 'created_by'      => $createdBy,
             ]);
 
@@ -329,21 +331,24 @@ class LotMergeService
             $active = is_null($m->reverted_at);
 
             return [
-                'mergeId'        => $m->id,
-                'fromLotId'      => $m->source_lot_id,
-                'fromMachine'    => $m->source_machine ?? $machineOn($m->source_lot_id, $date), // at merge time
-                'toLotId'        => $m->target_lot_id,
-                'toMachine'      => $m->target_machine ?? $machineOn($m->target_lot_id, $date), // at merge time
-                'toMachineNow'   => $active ? $currentMachine($m->target_lot_id) : null,        // live, target only
-                'snapshotExact'  => !is_null($m->source_machine) && !is_null($m->target_machine),
-                'targetLotId'    => $m->target_lot_id,
-                'sourceLotId'    => $m->source_lot_id,
-                'scheduledDate'  => $date,
-                'transferredQty' => $m->transferred_qty,
-                'createdBy'      => $m->created_by,
-                'createdAt'      => $m->created_at,
-                'revertedAt'     => $m->reverted_at,
-                'revertedBy'     => $m->reverted_by,
+                'mergeId'         => $m->id,
+                'fromLotId'       => $m->source_lot_id,
+                'fromMachine'     => $m->source_machine ?? $machineOn($m->source_lot_id, $date), // at merge time
+                'toLotId'         => $m->target_lot_id,
+                'toMachine'       => $m->target_machine ?? $machineOn($m->target_lot_id, $date), // at merge time
+                'toMachineNow'    => $active ? $currentMachine($m->target_lot_id) : null,        // live, target only
+                'snapshotExact'   => !is_null($m->source_machine) && !is_null($m->target_machine),
+                'targetLotId'     => $m->target_lot_id,
+                'sourceLotId'     => $m->source_lot_id,
+                'scheduledDate'   => $date,
+                'transferredQty'  => $m->transferred_qty,
+                'targetQtyBefore' => $m->target_qty_before,
+                'sourceQtyBefore' => $m->source_qty_before ?? $m->transferred_qty,
+                'targetQtyAfter'  => $m->target_qty_before !== null ? $m->target_qty_before + $m->transferred_qty : null,
+                'createdBy'       => $m->created_by,
+                'createdAt'       => $m->created_at,
+                'revertedAt'      => $m->reverted_at,
+                'revertedBy'      => $m->reverted_by,
             ];
         })->values();
     }
