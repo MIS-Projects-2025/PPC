@@ -519,7 +519,6 @@ class LoadingPlanService
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
-
         $t = microtime(true);
 
         /*
