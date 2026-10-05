@@ -259,7 +259,10 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     if (row.cycle_time_exceed) {
                         classes.push("bg-yellow-highlight");
                     }
-                    if (row.cycle_time_exceed_residual || row.is_manual_expedite) {
+                    if (row.cycle_time_exceed_residual) {
+                        classes.push("bg-light-yellow-highlight");
+                    }
+                    if (row.is_manual_expedite) {
                         classes.push("bg-amber-highlight");
                     }
                 }

@@ -43,12 +43,16 @@
 
 /* Yellow fill for CT >= 2 days */
 .bg-yellow-highlight {
-  background-color: #fef08a !important; 
+  background-color: #FFFF00 !important; 
+  color: #854d0e !important;
+}
+.bg-light-yellow-highlight {
+  background-color: #FFFFA0 !important; 
   color: #854d0e !important;
 }
 /* Amber fill for RES CT >= 2 days or expedited lots */
 .bg-amber-highlight {
-  background-color: #fde68a !important; 
+  background-color: #ffc000 !important; 
   color: #92400e !important;
 }
 
