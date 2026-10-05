@@ -28,6 +28,7 @@ const PLATFORM_STYLES = {
     HSI: { dot: "bg-amber-400", text: "text-amber-500", border: "border-amber-400/30", bg: "bg-amber-400/[0.04]" },
     Other: { dot: "bg-base-content/30", text: "text-base-content/40", border: "border-base-content/10", bg: "bg-base-content/[0.02]" },
 };
+
 function platformStyle(platform) {
     return PLATFORM_STYLES[platform] ?? PLATFORM_STYLES.Other;
 }
@@ -81,9 +82,7 @@ function MachineChipButton({ machine, selected, onClick, isPseudo, transferRow }
             title={isIncompatible ? `${machine} is incompatible` : hasCapacity ? undefined : machine ?? "Unassigned"}
             className={`relative w-full overflow-hidden rounded-md ${MachineChipClasses(
                 selected ? "active" : "idle",
-            )} cursor-pointer ${isIncompatible ? "opacity-40" : ""} ${
-                isExceeded ? "ring-1 ring-error ring-inset" : ""
-            }`}
+            )} cursor-pointer ${isExceeded ? "ring-1 ring-error ring-inset" : ""}`}
         >
             <span className="relative z-10">{machine ?? "Unassigned"}</span>
 
@@ -192,7 +191,7 @@ export default function MachineSelectionGrid({
         return realMachines.filter((m) => m.toLowerCase().includes(q));
     }, [realMachines, query]);
 
-    const inTransferMode = transferCandidates !== null;
+    const inTransferMode = transferCandidates !== null && !transferLoading;
 
     const grouped = useMemo(() => {
         if (inTransferMode) return groupByTier(filteredMachines, transferCandidates);
@@ -204,12 +203,8 @@ export default function MachineSelectionGrid({
             ? (transferCandidates[selectedMachine]?.tier ?? 5)
             : null;
 
-    if (inTransferMode && transferLoading) {
-        return <div className="text-center text-xs text-base-content/40 py-8">Checking compatibility…</div>;
-    }
-
     return (
-        <div>
+        <div className="relative mb-3">
             <input
                 autoFocus
                 type="text"
@@ -218,70 +213,78 @@ export default function MachineSelectionGrid({
                 onChange={(e) => setQuery(e.target.value)}
                 className="input input-sm input-bordered w-full mb-3"
             />
-
-            {selectedTier === 5 && (
-                <div role="alert" className="alert alert-warning alert-soft py-2 px-3 mb-3 text-xs">
-                    <span>
-                        <span className="font-bold">{selectedMachine}</span> is incompatible with the lots being
-                        transferred. You can still assign it. Or if you think the rule is wrong, you can edit it here.
-                    </span>
-                </div>
+            {transferLoading && (
+                <span className="loading loading-spinner loading-xs absolute right-2 top-1/2 -translate-y-1/2 text-base-content/40" />
             )}
 
-            {pseudoMachines.length > 0 && (
-                <div className="mb-3 pb-3 border-b border-dashed border-base-content/10">
-                    <div className="text-[10px] font-semibold text-base-content/30 uppercase tracking-wide mb-1.5">
-                        Quick select
+            <div
+                aria-busy={transferLoading}
+                className={`transition-opacity ${transferLoading ? "opacity-50 pointer-events-none" : ""}`}
+            >
+                {selectedTier === 5 && (
+                    <div role="alert" className="alert alert-warning alert-soft py-2 px-3 mb-3 text-xs">
+                        <span>
+                            <span className="font-bold">{selectedMachine}</span> is incompatible with the lots being
+                            transferred. You can still assign it. Or if you think the rule is wrong, you can edit it here.
+                        </span>
                     </div>
-                    <div className="grid grid-cols-4 gap-1.5">
-                        {pseudoMachines.map((m) => (
-                            <MachineChipButton
-                                key={m ?? "unassigned"}
-                                machine={m}
-                                isPseudo
-                                selected={selectedMachine === m}
-                                onClick={handleSelect}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
+                )}
 
-            {grouped.length === 0 ? (
-                <div className="text-center text-xs text-base-content/40 py-8">
-                    No machines match "{query}"
-                </div>
-            ) : (
-                <div className="space-y-4">
-                    {grouped.map(([groupKey, group]) => {
-                        const style = inTransferMode ? TIER_STYLES[groupKey] : platformStyle(groupKey);
-                        const label = inTransferMode ? TIER_LABELS[groupKey] : groupKey;
-                        return (
-                            <div key={groupKey} className={`rounded-lg border ${style.border} ${style.bg} p-2`}>
-                                <div className="flex items-center gap-1.5 mb-2 px-0.5">
-                                    <span className={`w-1.5 h-1.5 rounded-full ${style.dot} shrink-0`} />
-                                    <span className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}>
-                                        {label}
-                                    </span>
-                                    <span className="text-[9px] text-base-content/30 font-mono">{group.length}</span>
-                                    <div className={`flex-1 h-px ${style.border} border-t`} />
+                {pseudoMachines.length > 0 && (
+                    <div className="mb-3 pb-3 border-b border-dashed border-base-content/10">
+                        <div className="text-[10px] font-semibold text-base-content/30 uppercase tracking-wide mb-1.5">
+                            Quick select
+                        </div>
+                        <div className="grid grid-cols-4 gap-1.5">
+                            {pseudoMachines.map((m) => (
+                                <MachineChipButton
+                                    key={m ?? "unassigned"}
+                                    machine={m}
+                                    isPseudo
+                                    selected={selectedMachine === m}
+                                    onClick={handleSelect}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {grouped.length === 0 ? (
+                    <div className="text-center text-xs text-base-content/40 py-8">
+                        No machines match "{query}"
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        {grouped.map(([groupKey, group]) => {
+                            const style = inTransferMode ? TIER_STYLES[groupKey] : platformStyle(groupKey);
+                            const label = inTransferMode ? TIER_LABELS[groupKey] : groupKey;
+                            return (
+                                <div key={groupKey} className={`rounded-lg border ${style.border} ${style.bg} p-2`}>
+                                    <div className="flex items-center gap-1.5 mb-2 px-0.5">
+                                        <span className={`w-1.5 h-1.5 rounded-full ${style.dot} shrink-0`} />
+                                        <span className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}>
+                                            {label}
+                                        </span>
+                                        <span className="text-[9px] text-base-content/30 font-mono">{group.length}</span>
+                                        <div className={`flex-1 h-px ${style.border} border-t`} />
+                                    </div>
+                                    <div className="grid grid-cols-6 gap-1.5">
+                                        {group.map((m) => (
+                                            <MachineChipButton
+                                                key={m}
+                                                machine={m}
+                                                selected={selectedMachine === m}
+                                                onClick={handleSelect}
+                                                transferRow={inTransferMode ? (transferCandidates[m] ?? null) : undefined}
+                                            />
+                                        ))}
+                                    </div>
                                 </div>
-                                <div className="grid grid-cols-6 gap-1.5">
-                                    {group.map((m) => (
-                                        <MachineChipButton
-                                            key={m}
-                                            machine={m}
-                                            selected={selectedMachine === m}
-                                            onClick={handleSelect}
-                                            transferRow={inTransferMode ? (transferCandidates[m] ?? null) : undefined}
-                                        />
-                                    ))}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
