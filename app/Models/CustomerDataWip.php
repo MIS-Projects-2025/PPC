@@ -94,11 +94,19 @@ class CustomerDataWip extends Model
         return $q->whereNotIn('Station', ['GTTFVI_T', 'GTTOQA_T', 'GTTBOX_T']);
     }
 
+    // this is slower than below
+    // public function scopeForDate(Builder $q, string|array $date): Builder
+    // {
+    //     return is_array($date)
+    //         ? $q->whereIn('import_date', $date)
+    //         : $q->whereDate('import_date', $date);
+    // }
+
     public function scopeForDate(Builder $q, string|array $date): Builder
     {
         return is_array($date)
             ? $q->whereIn('import_date', $date)
-            : $q->whereDate('import_date', $date);
+            : $q->where('import_date', $date);
     }
 
     // CT = Date_Loaded - BE_Starttime, in fractional days

@@ -87,14 +87,26 @@ class LoadingPlanFormulas
 
     public static function computeCT($dateLoaded, $beStarttime): ?float
     {
-        $loaded = self::toCarbon($dateLoaded);
-        $start  = self::toCarbon($beStarttime);
+        $loaded = self::toTimestamp($dateLoaded);
+        $start  = self::toTimestamp($beStarttime);
 
-        if (!$loaded || !$start) {
+        if ($loaded === null || $start === null) {
             return null;
         }
 
-        return round(($loaded->timestamp - $start->timestamp) / 86400, 2);
+        return round(($loaded - $start) / 86400, 2);
+    }
+
+    public static function toTimestamp($value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if ($value instanceof \DateTimeInterface) {
+            return $value->getTimestamp();
+        }
+        $ts = strtotime((string) $value);
+        return $ts === false ? null : $ts;
     }
 
     public static function computeOSL(?float $ct, $backendLeadtime): ?float

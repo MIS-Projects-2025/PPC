@@ -35,6 +35,14 @@ class LoadingPlanService
         self::$acc[$k] = (self::$acc[$k] ?? 0) + (microtime(true) - $t0);
     }
 
+    private static function timed(string $key, callable $fn)
+    {
+        $t = microtime(true);
+        $r = $fn();
+        self::$acc[$key] = (self::$acc[$key] ?? 0) + (microtime(true) - $t);
+        return $r;
+    }
+
     /**
      * Keys createPlannedLot needs to find when $entry is passed as an array,
      * matching this method's own return shape (not the raw LoadingPlanEntry model).
@@ -305,6 +313,13 @@ class LoadingPlanService
             ->concat($manualLotResults)
             ->concat($blockResults);
 
+        Probe::mark('  (end of loops)');
+        \Log::info('[PROBE] createPlannedLot accumulated', [
+            'rows' => $result->count(),
+            'ms'   => array_map(fn($s) => round($s * 1000), self::$acc),
+        ]);
+        self::$acc = [];
+
         $sorted = self::sortEntriesByMachineAndSequence($result);
         Probe::mark('  sortEntriesByMachineAndSequence');
         return $sorted;
@@ -481,7 +496,7 @@ class LoadingPlanService
 
         $accuTime = $entry?->accu_time
             ? $entry->accu_time
-            : $this->calc->accuTime($doable, $capacityUph);
+            : self::timed('accuTime', fn() => $this->calc->accuTime($doable, $capacityUph));
 
         /*
         * Array-shaped entries already contain the resolved machine name.
@@ -492,19 +507,20 @@ class LoadingPlanService
             ? $resolvedMachine
             : ($entry?->finalized_at
                 ? $entry->machine_snapshot
-                : $entry?->getMachineName());
-        self::tick('getMachineName', $t);
+                : self::timed('getMachineName', fn() => $entry?->getMachineName()));
+
+        // self::tick('getMachineName', $t);
 
         $t = microtime(true);
-        $formulas = LoadingPlanFormulas::make($wipRow);
+        // $formulas = LoadingPlanFormulas::make($wipRow);
+        $formulas = self::timed('Formulas::make', fn() => LoadingPlanFormulas::make($wipRow));
+
         self::tick('Formulas::make', $t);
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
 
         $t = microtime(true);
-        $loc = PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name);
-        self::tick('PackageLocation::for', $t);   // then use $loc in the array
 
         /*
         * Array-shaped scheduled_date is already a Y-m-d string.
@@ -515,36 +531,33 @@ class LoadingPlanService
             : ($entry?->scheduled_date?->toDateString() ?? null);
 
         $t = microtime(true);
-        $split = LotSplitService::buildSplitMeta(
-            $lotId,
-            $this->splitsByParent ?? null,
-            $this->splitsByChild ?? null,
-            $scheduledDate
-        );
-        $merge = LotMergeService::buildMergeMeta(
-            $lotId,
-            $this->mergesByTarget ?? null,
-            $this->mergesBySource ?? null,
-            $scheduledDate
-        );
+        $location = self::timed('PackageLocation::for', fn() =>
+        PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name));
+
+        $fmt = fn($v) => ($ts = LoadingPlanFormulas::toTimestamp($v)) === null
+            ? null
+            : date('n/j/Y g:i:s A', $ts);
+
+        $dateLoaded = $fmt($wipRow?->Date_Loaded);
+        $beStart    = $fmt($wipRow?->BE_Starttime);
+        $startAt    = $fmt($wipRow?->Start_Time);
+
+        $splitInfo = self::timed('buildSplitMeta', fn() => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent ?? null, $this->splitsByChild ?? null, $scheduledDate));
+        $mergeInfo = self::timed('buildMergeMeta', fn() => LotMergeService::buildMergeMeta($lotId, $this->mergesByTarget ?? null, $this->mergesBySource ?? null, $scheduledDate));
+
         self::tick('split+merge meta', $t);       // then use $split/$merge in the array
 
         /*
         * Array-shaped entries already contain H:i strings.
         * LoadingPlanEntry models may contain Carbon values.
         */
-        $startTime = $entry?->time_start
-            ? Carbon::parse($entry->time_start)
-            : null;
-
-        $endTime = $entry?->time_end
-            ? Carbon::parse($entry->time_end)
-            : null;
+        $startTime = $entry?->time_start ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_start)) : null;
+        $endTime   = $entry?->time_end   ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_end))   : null;
 
         $isLeaked = $scheduledDate === $this->previousDate;
 
         return [
-            'location'                   => $loc,
+            'location'                   => $location,
 
             // Entry Metadata
             'entry_id'                   => $entry?->id,
@@ -599,20 +612,11 @@ class LoadingPlanService
             'test_lot_id'                => $wipRow?->Test_Lot_Id ?? null,
             'backend_leadtime'           => $wipRow?->Backend_Leadtime ?? null,
 
-            'date_loaded'                => transform(
-                $wipRow?->Date_Loaded,
-                fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')
-            ),
+            'date_loaded'                => $dateLoaded,
 
-            'be_starttime'               => transform(
-                $wipRow?->BE_Starttime,
-                fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')
-            ),
+            'be_starttime'               => $beStart,
 
-            'start_time'                 => transform(
-                $wipRow?->Start_Time,
-                fn($date) => Carbon::parse($date)->format('n/j/Y g:i:s A')
-            ),
+            'start_time'                 => $startAt,
 
             'part_type'                  => $wipRow?->Part_Type ?? null,
             'part_class'                 => $wipRow?->Part_Class ?? null,
@@ -667,8 +671,8 @@ class LoadingPlanService
             'rework_of_entry_id'         => $entry?->rework_of_entry_id ?? null,
 
             // Split & Merge Metadata
-            'split_info'                 => $split,
-            'merge_info'                 => $merge,
+            'split_info'                 => $splitInfo,
+            'merge_info'                 => $mergeInfo,
         ];
     }
 
