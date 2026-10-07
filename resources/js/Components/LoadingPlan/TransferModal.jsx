@@ -3,7 +3,7 @@ import { forwardRef, useEffect, useRef, useState } from "react";
 import MachineSelectionGrid from "./MachineSelectionGrid";
 
 const TransferModal = forwardRef(function TransferModal(
-    { machines, machinePlatform, selectedMachines, transferLotIds, date, open, onSelect, onClose },
+    { machines, nonMachines, machinePlatform, selectedMachines, transferLotIds, date, open, onSelect, onClose },
     ref,
 ) {
     const [pendingMachine, setPendingMachine] = useState(undefined);
@@ -106,6 +106,7 @@ const TransferModal = forwardRef(function TransferModal(
                     <MachineSelectionGrid
                         inputRef={searchRef}
                         machines={machines}
+                        nonMachines={nonMachines}
                         machinePlatform={machinePlatform}
                         selectedMachine={pendingMachine}
                         onSelect={setPendingMachine}
@@ -113,6 +114,12 @@ const TransferModal = forwardRef(function TransferModal(
                         transferCandidates={candidates}
                         transferLoading={isLoading}
                     />
+
+                    {nonMachines.length === 0 && (
+                        <p className="text-[11px] text-base-content/40 mt-1">
+                            No non-machines for this date and location yet. Create one from the Non-machines button.
+                        </p>
+                    )}
                 </div>
 
                 <div className="modal-action">

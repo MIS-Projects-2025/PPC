@@ -61,8 +61,8 @@ class LotMergeService
                 ? [$entryA, $entryB, $quantityA, $quantityB, $qtyA, $qtyB]
                 : [$entryB, $entryA, $quantityB, $quantityA, $qtyB, $qtyA];
 
-            $sourceMachine = $sourceEntry->getMachineName();
-            $targetMachine = $targetEntry->getMachineName();
+            $sourceMachine = $sourceEntry->getPlacementKey();
+            $targetMachine = $targetEntry->getPlacementKey();
 
             $targetLotId = $targetEntry->lot_id;
             $sourceLotId = $sourceEntry->lot_id;
@@ -113,7 +113,7 @@ class LotMergeService
                 'target' => $targetEnriched,
                 'source' => $sourceEnriched,
 
-                'affected_timings' => LoadingPlanEntryService::timingsFor([$targetEntry->machine_id, $sourceEntry->machine_id], $date),
+                'affected_timings' => LoadingPlanEntryService::timingsFor([$targetEntry->machine_id, $sourceEntry->machine_id], $date, [$targetEntry->non_machine_id, $sourceEntry->non_machine_id]),
             ];
         });
     }
@@ -150,6 +150,9 @@ class LotMergeService
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
             $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
 
+            $targetEntryNonMachineId = $targetEntry?->non_machine_id;
+            $sourceEntryNonMachineId = $sourceEntry?->non_machine_id;
+
             $machineIds = [$targetEntry?->machine_id, $sourceEntry?->machine_id];
 
             $calc = app(LotScheduleCalculator::class, [
@@ -182,7 +185,7 @@ class LotMergeService
                 'merge'  => $merge->fresh(),
                 'target' => $targetEntry,
                 'source' => $sourceEntry,
-                'affected_timings' => LoadingPlanEntryService::timingsFor($machineIds, $date),
+                'affected_timings' => LoadingPlanEntryService::timingsFor($machineIds, $date, [$targetEntryNonMachineId ?? null, $sourceEntryNonMachineId ?? null]),
             ];
         });
     }
@@ -217,6 +220,9 @@ class LotMergeService
             $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
             $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
 
+            $targetEntryNonMachineId = $targetEntry?->non_machine_id;
+            $sourceEntryNonMachineId = $sourceEntry?->non_machine_id;
+
             $machineIds = [$targetEntry?->machine_id, $sourceEntry?->machine_id];
 
             $calc = app(LotScheduleCalculator::class, [
@@ -249,7 +255,7 @@ class LotMergeService
                 'merge' => $merge->fresh(),
                 'target' => $targetEntry,
                 'source' => $sourceEntry,
-                'affected_timings' => LoadingPlanEntryService::timingsFor($machineIds, $date),
+                'affected_timings' => LoadingPlanEntryService::timingsFor($machineIds, $date, [$targetEntryNonMachineId ?? null, $sourceEntryNonMachineId ?? null]),
             ];
         });
     }

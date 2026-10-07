@@ -196,7 +196,7 @@ class PartNameController extends Controller
 
         $columnRules = [
             'focus_grp' => 'nullable',
-            'areas' => 'required|string',
+            'areas' => 'nullable|string',
             'productline' => 'nullable',
             'devicename' => function ($id, $fields) use ($table) {
                 return Rule::unique($table, 'devicename')->ignore($id);

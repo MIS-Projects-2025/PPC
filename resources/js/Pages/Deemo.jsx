@@ -10,11 +10,13 @@ import DataIntegrityModal, {
 import DisseminationSummaryModal, {
     DISSEMINATION_MODAL_ID,
 } from "@/Components/LoadingPlan/DisseminationSummary";
+import DoableEditModal from "@/Components/LoadingPlan/DoableEditModal";
 import { DroppableRow } from "@/Components/LoadingPlan/DroppableRow";
 import EntryHistoryModal from "@/Components/LoadingPlan/EntryHistoryModal";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
 import { MachineHeaderBar, TableInteractionContext } from "@/Components/LoadingPlan/MachineHeaderBar";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
+import NonMachinesModal, { NON_MACHINES_MODAL_ID } from "@/Components/LoadingPlan/NonMachinesModal";
 import { OvenHeaderCell } from "@/Components/LoadingPlan/OvenHeaderCell";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import { SavingCursorBadge } from "@/Components/LoadingPlan/SavingCursorBadge";
@@ -31,6 +33,7 @@ import { useBucketOperations } from "@/Hooks/LoadingPlan/useBucketOperations";
 import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
 import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
 import { useDragReorder } from "@/Hooks/LoadingPlan/useDragReorder";
+import { isNonMachineKey, useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { useRowHoverInsert } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useSplitMergeOperations } from "@/Hooks/LoadingPlan/useSplitMergeOperations";
 import { useStickyGroupHeader } from "@/Hooks/LoadingPlan/useStickyGroupHeader";
@@ -41,6 +44,7 @@ import { useToast } from "@/Hooks/useToast";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { downloadExcelBuffer, exportLoadingPlanToExcel } from "@/Lib/LoadingPlan/loadingPlanExcelExporter";
 import { applyAffectedTimings, timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
+import { PartNameMultiInsertForm } from "@/Pages/PartNameMultiUpsert";
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
@@ -211,6 +215,21 @@ const READONLY_STRIP_KEYS = new Set(["select-row"]);
 // already inert in read-only mode because DndContext is mounted with
 // sensors={[]}, so no drag can ever be initiated; nothing needs removing.
 
+const doablePatch = (e) => ({
+    dndId: `entry-${e.entry_id}`,
+    fields: {
+        entry_id: e.entry_id,
+        lock_version: e.lock_version,
+        doable: e.doable,
+        doable_status: e.doable_status,
+        doable_overridden: e.doable_overridden,
+        doable_recipe_source: e.doable_recipe_source,
+        part_missing_from_list: e.part_missing_from_list,
+        capacity_uph: e.capacity_uph,
+        accu_time: e.accu_time,
+    },
+});
+
 function toReadOnlyColumns(columns) {
     return columns
         .filter((col) => !READONLY_STRIP_KEYS.has(col.key))
@@ -336,6 +355,7 @@ export default function Deemo({
     data,
     bakeLots,
     machines: serverMachines,
+    nonMachines: serverNonMachines,
     packageGroups,
     packageGroupNames,
     machineCapacity,
@@ -599,6 +619,26 @@ export default function Deemo({
             store: useLoadingPlanStore, dataRows, selectedRows, update, withUpdating, mutate, toast,
             date, selectedLocation, setIsDirty, clearSelection, setBucketList,
         });
+
+    const { nonMachineList, createNonMachine, renameNonMachine, deleteNonMachine } =
+        useNonMachineOperations({
+            store: useLoadingPlanStore, serverNonMachines, update, withUpdating, mutate, toast,
+            date, selectedLocation, setIsDirty,
+        });
+
+    const nonMachineKeys = useMemo(() => nonMachineList.map((n) => n.key), [nonMachineList]);
+    const nonMachineNameByKey = useMemo(
+        () => new Map(nonMachineList.map((n) => [n.key, n.name])),
+        [nonMachineList],
+    );
+
+    const nonMachineRowCounts = useMemo(() => {
+        const c = {};
+        dataRows.forEach((r) => {
+            if (isNonMachineKey(r.machine)) c[r.machine] = (c[r.machine] ?? 0) + 1;
+        });
+        return c;
+    }, [dataRows]);
 
     const clearBakeSelection = useCallback(() => setSelectedBakeRows(new Set()), []);
 
@@ -932,9 +972,15 @@ export default function Deemo({
         return map;
     }, [serverMachines]);
 
+    const onEditDoable = useCallback((row) => {
+        if (readOnly || writesLocked || isBlockRow(row)) return;
+        setDoableEditId(row.id);
+        document.getElementById("doable_edit_modal")?.showModal();
+    }, [readOnly, writesLocked]);
+
     const rawColumns = useMemo(
-        () => makeColumns(writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation),
-        [writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation],
+        () => makeColumns(writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly ? undefined : onEditDoable),
+        [writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly, onEditDoable],
     );
     const columns = useMemo(
         () => (readOnly ? toReadOnlyColumns(rawColumns) : rawColumns),
@@ -1066,8 +1112,9 @@ export default function Deemo({
     const machineTotalDoable = useMemo(() => {
         const result = {};
         dataRows.forEach((r) => {
-            if (!r.machine || !hasTimeline(r.machine)) return;
+            if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
             if (isBlockRow(r)) return;
+            if (r?.is_rework) return;
             result[r.machine] =
                 (result[r.machine] || 0) + (Number(r.doable) || 0);
         });
@@ -1077,7 +1124,7 @@ export default function Deemo({
     const machineTotalQuantity = useMemo(() => {
         const result = {};
         dataRows.forEach((r) => {
-            if (!r.machine || !hasTimeline(r.machine)) return;
+            if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
             if (isBlockRow(r)) return;
             result[r.machine] = (result[r.machine] || 0) + (Number(r.qty) || 0);
         });
@@ -1129,7 +1176,7 @@ export default function Deemo({
     const machineSectionDoable = useMemo(() => {
         const result = {};
         dataRows.forEach((r) => {
-            if (!r.machine || !hasTimeline(r.machine)) return;
+            if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
             if (isBlockRow(r) || isParked(r)) return;
             if (!rowInActiveTab(r)) return;
             result[r.machine] = (result[r.machine] || 0) + (Number(r.doable) || 0);
@@ -1256,9 +1303,10 @@ export default function Deemo({
         // ── Every other tab ──
         const visible = (r) => rowInActiveTab(r);
 
-        const machineSections = machines.flatMap((m) => {
+        const machineSections = [...machines, ...nonMachineKeys].flatMap((m) => {
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
+            const isNonMachine = isNonMachineKey(m);
             const canCollapse = !isUnassigned && !isManual;
             const showAll = canCollapse && expandedMachines.has(m);
             const showLoc = !canCollapse || expandedLocations.has(m);
@@ -1310,7 +1358,11 @@ export default function Deemo({
                 const kind = hiddenKind(r);
                 if (!kind) {
                     flushRun();
-                    shown.push({ ...r, __type: "data" });
+                    shown.push({
+                        ...r,
+                        __type: "data",
+                        ...(isNonMachine ? { machine_label: nonMachineNameByKey.get(m) } : {}),
+                    });
                 } else if (canCollapse) {
                     if (runKind && runKind !== kind) flushRun(); // package and location runs never merge
                     runKind = kind;
@@ -1322,7 +1374,7 @@ export default function Deemo({
             const dataShown = shown.filter((r) => r.__type === "data");
             const lotCount = dataShown.filter((r) => !isBlockRow(r)).length;
 
-            const parked = isUnassigned ? [] : bucketSections(m, showAll ? () => true : visible);
+            const parked = isUnassigned || isNonMachine ? [] : bucketSections(m, showAll ? () => true : visible);
             const parkedCount = parked.filter((r) => r.__type === "data").length;
 
             if (matchingLots === 0 && parkedCount === 0 && canCollapse) return [];
@@ -1333,9 +1385,11 @@ export default function Deemo({
                 id: `header-${m ?? "unassigned"}`,
                 __type: "header",
                 machine: m,
+                isNonMachine,
+                nonMachineId: isNonMachine ? Number(m.slice(3)) : undefined,
                 machineLocation: machinesByName[m]?.location,
                 machineId: machinesByName[m]?.id,
-                machineLabel: isUnassigned ? "Unassigned" : isManual ? "MANUAL" : m,
+                machineLabel: isUnassigned ? "Unassigned" : isManual ? "MANUAL" : isNonMachine ? (nonMachineNameByKey.get(m) ?? m) : m,
                 platform: machinePlatform.get(m),
                 __rowCount: dataShown.length,
                 __lotCount: lotCount,
@@ -1351,6 +1405,8 @@ export default function Deemo({
         // Top-level groups (Anticipate, Upcoming, ...) go below every machine.
         return [...machineSections, ...bucketSections(null, visible)];
     }, [
+        nonMachineKeys,
+        nonMachineNameByKey,
         isOtherLoc,
         rowInActiveTabOwn,
         activePackage,
@@ -1380,11 +1436,11 @@ export default function Deemo({
       try {
         const buffer = await exportLoadingPlanToExcel({
           dataRows,
-          machines,
+          machines: [...machines, ...nonMachineKeys],
           packageGroups: packageGroups,
           columns: DATA_COLUMNS,
           isBlockRow,
-          getMachineLabel: (m) => (m === null ? "Unassigned" : m === MACHINE_MANUAL ? "MANUAL" : m),
+          getMachineLabel: (m) => m === null ? "Unassigned" : m === MACHINE_MANUAL ? "MANUAL" : (nonMachineNameByKey.get(m) ?? m),
         });
         downloadExcelBuffer(buffer, `loading_plan_${new Date().toISOString().slice(0, 10)}.xlsx`);
       } finally {
@@ -1460,6 +1516,10 @@ export default function Deemo({
                 if (searchOpen) { closeSearch(); return; }
                 clearSelection();
             }
+            
+            const tag = e.target?.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA") return;
+            
             if (readOnly) return; // no undo/redo/select-all in read-only mode
             if (e.ctrlKey || e.metaKey) {
                 const k = e.key.toLowerCase();
@@ -1607,13 +1667,17 @@ export default function Deemo({
             otherLocationCounts,
             expandedLocations,
             onToggleExpandLocations: toggleExpandedLocation,
+            onRenameNonMachine: readOnly ? undefined : renameNonMachine,
+            onDeleteNonMachine: readOnly ? undefined : deleteNonMachine,
         }),
         [
             serverMachines,
             readOnly,
             expandedMachines,
             toggleExpandedMachine,
+            renameNonMachine,
             handleAddBucket,
+            deleteNonMachine,
             handleAutoSort,
             renameBucket,
             deleteBucket,
@@ -1656,6 +1720,7 @@ export default function Deemo({
             // handleRowSelect,
             writesLocked,
             isUpdating: writesLocked,
+            nonMachineNameByKey,
             // anchorIdRef,
         }),
         [
@@ -1663,12 +1728,97 @@ export default function Deemo({
             handleStatusClick,
             handleShowSplitHistory,
             handleShowMergeHistory,
+            nonMachineNameByKey,
             // handleCellClick,
             // selectedIds,
             // handleRowSelect,
             writesLocked,
         ],
     );
+
+    const [doableEditId, setDoableEditId] = useState(null);
+    const doableEditRow = useMemo(() => dataRows.find((r) => r.id === doableEditId) ?? null, [dataRows, doableEditId]);
+    const doableSameCount = useMemo(
+        () => doableEditRow
+            ? dataRows.filter((r) => !isBlockRow(r) && r.part_name === doableEditRow.part_name && (r.scheduled_date ?? date) === date).length
+            : 0,
+        [dataRows, doableEditRow, date],
+    );
+
+    const reportError = useCallback((err, fallback) => {
+        if (err?.status === 409) toast?.error?.("Someone else changed this lot. Refresh and try again.");
+        else toast?.error?.(err?.data?.message ?? err?.message ?? fallback);
+    }, [toast]);
+
+    const handleSaveOverride = useCallback((doable) => {
+        const row = doableEditRow;
+        return withUpdating(
+            mutate(route("loading-plan.entries.doable", { id: row.entry_id }), {
+                method: "PATCH",
+                body: { doable, lock_version: row.lock_version ?? null },
+            }),
+        )
+            .then((entry) => {
+                syncServerFields?.([doablePatch(entry)]);
+                applyAffectedTimings(update, entry.affected_timings, date);
+                setIsDirty(true);
+            })
+            .catch((err) => { reportError(err, "Couldn't save doable."); throw err; });
+    }, [doableEditRow, withUpdating, mutate, syncServerFields, update, date, setIsDirty, reportError]);
+
+    const applyRecalc = useCallback(({ entries, affected_timings }) => {
+        syncServerFields?.((entries ?? []).map(doablePatch));
+        applyAffectedTimings(update, affected_timings, date);
+        setIsDirty(true);
+    }, [syncServerFields, update, date, setIsDirty]);
+
+    const handleSaveRecipe = useCallback((partName, recipe) =>
+        withUpdating(mutate(route("loading-plan.part-recipe.update"), {
+            method: "PATCH",
+            body: { part_name: partName, recipe, scheduled_date: date },
+        }))
+            .then(applyRecalc)
+            .catch((err) => { reportError(err, "Couldn't save recipe."); throw err; }),
+    [withUpdating, mutate, date, applyRecalc, reportError]);
+
+    // ── missing part names ──
+    const [missingParts, setMissingParts] = useState(null);
+    const missingPartCount = useMemo(
+        () => new Set(dataRows.filter((r) => !isBlockRow(r) && r.doable_status === "no_recipe").map((r) => r.part_name)).size,
+        [dataRows],
+    );
+
+    const openMissingParts = useCallback(async (partName = null) => {
+        try {
+            const res = await fetch(
+                route("loading-plan.missing-parts", { date, ...(partName ? { part_name: partName } : {}) }),
+                { headers: { Accept: "application/json" } },
+            );
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const rows = await res.json();
+            if (!Array.isArray(rows) || rows.length === 0) {
+                toast?.info?.("No part records need filling in.");
+                return;
+            }
+            console.log("LOG ~ Deemo.jsx:1762 ~ Deemo ~ rows:", rows);
+            setMissingParts(rows);
+
+            document.getElementById("missing_parts_modal")?.showModal();
+        } catch (err) {
+            console.error("missing-parts failed:", err);
+            toast?.error?.("Couldn't load the part records.");
+        }
+    }, [date, toast]);
+
+    const handleMissingPartsSaved = useCallback(async (rows) => {
+        const names = rows.map((r) => r.devicename).filter(Boolean);
+        document.getElementById("missing_parts_modal")?.close();
+        setMissingParts(null);
+        if (names.length === 0) return;
+        await withUpdating(mutate(route("loading-plan.parts.recalculate"), {
+            body: { part_names: names, scheduled_date: date },
+        })).then(applyRecalc).catch((err) => reportError(err, "Saved, but couldn't recalculate doable. Refresh to see it."));
+    }, [withUpdating, mutate, date, applyRecalc, reportError]);
 
     return (
         <div
@@ -1809,6 +1959,15 @@ export default function Deemo({
                                 {!readOnly && (
                                     <button
                                         className="btn btn-sm"
+                                        onClick={() => document.getElementById(NON_MACHINES_MODAL_ID)?.showModal()}
+                                    >
+                                        Non-machines
+                                    </button>
+                                )}
+
+                                {!readOnly && (
+                                    <button
+                                        className="btn btn-sm"
                                         onClick={() => document.getElementById("scheduler_run_modal")?.showModal()}
                                         title="Run scheduler / view history"
                                     >
@@ -1843,6 +2002,12 @@ export default function Deemo({
                                             }
                                             tone="warning"
                                         />
+                                    </button>
+                                )}
+
+                                {!readOnly && missingPartCount > 0 && (
+                                    <button className="btn btn-sm btn-warning" onClick={() => openMissingParts()}>
+                                        Missing parts ({missingPartCount})
                                     </button>
                                 )}
                             </div>
@@ -2110,6 +2275,8 @@ export default function Deemo({
                                                     ) : (
                                                         <MachineHeaderBar
                                                             row={{
+                                                                isNonMachine: stickyMachine.isNonMachine,
+                                                                nonMachineId: stickyMachine.nonMachineId,
                                                                 machineLabel: stickyMachine?.machineLabel ?? null,
                                                                 machine: stickyMachine.machine,
                                                                 machineId: stickyMachine.machineId,
@@ -2164,6 +2331,7 @@ export default function Deemo({
                             machinePlatform={machinePlatform}
                             allData={dataRows}
                             machines={machines}
+                            nonMachines={nonMachineList}
                             disabled={writesLocked}
                             onTag={handleBulkTag}
                             onClearTag={handleBulkClearTag}
@@ -2229,6 +2397,28 @@ export default function Deemo({
                     <DisseminationSummaryModal summary={disseminationSummary} />
                 </TableInteractionContext.Provider>
             </TableActionsContext.Provider>
+
+            {!readOnly && (
+                <>
+                    <DoableEditModal
+                        row={doableEditRow}
+                        sameCount={doableSameCount}
+                        disabled={writesLocked}
+                        onSaveOverride={handleSaveOverride}
+                        onSaveRecipe={handleSaveRecipe}
+                        onOpenPartRecord={openMissingParts}
+                    />
+                    <dialog id="missing_parts_modal" className="modal">
+                        <div className="modal-box bg-base-300 w-11/12 max-w-6xl">
+                            {missingParts && (
+                                <PartNameMultiInsertForm parts={missingParts} onSaved={handleMissingPartsSaved} />
+                            )}
+                            <div className="modal-action"><form method="dialog"><button className="btn btn-ghost btn-sm">Close</button></form></div>
+                        </div>
+                        <form method="dialog" className="modal-backdrop"><button>close</button></form>
+                    </dialog>
+                </>
+            )}
 
             {/* ── Single-row status dropdown (portal-style, fixed) ── */}
             {!readOnly && statusMenu && (
@@ -2534,6 +2724,19 @@ export default function Deemo({
                         <button>close</button>
                     </form>
                 </dialog>
+            )}
+
+            {!readOnly && (
+                <NonMachinesModal
+                    nonMachines={nonMachineList}
+                    rowCounts={nonMachineRowCounts}
+                    location={selectedLocation}
+                    date={date}
+                    disabled={writesLocked}
+                    onCreate={createNonMachine}
+                    onRename={renameNonMachine}
+                    onDelete={deleteNonMachine}
+                />
             )}
 
            {/* ── Column visibility modal ──────────────────────────────────

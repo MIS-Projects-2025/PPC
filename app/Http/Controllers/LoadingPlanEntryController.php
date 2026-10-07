@@ -11,6 +11,11 @@ use App\Services\LoadingPlanEntryService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
+use App\Services\PackageLocation;
+use App\Models\PartName;
+use App\Models\CustomerDataWip;
+use App\Models\LotQuantity;
+use App\Models\FocusGroupFactory;
 
 class LoadingPlanEntryController extends Controller
 {
@@ -263,6 +268,103 @@ class LoadingPlanEntryController extends Controller
         }
     }
 
+    public function updateDoable(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'doable'       => 'present|nullable|integer|min:0',  // null clears the override
+            'lock_version' => 'nullable|integer',
+        ]);
+
+        try {
+            return response()->json($this->service->setCommitOverride($id, $data['doable'], $data['lock_version'] ?? null));
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
+    public function missingParts(Request $request): JsonResponse
+    {
+        $data = $request->validate(['date' => 'required|date', 'part_name' => 'nullable|string']);
+        $date = $data['date'];
+
+        $factoryMap = FocusGroupFactory::all()
+            ->mapWithKeys(fn($r) => [strtoupper(trim($r->focus_group)) => $r->factory]);
+
+        $names = LotQuantity::where('scheduled_date', $date)->where('rework_seq', 0)
+            ->whereNotNull('part_name')->where('part_name', '!=', '')
+            ->when(
+                $data['part_name'] ?? null,
+                fn($q, $p) => $q->where('part_name', $p),
+                fn($q) => $q->where('recipe_status', 'no_recipe'),
+            )
+            ->distinct()->pluck('part_name');
+
+        $existing = PartName::whereIn('devicename', $names)->get()
+            ->groupBy(fn($p) => strtolower($p->devicename))->map->first();
+
+        $wip = CustomerDataWip::forDate($date)->whereIn('Part_Name', $names)
+            ->get()->unique('Part_Name')->keyBy('Part_Name');
+
+        return response()->json($names->map(function ($n) use ($existing, $wip, $factoryMap) {
+            $p = $existing->get(strtolower($n));
+            $w = $wip->get($n);
+
+            $focusGroup = $p?->focus_grp ?: $w?->Focus_Group;
+
+            return [
+                'id'           => $p?->id,
+                'devicename'   => $n,
+                'focus_grp'    => $focusGroup,
+                'areas'        => $p?->areas
+                    ?: ($focusGroup ? $factoryMap->get(strtoupper(trim($focusGroup))) : null),
+                'productline'  => $p?->productline ?: (PackageLocation::for($w?->Package_Name) ?? 'PL1'),
+                'package_type' => $p?->package_type ?: $w?->Package_Name,
+                'lead_count'   => $p?->lead_count ?: $w?->Lead_Count,
+                'dimensions'   => $p?->dimensions ?: $w?->Body_Size,
+                'allocation'   => $p?->allocation ?: $w?->Ramp_Time,
+                'generic_name' => $p?->generic_name,
+                'drypack'      => $p?->drypack ?: 'N',
+                'recipe'       => $p?->recipe,
+            ];
+        })->values());
+    }
+
+    public function recalculateParts(Request $request): JsonResponse
+    {
+        $data = $request->validate(['part_names' => 'required|array|min:1', 'part_names.*' => 'string', 'scheduled_date' => 'required|date']);
+        try {
+            return response()->json($this->service->recalculateForParts($data['part_names'], $data['scheduled_date']));
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
+    public function updatePartRecipe(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'part_name'      => 'required|string',
+            'recipe'         => 'required|integer|min:1',
+            'scheduled_date' => 'required|date',
+        ]);
+
+        try {
+            return response()->json($this->service->updatePartRecipe(
+                $data['part_name'],
+                $data['recipe'],
+                $data['scheduled_date'],
+                null /* TODO auth()->user()?->name */
+            ));
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
     // ---- Field-only edits (optimistic locking) -------------------------
 
     public function updateField(Request $request, int $id): JsonResponse
@@ -291,10 +393,14 @@ class LoadingPlanEntryController extends Controller
 
             $payload = $entry->toArray();
 
-            if (array_intersect(['accu_time', 'qty'], array_keys($fields)) && $entry->machine_id !== null) {
+            if (
+                array_intersect(['accu_time', 'qty'], array_keys($fields))
+                && ($entry->machine_id !== null || $entry->non_machine_id !== null)
+            ) {
                 $payload['affected_timings'] = LoadingPlanEntryService::timingsFor(
                     [$entry->machine_id],
                     $entry->scheduled_date->toDateString(),
+                    [$entry->non_machine_id],
                 );
             }
 

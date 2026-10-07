@@ -490,6 +490,7 @@ class LoadingPlanService
             'devicename'  => $quantity->part_name,
             'recipe'      => $quantity->recipe_used,
             'packageType' => $quantity->packageListEntry?->package_type,
+            'allocation'  => $quantity->packageListEntry?->allocation,
         ] : null;
 
         $isBlocked = $entry?->entry_type === 'block';
@@ -507,7 +508,7 @@ class LoadingPlanService
             ? $resolvedMachine
             : ($entry?->finalized_at
                 ? $entry->machine_snapshot
-                : self::timed('getMachineName', fn() => $entry?->getMachineName()));
+                : self::timed('getMachineName', fn() => $entry?->getPlacementKey()));
 
         // self::tick('getMachineName', $t);
 
@@ -652,11 +653,14 @@ class LoadingPlanService
             'bucket_position'            => null,
 
             // Capacity & Recipe Metadata
-            'accu_time'                 => $accuTime,
-            'doable_recipe_source'      => $doableRecipeSource,
-            'qty'                       => $effectiveQty,
-            'doable'                    => $doable,
-            'doable_status'             => $doableStatus,
+            'accu_time'                  => $accuTime,
+            'doable_recipe_source'       => $doableRecipeSource,
+            'qty'                        => $effectiveQty,
+            'doable'                     => $doable,
+            'doable_status'              => $doableStatus,
+            'doable_overridden'          => $quantity?->commit_override !== null,
+            // package_list has no row  at all (computeMetrics sets recipe_source_id from the row's id)
+            'part_missing_from_list'     => $quantity !== null && $quantity->recipe_source_id === null && $quantity->recipe_status === 'no_recipe',
             'capacity_uph'               => $capacityUph,
 
             // Formula Calculated Metrics

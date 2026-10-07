@@ -25,6 +25,7 @@ use App\Helpers\ShiftDay;
 use App\Services\BakeLotService;
 use App\Services\LoadingPlanEntryService;
 use App\Services\LoadingPlanService;
+use App\Models\NonMachine;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\App;
 use Carbon\Carbon;
@@ -223,6 +224,17 @@ class LoadingPlanController extends Controller
                     'label'      => $b->label,
                     'sort_order' => $b->sort_order,
                     'machine'    => $b->machine_id ? ($machineNameById[$b->machine_id] ?? null) : null,
+                ])
+                ->values(),
+            'nonMachines' => NonMachine::where('location', $selectedLocation)
+                ->where('scheduled_date', $date)
+                ->orderBy('id')
+                ->get()
+                ->map(fn($n) => [
+                    'id'       => $n->id,
+                    'key'      => $n->key(),
+                    'name'     => $n->name,
+                    'location' => $n->location,
                 ])
                 ->values(),
         ] + $deferred;

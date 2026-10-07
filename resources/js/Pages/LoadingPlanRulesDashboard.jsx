@@ -1,817 +1,513 @@
 import { Head } from '@inertiajs/react';
 import axios from 'axios';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+// RuleForm.jsx = your existing RuleForm and everything it needs, moved out of this page.
+// See the notes: add `export default RuleForm;` and `export { RULE_TYPE_LABELS };`.
+import RuleForm, { RULE_TYPE_LABELS } from '@/Components/LoadingPlan/RuleForm';
+// import RuleForm, { RULE_TYPE_LABELS } from '@/Components/rules/RuleForm';
 
-// Tag colors are keyed on the exact `rule_type` strings the backend
-// returns (space-separated, matching RuleExplorerService / the
-// blade.php prototype) -- NOT the underscore-style keys used in the
-// older JSX reference. If your controller still emits underscore
-// keys, change these (and DELETE_ENDPOINTS below) to match.
-const TAG_CLASSES = {
-    'CAPABILITY': 'bg-[#e0f0ff] text-[#0056a3]',
-    'PART ROUTING': 'bg-[#fff0d9] text-[#a35c00]',
-    'TRANSITION COST': 'bg-[#e8e0ff] text-[#4a2f9e]',
-    'TRANSITION EXCEPTION': 'bg-[#ffe0e8] text-[#a3003e]',
-    'TRANSITION AXIS': 'bg-[#d9f0e8] text-[#007a55]',
-    'AUTO-PART RULE': 'bg-[#f0e0ff] text-[#6a00a3]',
-    'FOCUS GROUP RULE': 'bg-[#e0fff0] text-[#007a3e]',
-    'PART EXCLUSION': 'bg-[#ffe8e0] text-[#a33e00]',
-    'PACKAGE GROUP': 'bg-[#e0e8ff] text-[#304a9e]',
+const EMPTY_FILTERS = { machine: '', package: '', process: '', factory: '', leadcount: '', part: '' };
+
+const MATCH_BADGE = {
+    direct: ['Direct match', 'bg-green-100 text-green-800'],
+    group: ['Via package group', 'bg-blue-100 text-blue-800'],
+    wildcard: ['Wildcard: accepts any package', 'bg-amber-100 text-amber-800'],
+    'part rule': ['Part rule', 'bg-purple-100 text-purple-800'],
 };
 
-// 'state_select' fields render as a searchable text input (backed by a
-// <datalist>) until the field named in dependsOn (a machine_select on
-// the SAME form) is chosen -- then they're populated with that
-// machine's real states, labeled in plain English. The actual
-// setup_state_id only ever gets set when the typed text matches a
-// listed label exactly, so a raw ID can never be hand-typed in.
-// Fields with submit:false exist only to drive a dependent picker and
-// are excluded from the payload.
-const FIELD_DEFS = {
-    setup_state: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'factory', label: 'Factory', type: 'select', options: ['F1', 'F2', 'F3'], required: true },
-        { name: 'package_name', label: 'Package Name (blank = any)', type: 'text' },
-        { name: 'body_size', label: 'Body Size (blank = any)', type: 'text' },
-        { name: 'thickness', label: 'Thickness', type: 'number' },
-        { name: 'leadcount_min', label: 'Leadcount Min', type: 'number' },
-        { name: 'leadcount_max', label: 'Leadcount Max', type: 'number' },
-        { name: 'leadcount_exclude', label: 'Leadcount Exclude (csv)', type: 'text' },
-        { name: 'leadcount_include', label: 'Leadcount Include (csv)', type: 'text' },
-        { name: 'process_type', label: 'Process Type', type: 'select', options: ['taping', 'tubing', 'both', 'tray'], required: true },
-        { name: 'remarks', label: 'Remarks', type: 'text' },
-    ],
-    transition_rule: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'from_state_id', label: 'From State (blank = ANY current state)', type: 'state_select', dependsOn: 'machine_id', allowBlank: true },
-        { name: 'to_state_id', label: 'To State', type: 'state_select', dependsOn: 'machine_id', required: true },
-        { name: 'operation_type', label: 'Operation Type', type: 'select', options: ['none', 'conversion', 'setup'], required: true },
-        { name: 'est_duration_minutes', label: 'Duration (minutes)', type: 'number' },
-        { name: 'notes', label: 'Notes', type: 'text' },
-    ],
-    part_rule: [
-        { name: '_machine_filter', label: 'Machine (to find the state)', type: 'machine_select', submit: false },
-        { name: 'setup_state_id', label: 'Setup State', type: 'state_select', dependsOn: '_machine_filter', required: true },
-        { name: 'match_type', label: 'Match Type', type: 'select', options: ['exact', 'contains', 'suffix'], required: true },
-        { name: 'match_value', label: 'Part Name / Pattern', type: 'text', required: true },
-    ],
-    axis_rule: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'axis', label: 'Axis', type: 'select', options: ['factory', 'package_group', 'leadcount'], required: true },
-        { name: 'operation_type', label: 'Operation Type', type: 'select', options: ['setup', 'conversion'], required: true },
-        { name: 'est_duration_minutes', label: 'Duration (minutes)', type: 'number', required: true },
-        { name: 'combination_rule', label: 'Combination Rule', type: 'select', options: ['max', 'sum'], required: true },
-    ],
-    transition_exception: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'part_name', label: 'Part Name', type: 'text', required: true },
-        { name: 'from_state_id', label: 'From State (blank = ANY current state)', type: 'state_select', dependsOn: 'machine_id', allowBlank: true },
-        { name: 'to_state_id', label: 'To State', type: 'state_select', dependsOn: 'machine_id', required: true },
-        { name: 'operation_type', label: 'Operation Type', type: 'select', options: ['none', 'conversion', 'setup'], required: true },
-        { name: 'est_duration_minutes', label: 'Duration (minutes)', type: 'number' },
-        { name: 'notes', label: 'Notes', type: 'text' },
-    ],
-    auto_part_rule: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'package_name', label: 'Package Name (blank = any)', type: 'text' },
-        { name: 'rule_type', label: 'Rule Type', type: 'select', options: ['exclude', 'include_only'], required: true },
-        { name: 'notes', label: 'Notes', type: 'text' },
-    ],
-    focus_group_rule: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'focus_group', label: 'Focus Group', type: 'text', required: true },
-        { name: 'rule_type', label: 'Rule Type', type: 'select', options: ['exclude', 'include_only'], required: true },
-        { name: 'notes', label: 'Notes', type: 'text' },
-    ],
-    part_exclusion: [
-        { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'part_name', label: 'Part Name', type: 'text', required: true },
-        { name: 'notes', label: 'Notes', type: 'text' },
-    ],
-    package_group: [
-        { name: 'group_name', label: 'Group Name', type: 'text', required: true },
-        { name: 'package_name', label: 'Package Name', type: 'text', required: true },
-    ],
+const PROCESS_STYLE = {
+    taping: 'bg-sky-100 text-sky-800',
+    tubing: 'bg-emerald-100 text-emerald-800',
+    both: 'bg-indigo-100 text-indigo-800',
+    tray: 'bg-orange-100 text-orange-800',
 };
 
-const RULE_TYPE_LABELS = {
-    setup_state: 'Capability (machine_setup_states)',
-    transition_rule: 'Transition Cost (machine_transition_rules)',
-    part_rule: 'Part Routing (machine_capability_part_rules)',
-    axis_rule: 'Transition Axis (machine_transition_axis_rules)',
-    transition_exception: 'Transition Exception (per-part override)',
-    auto_part_rule: 'Auto-Part Rule',
-    focus_group_rule: 'Focus Group Rule',
-    part_exclusion: 'Part Exclusion',
-    package_group: 'Package Group Membership',
+const OP_STYLE = { none: 'text-gray-500', conversion: 'text-amber-700', setup: 'text-red-700' };
+
+const DELETE_URL = {
+    setup_state: (id) => `/rules/setup-states/${id}`,
+    part_rule: (id) => `/rules/part-rules/${id}`,
+    transition_rule: (id) => `/rules/transition-rules/${id}`,
+    transition_exception: (id) => `/rules/transition-exceptions/${id}`,
+    axis_rule: (id) => `/rules/axis-rules/${id}`,
+    auto_part_rule: (id) => `/rules/machine_auto_part_rules/${id}`,
+    focus_group_rule: (id) => `/rules/machine_focus_group_rules/${id}`,
+    part_exclusion: (id) => `/rules/machine_part_exclusions/${id}`,
 };
 
-const ENDPOINTS = {
-    setup_state: '/rules/setup-states',
-    transition_rule: '/rules/transition-rules',
-    part_rule: '/rules/part-rules',
-    axis_rule: '/rules/axis-rules',
-    transition_exception: '/rules/transition-exceptions',
-    auto_part_rule: '/rules/auto-part-rules',
-    focus_group_rule: '/rules/focus-group-rules',
-    part_exclusion: '/rules/part-exclusions',
-    package_group: '/rules/package-groups',
-};
+const MACHINE_ADD_OPTIONS = [
+    ['setup_state', 'Capability'],
+    ['transition_exception', 'Part-specific transition cost'],
+    ['axis_rule', 'Axis rule'],
+    ['auto_part_rule', 'Auto-part rule'],
+    ['focus_group_rule', 'Focus group rule'],
+    ['part_exclusion', 'Part exclusion'],
+];
 
-// Maps the rule_type string returned by the list query to the DELETE
-// endpoint for that row's actual underlying table. Package groups
-// have no delete endpoint here (same as the prototype), so no
-// Delete button renders for that row type.
-const DELETE_ENDPOINTS = {
-    'CAPABILITY': (id) => `/rules/setup-states/${id}`,
-    'PART ROUTING': (id) => `/rules/part-rules/${id}`,
-    'TRANSITION COST': (id) => `/rules/transition-rules/${id}`,
-    'TRANSITION EXCEPTION': (id) => `/rules/transition-exceptions/${id}`,
-    'TRANSITION AXIS': (id) => `/rules/axis-rules/${id}`,
-    'AUTO-PART RULE': (id) => `/rules/machine_auto_part_rules/${id}`,
-    'FOCUS GROUP RULE': (id) => `/rules/machine_focus_group_rules/${id}`,
-    'PART EXCLUSION': (id) => `/rules/machine_part_exclusions/${id}`,
-};
-
-// Builds the same plain-English label RuleExplorerService uses server
-// side (state_desc), just built client-side so the picker never shows
-// a bare numeric ID.
-function stateLabel(s) {
-    let lead = 'any';
-    if (s.leadcount_include) {
-        lead = `ONLY [${s.leadcount_include}]`;
-    } else if (s.leadcount_min || s.leadcount_max) {
-        lead = `${s.leadcount_min ?? 'any'}-${s.leadcount_max ?? 'any'}`;
-        if (s.leadcount_exclude) lead += ` except [${s.leadcount_exclude}]`;
-    }
-    const thickness = s.thickness ? ` (thickness ${s.thickness})` : '';
-    return `#${s.setup_state_id} — ${s.factory}, ${s.package_name ?? 'ANY pkg'}, ${s.body_size ?? 'any size'}${thickness}, leadcount ${lead}, ${s.process_type}`;
-}
-
-function fieldInputClasses(hasError) {
-    return `w-full rounded border px-3 py-2 text-sm ${hasError ? 'border-red-500' : 'border-gray-300'}`;
-}
-
-// Searchable state_select: a text input with a <datalist> for
-// autocomplete. The resolved setup_state_id only ever gets committed
-// when the typed text matches one of the listed labels exactly --
-// otherwise the value is cleared, so a rule can never be saved
-// against a state the user didn't actually pick from the list.
-function StateSelectField({ field, states, loading, disabled, value, onChange, error }) {
-    const [searchText, setSearchText] = useState('');
-    const optionMap = useMemo(() => {
-        const map = {};
-        (states ?? []).forEach((s) => {
-            map[stateLabel(s)] = s.setup_state_id;
-        });
-        return map;
-    }, [states]);
-
-    // Keep the visible search text in sync if the field gets reset
-    // (e.g. the driving machine_select changes) or a value is picked.
-    useEffect(() => {
-        if (!value) setSearchText('');
-    }, [value]);
-
-    const datalistId = `dl_${field.name}`;
-
+function Chip({ children, className = 'bg-gray-100 text-gray-700', title }) {
     return (
-        <>
-            <input
-                type="text"
-                list={datalistId}
-                disabled={disabled}
-                value={searchText || (value ? Object.keys(optionMap).find((k) => optionMap[k] === Number(value) || optionMap[k] === value) ?? '' : '')}
-                onChange={(e) => {
-                    const text = e.target.value;
-                    setSearchText(text);
-                    const match = optionMap[text];
-                    onChange(match ?? '');
-                }}
-                placeholder={
-                    disabled
-                        ? '-- select a machine first --'
-                        : loading
-                          ? 'Loading...'
-                          : field.allowBlank
-                            ? 'Type to search... (leave blank = any)'
-                            : 'Type to search...'
-                }
-                className={fieldInputClasses(!!error)}
-            />
-            <datalist id={datalistId}>
-                {(states ?? []).map((s) => (
-                    <option key={s.setup_state_id} value={stateLabel(s)} />
-                ))}
-            </datalist>
-            <div className="mt-1 text-[11px] text-gray-500">
-                Populates once a machine is chosen above. Pick from the suggestions -- typed text that doesn't match a listed state won't be accepted.
-            </div>
-            {error && <div className="mt-1 text-xs text-red-600">{error}</div>}
-        </>
+        <span title={title} className={`inline-block rounded px-1.5 py-0.5 text-xs ${className}`}>
+            {children}
+        </span>
     );
 }
 
-function validateFields(fields, values, searchTexts) {
-    const errors = {};
-    fields.forEach((f) => {
-        if (f.submit === false) return;
+const linkBtn = 'text-xs text-blue-600 underline hover:text-blue-800';
+const dangerBtn = 'text-xs text-red-600 hover:text-red-800';
 
-        if (f.type === 'state_select') {
-            const hasValue = values[f.name] !== '' && values[f.name] != null;
-            const typedSomething = (searchTexts[f.name] ?? '').trim() !== '';
-            if (!hasValue && f.required && !f.allowBlank) {
-                errors[f.name] = 'Required -- select a state from the suggestions.';
-            } else if (!hasValue && typedSomething) {
-                errors[f.name] = "Doesn't match a real state -- pick one from the suggestions.";
-            }
-            return;
-        }
-
-        if (f.required && (values[f.name] ?? '').toString().trim() === '') {
-            errors[f.name] = 'Required.';
-        }
-    });
-    return errors;
+// ---------------------------------------------------------------------
+// Health strip
+// ---------------------------------------------------------------------
+function HealthStrip({ health }) {
+    if (!health?.length) {
+        return (
+            <div className="mb-4 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+                No rule problems found.
+            </div>
+        );
+    }
+    return (
+        <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+            <div className="mb-1 font-semibold text-amber-900">Needs attention</div>
+            <div className="space-y-1">
+                {health.map((h) => (
+                    <details key={h.key}>
+                        <summary className="cursor-pointer text-amber-900">
+                            {h.label} <span className="font-semibold">({h.items.length})</span>
+                        </summary>
+                        <ul className="ml-5 mt-1 list-disc text-xs text-gray-700">
+                            {h.items.map((item, i) => (
+                                <li key={i}>{item}</li>
+                            ))}
+                        </ul>
+                    </details>
+                ))}
+            </div>
+        </div>
+    );
 }
 
-function RuleForm({ machines, type, initialValues, onClose, onSaved }) {
-    const fields = FIELD_DEFS[type];
-
-    const [values, setValues] = useState(() => {
-        const initial = {};
-        fields.forEach((f) => (initial[f.name] = initialValues?.[f.name] ?? ''));
-        return initial;
-    });
-
-    const [searchTexts, setSearchTexts] = useState({});
-    const [states, setStates] = useState({});
-    const [loadingStates, setLoadingStates] = useState({});
-    const [errors, setErrors] = useState({});
-    const [errorSummary, setErrorSummary] = useState(null);
-    const [warnings, setWarnings] = useState([]);
-    const [submitting, setSubmitting] = useState(false);
-
-    const updateValue = (name, value) => {
-        setValues((current) => ({ ...current, [name]: value }));
-        setErrors((current) => ({ ...current, [name]: undefined }));
-
-        // Reset dependent state selections when their driving
-        // machine_select changes.
-        fields
-            .filter((f) => f.type === 'state_select' && f.dependsOn === name)
-            .forEach((f) => {
-                setValues((current) => ({ ...current, [f.name]: '' }));
-                setSearchTexts((current) => ({ ...current, [f.name]: '' }));
-            });
-    };
-
-    useEffect(() => {
-        const stateFields = fields.filter((f) => f.type === 'state_select');
-
-        stateFields.forEach((field) => {
-            const machineId = values[field.dependsOn];
-            if (!machineId) {
-                setStates((current) => ({ ...current, [field.name]: [] }));
-                return;
-            }
-
-            let cancelled = false;
-            setLoadingStates((current) => ({ ...current, [field.name]: true }));
-
-            axios
-                .get('/rules/setup-states', { params: { machine_id: machineId } })
-                .then(({ data }) => {
-                    if (!cancelled) setStates((current) => ({ ...current, [field.name]: data }));
-                })
-                .catch((err) => !cancelled && console.error(err))
-                .finally(() => !cancelled && setLoadingStates((current) => ({ ...current, [field.name]: false })));
-
-            // eslint-disable-next-line no-loop-func
-            return () => {
-                cancelled = true;
-            };
-        });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [type, ...fields.filter((f) => f.type === 'state_select').map((f) => values[f.dependsOn])]);
-
-    const submit = async (e) => {
-        e.preventDefault();
-        setErrorSummary(null);
-        setWarnings([]);
-
-        const clientErrors = validateFields(fields, values, searchTexts);
-        if (Object.keys(clientErrors).length > 0) {
-            setErrors(clientErrors);
-            setErrorSummary('Fix the highlighted fields before saving.');
-            return;
-        }
-
-        const payload = {};
-        fields.forEach((f) => {
-            if (f.submit === false) return;
-            if (values[f.name] !== '') payload[f.name] = values[f.name];
-        });
-
-        setSubmitting(true);
-        try {
-            const { data } = await axios.post(ENDPOINTS[type], payload);
-            const responseWarnings = data.warnings ?? [];
-            if (responseWarnings.length) {
-                setWarnings(responseWarnings);
-                return;
-            }
-            onSaved(data);
-        } catch (err) {
-            if (err.response?.status === 422) {
-                const serverErrors = err.response.data.errors ?? {};
-                const flattened = {};
-                Object.entries(serverErrors).forEach(([key, msgs]) => {
-                    flattened[key] = Array.isArray(msgs) ? msgs.join(', ') : msgs;
-                });
-                setErrors(flattened);
-                setErrorSummary('The server rejected this rule -- see the highlighted fields.');
-            } else {
-                setErrorSummary('Something went wrong saving this rule. Please try again.');
-                console.error(err);
-            }
-        } finally {
-            setSubmitting(false);
-        }
-    };
+// ---------------------------------------------------------------------
+// Filter bar + context banner
+// ---------------------------------------------------------------------
+function FilterBar({ filters, setFilters, packageOptions, count, loading }) {
+    const set = (k) => (e) => setFilters((f) => ({ ...f, [k]: e.target.value }));
+    const input = 'rounded border border-gray-300 px-3 py-2 text-sm';
+    const active = Object.values(filters).some((v) => v !== '');
 
     return (
-        <form onSubmit={submit}>
-            <div className="space-y-3">
-                {fields.map((field) => {
-                    const error = errors[field.name];
-                    return (
-                        <div key={field.name}>
-                            <label className="mb-1 block text-xs font-semibold">
-                                {field.label}
-                                {field.required && <span className="text-red-500"> *</span>}
-                            </label>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+            <input value={filters.package} onChange={set('package')} list="pkg-options" placeholder="Package or package group" className={`${input} w-56`} />
+            <datalist id="pkg-options">
+                {(packageOptions?.options ?? []).map((p) => (
+                    <option key={p} value={p} />
+                ))}
+            </datalist>
 
-                            {field.type === 'select' && (
-                                <select
-                                    value={values[field.name]}
-                                    onChange={(e) => updateValue(field.name, e.target.value)}
-                                    className={fieldInputClasses(!!error)}
-                                >
-                                    <option value="">-- select --</option>
-                                    {field.options.map((o) => (
-                                        <option key={o} value={o}>{o}</option>
-                                    ))}
-                                </select>
-                            )}
+            <select value={filters.process} onChange={set('process')} className={input}>
+                <option value="">Tape + tube + tray</option>
+                <option value="taping">Taping</option>
+                <option value="tubing">Tubing</option>
+                <option value="tray">Tray</option>
+            </select>
 
-                            {field.type === 'machine_select' && (
-                                <select
-                                    value={values[field.name]}
-                                    onChange={(e) => updateValue(field.name, e.target.value)}
-                                    className={fieldInputClasses(!!error)}
-                                >
-                                    <option value="">-- select machine --</option>
-                                    {machines.map((m) => (
-                                        <option key={m.id} value={m.id}>{m.machine_num}</option>
-                                    ))}
-                                </select>
-                            )}
+            <select value={filters.factory} onChange={set('factory')} className={input}>
+                <option value="">All factories</option>
+                <option value="F1">F1</option>
+                <option value="F2">F2</option>
+                <option value="F3">F3</option>
+            </select>
 
-                            {field.type === 'state_select' && (
-                                <StateSelectField
-                                    field={field}
-                                    states={states[field.name]}
-                                    loading={!!loadingStates[field.name]}
-                                    disabled={!values[field.dependsOn]}
-                                    value={values[field.name]}
-                                    error={error}
-                                    onChange={(val) => updateValue(field.name, val)}
-                                />
-                            )}
+            <input value={filters.leadcount} onChange={set('leadcount')} type="number" placeholder="Leadcount" className={`${input} w-28`} />
+            <input value={filters.part} onChange={set('part')} placeholder="Part name" className={`${input} w-44`} />
+            <input value={filters.machine} onChange={set('machine')} placeholder="Machine" className={`${input} w-36`} />
 
-                            {['text', 'number'].includes(field.type) && (
-                                <input
-                                    type={field.type}
-                                    value={values[field.name]}
-                                    onChange={(e) => updateValue(field.name, e.target.value)}
-                                    className={fieldInputClasses(!!error)}
-                                />
-                            )}
+            {active && (
+                <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className={linkBtn}>
+                    Clear filters
+                </button>
+            )}
+            <span className="text-sm text-gray-500">{loading ? 'Loading…' : `${count} machine${count === 1 ? '' : 's'}`}</span>
+        </div>
+    );
+}
 
-                            {field.type !== 'state_select' && error && (
-                                <div className="mt-1 text-xs text-red-600">{error}</div>
-                            )}
-                        </div>
-                    );
-                })}
+function ContextBanner({ context }) {
+    if (!context) return null;
+    const notes = [];
+
+    if (context.package) {
+        notes.push(
+            <div key="pkg">
+                Showing capabilities that can take <strong>{context.package}</strong>.{' '}
+                {context.groups.length > 0 ? (
+                    <>
+                        It belongs to{' '}
+                        {context.groups.map((g, i) => (
+                            <span key={g.group_name}>
+                                {i > 0 && ', '}
+                                group <strong>{g.group_name}</strong> ({g.members.join(', ')})
+                            </span>
+                        ))}
+                        . Capabilities set up for any member are marked <em>Via package group</em>.
+                    </>
+                ) : (
+                    'It is not in any package group, so only direct matches and wildcards appear.'
+                )}
+            </div>
+        );
+    }
+    if (context.part) {
+        notes.push(
+            <div key="part">
+                {context.part_override
+                    ? `Part "${context.part}" has part rules: only the capabilities those rules name are shown. Package, body size and leadcount are ignored (factory still applies).`
+                    : `Part "${context.part}" has no part rule, so it is matched by structure like any other part.`}
+            </div>
+        );
+    }
+    if (context.excluded_machines?.length > 0) {
+        notes.push(<div key="ex">Excluded for this part: {context.excluded_machines.join(', ')}.</div>);
+    }
+    if (!notes.length) return null;
+
+    return <div className="mb-4 space-y-1 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">{notes}</div>;
+}
+
+// ---------------------------------------------------------------------
+// Capability row
+// ---------------------------------------------------------------------
+function StateRow({ s, open, onToggle, api }) {
+    const wildcard = s.package_name == null && s.body_size == null;
+    const badge = MATCH_BADGE[s.match];
+
+    return (
+        <div className={`rounded border bg-white ${wildcard ? 'border-amber-300' : 'border-gray-200'}`}>
+            <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+                <button type="button" onClick={onToggle} className="w-4 text-xs text-gray-500" aria-label="Toggle details">
+                    {open ? '▼' : '▶'}
+                </button>
+                <Chip className="bg-gray-800 text-white">{s.factory}</Chip>
+                {s.package_name ? (
+                    <Chip className="bg-blue-50 font-medium text-blue-900">{s.package_name}</Chip>
+                ) : (
+                    <Chip className="bg-amber-100 text-amber-800" title="No package set: accepts any package">ANY package</Chip>
+                )}
+                <Chip>{s.body_size ?? 'any size'}</Chip>
+                {s.thickness != null && <Chip>thickness {s.thickness}</Chip>}
+                <Chip>leadcount {s.leadcount_text}</Chip>
+                <Chip className={PROCESS_STYLE[s.process_type] ?? undefined}>{s.process_type}</Chip>
+                {badge && <Chip className={badge[1]}>{badge[0]}</Chip>}
+
+                <span className="ml-auto flex items-center gap-3 text-xs text-gray-500">
+                    <span>
+                        {s.part_rules.length} part rule{s.part_rules.length === 1 ? '' : 's'}, {s.transitions_in.length} cost{s.transitions_in.length === 1 ? '' : 's'}
+                    </span>
+                    <button type="button" className={linkBtn} onClick={() => api.openForm('setup_state', s.raw, s.id)}>Edit</button>
+                    <button
+                        type="button"
+                        className={dangerBtn}
+                        onClick={() =>
+                            api.remove(
+                                'setup_state',
+                                s.id,
+                                `Delete this capability?\n\nThis also deletes ${s.part_rules.length} part rule(s), ${s.transitions_in.length} transition rule(s) into it and ${s.exceptions_in.length} exception(s).`
+                            )
+                        }
+                    >
+                        Delete
+                    </button>
+                </span>
             </div>
 
-            {errorSummary && (
-                <div className="mt-4 rounded border border-red-500 bg-red-50 px-3 py-2 text-xs text-red-700">
-                    {errorSummary}
+            {open && (
+                <div className="space-y-4 border-t border-gray-100 bg-gray-50 px-3 py-3 text-sm">
+                    {s.remarks && <div className="text-xs text-gray-600">Remarks: {s.remarks}</div>}
+
+                    <div>
+                        <div className="mb-1 text-xs font-semibold text-gray-700">
+                            Part routing{' '}
+                            <span className="font-normal text-gray-500">(a part named here runs only on the capabilities its rules name)</span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {s.part_rules.map((r) => (
+                                <span key={r.rule_id} className="inline-flex items-center gap-1 rounded bg-purple-100 px-2 py-0.5 text-xs text-purple-900">
+                                    {r.match_value}
+                                    <em className="text-[10px] opacity-70">{r.match_type}</em>
+                                    <button type="button" onClick={() => api.remove('part_rule', r.rule_id)} aria-label="Remove part rule">×</button>
+                                </span>
+                            ))}
+                            <button type="button" className={linkBtn} onClick={() => api.openForm('part_rule', { _machine_filter: s.machine_id, setup_state_id: s.id })}>
+                                + part
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div className="mb-1 text-xs font-semibold text-gray-700">Cost to change over into this capability</div>
+                        {s.transitions_in.length === 0 ? (
+                            <div className="text-xs italic text-gray-500">No transition rule into this capability yet.</div>
+                        ) : (
+                            <table className="w-full text-xs">
+                                <thead>
+                                    <tr className="text-left text-gray-500">
+                                        <th className="py-1 pr-2 font-medium">From</th>
+                                        <th className="py-1 pr-2 font-medium">Operation</th>
+                                        <th className="py-1 pr-2 font-medium">Minutes</th>
+                                        <th className="py-1 pr-2 font-medium">Notes</th>
+                                        <th />
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {s.transitions_in.map((t) => (
+                                        <tr key={t.rule_id} className="border-t border-gray-200">
+                                            <td className="py-1 pr-2">{t.from_label}</td>
+                                            <td className={`py-1 pr-2 font-medium ${OP_STYLE[t.operation_type]}`}>{t.operation_type}</td>
+                                            <td className="py-1 pr-2">{t.est_duration_minutes ?? '-'}</td>
+                                            <td className="py-1 pr-2 text-gray-500">{t.notes}</td>
+                                            <td className="space-x-2 py-1 text-right">
+                                                <button type="button" className={linkBtn} onClick={() => api.openForm('transition_rule', t, t.rule_id)}>Edit</button>
+                                                <button type="button" className={dangerBtn} onClick={() => api.remove('transition_rule', t.rule_id)}>Delete</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                        <button type="button" className={`${linkBtn} mt-1`} onClick={() => api.openForm('transition_rule', { machine_id: s.machine_id, to_state_id: s.id })}>
+                            + cost into this capability
+                        </button>
+                    </div>
+
+                    {s.exceptions_in.length > 0 && (
+                        <div>
+                            <div className="mb-1 text-xs font-semibold text-gray-700">Part-specific overrides</div>
+                            <ul className="space-y-1 text-xs">
+                                {s.exceptions_in.map((e) => (
+                                    <li key={e.id} className="flex items-center gap-2">
+                                        <Chip className="bg-rose-100 text-rose-800">{e.part_name}</Chip>
+                                        <span>from {e.from_label}:</span>
+                                        <span className={`font-medium ${OP_STYLE[e.operation_type]}`}>{e.operation_type}</span>
+                                        <span>{e.est_duration_minutes != null ? `${e.est_duration_minutes} min` : ''}</span>
+                                        <button type="button" className={`${dangerBtn} ml-auto`} onClick={() => api.remove('transition_exception', e.id)}>Delete</button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
             )}
+        </div>
+    );
+}
 
-            {warnings.length > 0 && (
-                <div className="mt-4 space-y-2">
-                    {warnings.map((w, i) => (
-                        <div key={i} className="rounded border border-yellow-400 bg-yellow-50 px-3 py-2 text-xs">
-                            ⚠️ {w}
-                        </div>
+// ---------------------------------------------------------------------
+// Machine card
+// ---------------------------------------------------------------------
+function MachineLevelRules({ m, api }) {
+    const rows = [
+        ...m.axis_rules.map((a) => ({ kind: 'axis_rule', id: a.id, tag: 'Axis', text: `Changing ${a.axis} costs ${a.operation_type}, about ${a.est_duration_minutes} min (combined by ${a.combination_rule})` })),
+        ...m.auto_part_rules.map((r) => ({ kind: 'auto_part_rule', id: r.id, tag: 'Auto-part', text: `Auto lots of ${r.package_name ?? 'ANY package'}: ${r.rule_type}${r.notes ? ` (${r.notes})` : ''}` })),
+        ...m.focus_group_rules.map((r) => ({ kind: 'focus_group_rule', id: r.id, tag: 'Focus group', text: `Focus group "${r.focus_group}": ${r.rule_type}${r.notes ? ` (${r.notes})` : ''}` })),
+        ...m.part_exclusions.map((e) => ({ kind: 'part_exclusion', id: e.id, tag: 'Exclusion', text: `Part "${e.part_name}" is excluded from this machine${e.notes ? ` (${e.notes})` : ''}` })),
+    ];
+    if (!rows.length) return null;
+
+    return (
+        <details className="mt-3 text-sm">
+            <summary className="cursor-pointer text-xs font-semibold text-gray-700">Machine-level rules ({rows.length})</summary>
+            <ul className="mt-1 space-y-1">
+                {rows.map((r) => (
+                    <li key={`${r.kind}-${r.id}`} className="flex items-center gap-2 text-xs">
+                        <Chip>{r.tag}</Chip>
+                        <span>{r.text}</span>
+                        <button type="button" className={`${dangerBtn} ml-auto`} onClick={() => api.remove(r.kind, r.id)}>Delete</button>
+                    </li>
+                ))}
+            </ul>
+        </details>
+    );
+}
+
+function MachineCard({ m, expanded, toggle, api }) {
+    return (
+        <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <header className="mb-3 flex items-center gap-3">
+                <h2 className="text-base font-semibold">{m.machine_num}</h2>
+                {m.factory && <Chip className="bg-gray-100 text-gray-700">{m.factory}</Chip>}
+                <span className="text-xs text-gray-500">
+                    {m.states.length} capabilit{m.states.length === 1 ? 'y' : 'ies'}
+                </span>
+                <select
+                    value=""
+                    onChange={(e) => e.target.value && api.openForm(e.target.value, { machine_id: m.id })}
+                    className="ml-auto rounded border border-gray-300 px-2 py-1 text-xs"
+                >
+                    <option value="">+ Add…</option>
+                    {MACHINE_ADD_OPTIONS.map(([v, label]) => (
+                        <option key={v} value={v}>{label}</option>
+                    ))}
+                </select>
+            </header>
+
+            {m.states.length === 0 ? (
+                <div className="rounded border border-dashed border-gray-300 px-3 py-4 text-center text-sm text-gray-500">
+                    No capabilities defined for this machine.{' '}
+                    <button type="button" className={linkBtn} onClick={() => api.openForm('setup_state', { machine_id: m.id })}>Add the first one</button>
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {m.states.map((s) => (
+                        <StateRow key={s.id} s={s} open={!!expanded[s.id]} onToggle={() => toggle(s.id)} api={api} />
                     ))}
                 </div>
             )}
 
-            <div className="mt-6 flex justify-end gap-2">
-                <button type="button" onClick={onClose} className="rounded border border-gray-300 px-3 py-2 text-sm">
-                    Cancel
-                </button>
-                <button
-                    type="submit"
-                    disabled={submitting}
-                    className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                    {submitting ? 'Saving…' : 'Save'}
-                </button>
-            </div>
-        </form>
+            <MachineLevelRules m={m} api={api} />
+        </section>
     );
 }
 
-export default function Index({ rules: initialRules = [], machines: initialMachines = [] }) {
-    const [machineFilter, setMachineFilter] = useState('');
-    const [typeFilter, setTypeFilter] = useState('');
-    const [rules, setRules] = useState(initialRules);
-    const [machines, setMachines] = useState(initialMachines);
+// ---------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------
+export default function Index({ machines = [], packageOptions = { options: [] } }) {
+    const [filters, setFilters] = useState(EMPTY_FILTERS);
+    const [data, setData] = useState({ context: null, health: [], machines: [] });
+
     const [loading, setLoading] = useState(false);
-    const [deletingId, setDeletingId] = useState(null);
-    const [collapsed, setCollapsed] = useState({});
-
-    const [modalOpen, setModalOpen] = useState(false);
-    const [ruleType, setRuleType] = useState('setup_state');
-    const [prefill, setPrefill] = useState(null);      // seeds the next RuleForm
-    const [chainPrompt, setChainPrompt] = useState(null); // { machineId, stateId, label }
-
-    const machineIdByNum = useMemo(
-        () => Object.fromEntries(machines.map((m) => [m.machine_num, m.id])),
-        [machines]
-    );
-
-    // Grouped view: capabilities with their linked costs/part rules nested underneath.
-    const { groups, loose } = useMemo(() => {
-        const capabilities = rules.filter((r) => r.rule_type === 'CAPABILITY');
-        const capIds = new Set(capabilities.map((r) => Number(r.rule_id)));
-        const groups = capabilities.map((cap) => ({
-            capability: cap,
-            related: rules.filter(
-                (r) => r.rule_type !== 'CAPABILITY' && r.state_id != null && Number(r.state_id) === Number(cap.rule_id)
-            ),
-        }));
-        const loose = rules.filter(
-            (r) => r.rule_type !== 'CAPABILITY' && !(r.state_id != null && capIds.has(Number(r.state_id)))
-        );
-        return { groups, loose };
-    }, [rules]);
-
-    const types = useMemo(() => [...new Set(rules.map((r) => r.rule_type))].sort(), [rules]);
-    const filtered = useMemo(
-        () => (typeFilter ? rules.filter((r) => r.rule_type === typeFilter) : rules),
-        [rules, typeFilter]
-    );
-
-    const toggleCollapsed = (id) => setCollapsed((c) => ({ ...c, [id]: !c[id] }));
-
-    const openModal = () => {
-        setRuleType('setup_state');
-        setPrefill(null);
-        setChainPrompt(null);
-        setModalOpen(true);
-    };
-
-    const quickAdd = (cap, nextType) => {
-        const machineId = machineIdByNum[cap.machine_num];
-        setPrefill(
-            nextType === 'transition_rule'
-                ? { machine_id: machineId, to_state_id: cap.rule_id }
-                : { _machine_filter: machineId, setup_state_id: cap.rule_id }
-        );
-        setRuleType(nextType);
-        setChainPrompt(null);
-        setModalOpen(true);
-    };
-
-    const handleSaved = (type, response) => {
-        if (type === 'setup_state') {
-            const state = response.state;
-            const machine = machines.find((m) => m.id === state.machine_id);
-            setChainPrompt({
-                machineId: state.machine_id,
-                stateId: state.setup_state_id,
-                label: `${machine?.machine_num ?? state.machine_id} — ${state.package_name ?? 'ANY pkg'} / ${state.body_size ?? 'any size'}`,
-            });
-            loadRules();
-            return;
-        }
-        setModalOpen(false);
-        setChainPrompt(null);
-        setPrefill(null);
-        loadRules();
-    };
-
-    const startChained = (nextType) => {
-        if (!chainPrompt) return;
-        setPrefill(
-            nextType === 'transition_rule'
-                ? { machine_id: chainPrompt.machineId, to_state_id: chainPrompt.stateId }
-                : { _machine_filter: chainPrompt.machineId, setup_state_id: chainPrompt.stateId }
-        );
-        setRuleType(nextType);
-        setChainPrompt(null);
-    };
-
-    const finishChain = () => {
-        setModalOpen(false);
-        setChainPrompt(null);
-        setPrefill(null);
-        loadRules();
-    };
-
-    const loadRules = () => {
+    const [expanded, setExpanded] = useState({});
+    const [drawer, setDrawer] = useState(null); // { type, initialValues, editId, chain, nonce }
+    
+    console.log(data);
+    window.myData = data;
+    
+    const reload = () => {
         setLoading(true);
-        const params = machineFilter ? { machine: machineFilter } : {};
+        const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''));
         return axios
-            .get('/rules/data', { params })
-            .then(({ data }) => setRules(data))
+            .get('/rules/view', { params })
+            .then(({ data }) => setData(data))
             .catch((err) => console.error(err))
             .finally(() => setLoading(false));
     };
 
     useEffect(() => {
-        axios.get('/rules/machines').then(({ data }) => setMachines(data)).catch((err) => console.error(err));
+        const t = setTimeout(reload, 300);
+        return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [filters]);
 
-    useEffect(() => {
-        const timer = setTimeout(loadRules, 300);
-        return () => clearTimeout(timer);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [machineFilter]);
+    const toggle = (id) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
 
-    const handleDelete = async (rule) => {
-        const endpoint = DELETE_ENDPOINTS[rule.rule_type];
-        if (!endpoint) {
-            alert(`No delete endpoint mapped for type "${rule.rule_type}"`);
+    const openForm = (type, initialValues = null, editId = null) =>
+        setDrawer({ type, initialValues, editId, chain: null, nonce: Date.now() });
+
+    const closeDrawer = () => {
+        setDrawer(null);
+        reload();
+    };
+
+    const onSaved = (response) => {
+        if (drawer.type === 'setup_state' && !drawer.editId) {
+            const s = response.state;
+            setDrawer({ ...drawer, chain: { machineId: s.machine_id, stateId: s.setup_state_id } });
+            reload();
             return;
         }
+        closeDrawer();
+    };
 
-        const extraWarning =
-            rule.rule_type === 'CAPABILITY'
-                ? '\n\nThis is a CAPABILITY row -- deleting it also cascades to any transition rules and part rules that reference it.'
-                : '';
-        if (!confirm(`Delete this rule?${extraWarning}`)) return;
+    const startChained = (type) => {
+        const c = drawer.chain;
+        setDrawer({
+            type,
+            editId: null,
+            chain: null,
+            nonce: Date.now(),
+            initialValues:
+                type === 'transition_rule'
+                    ? { machine_id: c.machineId, to_state_id: c.stateId }
+                    : { _machine_filter: c.machineId, setup_state_id: c.stateId },
+        });
+    };
 
-        setDeletingId(rule.rule_id);
+    const remove = async (kind, id, message = 'Delete this rule?') => {
+        if (!confirm(message)) return;
         try {
-            await axios.delete(endpoint(rule.rule_id));
-            await loadRules();
+            await axios.delete(DELETE_URL[kind](id));
+            await reload();
         } catch (err) {
             console.error(err);
             alert('Failed to delete this rule.');
-        } finally {
-            setDeletingId(null);
         }
     };
 
+    const api = { openForm, remove };
+
     return (
         <>
-            <Head title="Scheduling Rules Explorer" />
+            <Head title="Scheduling Rules" />
 
-            <div className="m-8 font-sans">
-                <h1 className="mb-4 text-xl font-semibold">Scheduling Rules Explorer</h1>
-
+            <div className="mx-auto max-w-6xl p-8 font-sans">
                 <div className="mb-4 flex items-center gap-4">
-                    <input
-                        type="text"
-                        value={machineFilter}
-                        onChange={(e) => setMachineFilter(e.target.value)}
-                        placeholder="Filter by machine number..."
-                        className="rounded border border-gray-300 px-3 py-2 text-sm"
-                    />
-
-                    <select
-                        value={typeFilter}
-                        onChange={(e) => setTypeFilter(e.target.value)}
-                        className="rounded border border-gray-300 px-3 py-2 text-sm"
-                    >
-                        <option value="">All rule types</option>
-                        {types.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                        ))}
-                    </select>
-
-                    {/* <button
-                        type="button"
-                        onClick={openModal}
-                        className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-                    >
-                        + Add Rule
-                    </button> */}
-
-                    <span className="text-sm text-gray-500">{loading ? 'Loading…' : `${filtered.length} rules`}</span>
+                    <h1 className="text-xl font-semibold">Scheduling Rules</h1>
+                    <button type="button" onClick={() => openForm('package_group')} className="ml-auto rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50">
+                        + Package group
+                    </button>
                 </div>
 
-                <div className="overflow-x-auto rounded border border-gray-200">
-                    <table className="w-full border-collapse bg-white">
-                        <thead>
-                            <tr>
-                                <th className="sticky top-0 w-[170px] bg-gray-100 px-3 py-2 text-left text-sm font-semibold">Type</th>
-                                <th className="sticky top-0 w-[110px] bg-gray-100 px-3 py-2 text-left text-sm font-semibold">Machine</th>
-                                <th className="sticky top-0 bg-gray-100 px-3 py-2 text-left text-sm font-semibold">Rule</th>
-                                <th className="sticky top-0 w-[70px] bg-gray-100 px-3 py-2 text-left text-sm font-semibold" />
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {typeFilter === '' ? (
-                                groups.length === 0 && loose.length === 0 ? (
-                                    <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">No rules found.</td></tr>
-                                ) : (
-                                    <>
-                                        {groups.map(({ capability: cap, related }) => (
-                                            <Fragment key={`cap-${cap.rule_id}`}>
-                                                <tr className="border-b border-gray-100 bg-blue-50/40">
-                                                    <td className="px-3 py-2 text-sm">
-                                                        <button type="button" onClick={() => toggleCollapsed(cap.rule_id)} className="mr-1 text-xs text-gray-500">
-                                                            {collapsed[cap.rule_id] ? '▶' : '▼'}
-                                                        </button>
-                                                        <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${TAG_CLASSES.CAPABILITY}`}>CAPABILITY</span>
-                                                    </td>
-                                                    <td className="px-3 py-2 text-sm">{cap.machine_num}</td>
-                                                    <td className="px-3 py-2 text-sm">{cap.rule_in_plain_english}</td>
-                                                    <td className="px-3 py-2 text-sm">
-                                                        <button type="button" onClick={() => handleDelete(cap)} disabled={deletingId === cap.rule_id}
-                                                            className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50">
-                                                            {deletingId === cap.rule_id ? '…' : 'Delete'}
-                                                        </button>
-                                                    </td>
-                                                </tr>
+                <HealthStrip health={data.health} />
+                <FilterBar filters={filters} setFilters={setFilters} packageOptions={packageOptions} count={data.machines.length} loading={loading} />
+                <ContextBanner context={data.context} />
 
-                                                {!collapsed[cap.rule_id] && (
-                                                    related.length === 0 ? (
-                                                        <tr className="border-b border-gray-100">
-                                                            <td />
-                                                            <td colSpan={3} className="px-3 py-2 text-xs italic text-gray-400">
-                                                                No transition costs or part-name rules linked to this state yet —{' '}
-                                                                <button type="button" onClick={() => quickAdd(cap, 'transition_rule')} className="text-blue-600 underline">add a cost</button>
-                                                                {' or '}
-                                                                <button type="button" onClick={() => quickAdd(cap, 'part_rule')} className="text-blue-600 underline">restrict a part</button>.
-                                                            </td>
-                                                        </tr>
-                                                    ) : (
-                                                        related.map((rule) => (
-                                                            <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100">
-                                                                <td className="px-3 py-2 pl-8 text-sm">
-                                                                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'}`}>
-                                                                        {rule.rule_type}
-                                                                    </span>
-                                                                </td>
-                                                                <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
-                                                                <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
-                                                                <td className="px-3 py-2 text-sm">
-                                                                    {DELETE_ENDPOINTS[rule.rule_type] && (
-                                                                        <button type="button" onClick={() => handleDelete(rule)} disabled={deletingId === rule.rule_id}
-                                                                            className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50">
-                                                                            {deletingId === rule.rule_id ? '…' : 'Delete'}
-                                                                        </button>
-                                                                    )}
-                                                                </td>
-                                                            </tr>
-                                                        ))
-                                                    )
-                                                )}
-                                            </Fragment>
-                                        ))}
-
-                                        {loose.length > 0 && (
-                                            <tr>
-                                                <td colSpan={4} className="bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-500">
-                                                    Machine-level rules (not tied to a specific capability state)
-                                                </td>
-                                            </tr>
-                                        )}
-                                        {loose.map((rule) => (
-                                            <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100">
-                                                <td className="px-3 py-2 text-sm">
-                                                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'}`}>
-                                                        {rule.rule_type}
-                                                    </span>
-                                                </td>
-                                                <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
-                                                <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
-                                                <td className="px-3 py-2 text-sm">
-                                                    {DELETE_ENDPOINTS[rule.rule_type] && (
-                                                        <button type="button" onClick={() => handleDelete(rule)} disabled={deletingId === rule.rule_id}
-                                                            className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50">
-                                                            {deletingId === rule.rule_id ? '…' : 'Delete'}
-                                                        </button>
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </>
-                                )
-                            ) : (
-                                // unchanged flat/filtered rendering from the original file
-                                filtered.length === 0 ? (
-                                    <tr><td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">No rules found.</td></tr>
-                                ) : (
-                                    filtered.map((rule) => (
-                                        <tr key={`${rule.rule_type}-${rule.rule_id}`} className="border-b border-gray-100 last:border-0">
-                                            <td className="px-3 py-2 text-sm">
-                                                <span
-                                                    className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${
-                                                        TAG_CLASSES[rule.rule_type] ?? 'bg-gray-100 text-gray-700'
-                                                    }`}
-                                                >
-                                                    {rule.rule_type}
-                                                </span>
-                                            </td>
-                                            <td className="px-3 py-2 text-sm">{rule.machine_num ?? '-'}</td>
-                                            <td className="px-3 py-2 text-sm">{rule.rule_in_plain_english}</td>
-                                            <td className="px-3 py-2 text-sm">
-                                                {DELETE_ENDPOINTS[rule.rule_type] && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleDelete(rule)}
-                                                        disabled={deletingId === rule.rule_id}
-                                                        className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
-                                                    >
-                                                        {deletingId === rule.rule_id ? '…' : 'Delete'}
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))
-                                )
-                            )}
-                        </tbody>
-                    </table>
+                <div className="space-y-4">
+                    {data.machines.length === 0 && !loading && (
+                        <div className="rounded border border-dashed border-gray-300 px-3 py-10 text-center text-sm text-gray-500">
+                            No machine matches these filters. Clear a filter, or add a capability to a machine to make it eligible.
+                        </div>
+                    )}
+                    {data.machines.map((m) => (
+                        <MachineCard key={m.id} m={m} expanded={expanded} toggle={toggle} api={api} />
+                    ))}
                 </div>
             </div>
 
-            {modalOpen && (
-                <div>
-                    <div className="fixed inset-0 z-[60] bg-black/40" onMouseDown={(e) => e.target === e.currentTarget && (chainPrompt ? finishChain() : setModalOpen(false))} />
-                    <div className="fixed inset-0 z-[70] flex items-center justify-center">
-                        <div className="max-h-[80vh] w-[520px] overflow-y-auto rounded-lg bg-white p-6 shadow-xl">
-                            {chainPrompt ? (
-                                <div className="space-y-3 text-sm">
-                                    <h3 className="text-lg font-semibold">Saved</h3>
-                                    <p>Add rules for <strong>{chainPrompt.label}</strong> now, so it doesn't sit unrouted?</p>
-                                    <div className="flex flex-col gap-2 pt-1">
-                                        <button type="button" onClick={() => startChained('transition_rule')}
-                                            className="rounded border border-gray-300 px-3 py-2 text-left hover:bg-gray-50">
-                                            + Add a transition cost into this state
-                                        </button>
-                                        <button type="button" onClick={() => startChained('part_rule')}
-                                            className="rounded border border-gray-300 px-3 py-2 text-left hover:bg-gray-50">
-                                            + Restrict a part name to this state
-                                        </button>
-                                    </div>
-                                    <div className="flex justify-end pt-3">
-                                        <button type="button" onClick={finishChain} className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700">
-                                            Done
-                                        </button>
-                                    </div>
+            {drawer && (
+                <div className="fixed inset-0 z-[60]">
+                    <div className="absolute inset-0 bg-black/40" onMouseDown={closeDrawer} />
+                    <aside className="absolute right-0 top-0 h-full w-[480px] max-w-full overflow-y-auto bg-white p-6 shadow-xl">
+                        {drawer.chain ? (
+                            <div className="space-y-3 text-sm">
+                                <h3 className="text-lg font-semibold">Capability saved</h3>
+                                <p>Add rules now so it does not sit unrouted?</p>
+                                <button type="button" onClick={() => startChained('transition_rule')} className="block w-full rounded border border-gray-300 px-3 py-2 text-left hover:bg-gray-50">
+                                    + Add a transition cost into this capability
+                                </button>
+                                <button type="button" onClick={() => startChained('part_rule')} className="block w-full rounded border border-gray-300 px-3 py-2 text-left hover:bg-gray-50">
+                                    + Restrict a part name to this capability
+                                </button>
+                                <div className="flex justify-end pt-2">
+                                    <button type="button" onClick={closeDrawer} className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700">Done</button>
                                 </div>
-                            ) : (
-                                <>
-                                    <h3 className="mb-4 text-lg font-semibold">Add Rule</h3>
-                                    <label className="mb-1 block text-xs font-semibold">Rule Type</label>
-                                    <select
-                                        value={ruleType}
-                                        onChange={(e) => { setRuleType(e.target.value); setPrefill(null); }}
-                                        className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-                                    >
-                                        {Object.entries(RULE_TYPE_LABELS).map(([value, label]) => (
-                                            <option key={value} value={value}>{label}</option>
-                                        ))}
-                                    </select>
-
-                                    <div className="mt-4">
-                                        <RuleForm
-                                            key={ruleType + (prefill ? '-chained' : '')}
-                                            machines={machines}
-                                            type={ruleType}
-                                            initialValues={prefill}
-                                            onClose={() => { setModalOpen(false); setPrefill(null); }}
-                                            onSaved={(response) => handleSaved(ruleType, response)}
-                                        />
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    </div>
+                            </div>
+                        ) : (
+                            <>
+                                <h3 className="mb-4 text-lg font-semibold">
+                                    {drawer.editId ? 'Edit' : 'Add'} {RULE_TYPE_LABELS[drawer.type]}
+                                </h3>
+                                <RuleForm
+                                    key={drawer.nonce}
+                                    machines={machines}
+                                    type={drawer.type}
+                                    initialValues={drawer.initialValues}
+                                    editId={drawer.editId}
+                                    onClose={closeDrawer}
+                                    onSaved={onSaved}
+                                />
+                            </>
+                        )}
+                    </aside>
                 </div>
             )}
         </>

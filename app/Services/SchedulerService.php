@@ -25,6 +25,10 @@ use Carbon\Carbon;
 use Exception;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
+use App\Models\MachineTransitionGroup;
+use App\Models\MachineTransitionGroupMember;
+use App\Models\MachineGroupTransitionRule;
+use App\Services\TransitionGroupResolver; // same namespace, import not needed there
 
 /**
  * NOTE ON $this->ref: reference data is now an instance property, set
@@ -225,7 +229,27 @@ class SchedulerService
                 ->groupBy('part_name'),
         ];
 
+        $this->ref += $this->loadGroupReferenceData($relevantMachineIds);
+
         return $this->ref;
+    }
+
+    /*
+    * New method in SchedulerService:
+    */
+    protected function loadGroupReferenceData(Collection $machineIds): array
+    {
+        $groups = MachineTransitionGroup::query()->whereIn('machine_id', $machineIds)->get();
+        $members = MachineTransitionGroupMember::query()->whereIn('group_id', $groups->pluck('id'))->get();
+
+        return [
+            // machines that use groups at all; every other machine behaves exactly as before
+            'machines_with_groups' => array_flip($groups->pluck('machine_id')->unique()->all()),
+            'group_ids_by_state' => $members->groupBy('setup_state_id')->map(fn($m) => $m->pluck('group_id')->all())->all(),
+            'group_sizes' => $members->groupBy('group_id')->map->count()->all(),
+            'group_rules_by_machine' => MachineGroupTransitionRule::query()
+                ->whereIn('machine_id', $machineIds)->get()->groupBy('machine_id'),
+        ];
     }
 
     /** In-memory equivalent of the old SQL WHERE chain against machine_setup_states. */
@@ -757,6 +781,39 @@ class SchedulerService
                     'rule_id' => null, // exceptions aren't machine_transition_rules rows
                 ];
             }
+        }
+
+        if (isset($this->ref['machines_with_groups'][$machineId]) && $fromStateId !== null) {
+            // An exact from -> to pair rule still wins over groups on these machines.
+            $pairRules = $this->ref['transition_rules_by_machine']->get($machineId, collect());
+            $exactPair = $pairRules->first(fn($r) => $r->to_state_id === $toStateId && $r->from_state_id === $fromStateId);
+            if ($exactPair) {
+                return [
+                    'operation_type' => $exactPair->operation_type,
+                    'duration' => $exactPair->est_duration_minutes ?? 0,
+                    'rule_id' => $exactPair->rule_id,
+                ];
+            }
+
+            $groupResult = TransitionGroupResolver::resolve(
+                $this->ref['group_ids_by_state'][$fromStateId] ?? [],
+                $this->ref['group_ids_by_state'][$toStateId] ?? [],
+                $this->ref['group_rules_by_machine']->get($machineId, collect()),
+                $this->ref['group_sizes']
+            );
+
+            if ($groupResult !== null) {
+                if ($groupResult['kind'] === 'free') {
+                    return ['operation_type' => 'none', 'duration' => 0, 'rule_id' => null];
+                }
+
+                return [
+                    'operation_type' => $groupResult['rule']->operation_type,
+                    'duration' => (int) $groupResult['rule']->est_duration_minutes,
+                    'rule_id' => null, // group rules are not machine_transition_rules rows
+                ];
+            }
+            // null: a state in no group, or no rule between the groups -> existing logic below decides
         }
 
         $axisRules = $this->ref['transition_axis_rules_by_machine']->get($machineId, collect());

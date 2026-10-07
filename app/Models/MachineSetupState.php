@@ -20,6 +20,8 @@ class MachineSetupState extends Model
         'body_size',
         'thickness',
         'leadcount_min',
+        'focus_group',
+        'lot_type',
         'leadcount_max',
         'leadcount_exclude',
         'process_type',

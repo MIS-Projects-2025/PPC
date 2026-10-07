@@ -25,6 +25,8 @@ class LotQuantity extends Model
         'recipe_used',
         'recipe_source_id',
         'recipe_status',
+        'commit_override',
+        'commit_override_qty',
         'capacity_uph_snapshot',
     ];
 

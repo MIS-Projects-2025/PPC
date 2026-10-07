@@ -262,7 +262,7 @@ function renderCollapsedCell(key, row) {
 // — `hoveredRowId` was never referenced in the body (the drag-over row
 // highlight is applied via `rowClass` in the parent, not per-column).
 // Dropped here; update the call site accordingly.
-export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation) {
+export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation, onEditDoable) {
     return [
         compact(SelectColumn),
         {
@@ -339,7 +339,11 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         if (row.entry_type === "block") {
-                            return row[col.key];
+                            return (
+                                <span className="font-semibold flex items-center gap-1.5 truncate">
+                                    ▨ {row.block_label}
+                                </span>
+                            );
                         }
 
                         if (row.machine === null) {
@@ -405,7 +409,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         if (row.entry_type === "block") {
-                            return row[col.key];
+                            return null;
                         }
 
                         return (
@@ -413,13 +417,9 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                                 value={row.doable}
                                 status={row.doable_status}
                                 recipeSource={row.doable_recipe_source}
+                                overridden={row.doable_overridden}
+                                onEdit={onEditDoable && !isUpdating ? () => onEditDoable(row) : undefined}
                             />
-                            // <LotIdCell
-                            //     lotId={row.lot_id}
-                            //     splitInfo={row.split_info}
-                            //     mergeInfo={row.merge_info}
-                            //     isPlannedYesterday={row.is_leaked}
-                            // />
                         );
                     },
                 };
@@ -436,7 +436,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     if (row.__type === "header") return null;
 
                     if (isBlockRow(row)) {
-                        if (col.key === "part_name") {
+                        if (col.key === "part_name" || col.key === "package_name") {
                             return (
                                 <span className="font-semibold flex items-center gap-1.5 truncate">
                                     ▨ {row.block_label}
@@ -459,7 +459,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     }
 
                     if (col.key === "machine") {
-                        return row.machine ?? "Unassigned";
+                        return row.machine_label ?? row.machine ?? "Unassigned";
                     }
 
                     if (col.key === "time_start" || col.key === "time_end") {

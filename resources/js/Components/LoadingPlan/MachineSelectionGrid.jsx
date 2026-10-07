@@ -1,3 +1,4 @@
+import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { useContext, useMemo, useState } from "react";
 import HoverCell from "./HoverCell";
 import MachineChipClasses from "./MachineChipClasses";
@@ -58,7 +59,7 @@ function groupByTier(machineNames, transferCandidates) {
     return [...groups.entries()].sort(([a], [b]) => a - b);
 }
 
-function MachineChipButton({ machine, selected, onClick, isPseudo, transferRow }) {
+function MachineChipButton({ machine, label, selected, onClick, isPseudo, transferRow }) {
     const { machineCapacity, machineTotalDoable } = useContext(TableInteractionContext);
 
     // Transfer mode: use the fetched preview numbers instead of live context.
@@ -79,12 +80,12 @@ function MachineChipButton({ machine, selected, onClick, isPseudo, transferRow }
         <button
             type="button"
             onClick={() => onClick(machine)}
-            title={isIncompatible ? `${machine} is incompatible` : hasCapacity ? undefined : machine ?? "Unassigned"}
+            title={isIncompatible ? `${machine} is incompatible` : hasCapacity ? undefined : (label ?? machine ?? "Unassigned")}
             className={`relative w-full overflow-hidden rounded-md ${MachineChipClasses(
                 selected ? "active" : "idle",
             )} cursor-pointer ${isExceeded ? "ring-1 ring-error ring-inset" : ""}`}
         >
-            <span className="relative z-10">{machine ?? "Unassigned"}</span>
+            <span className="relative z-10">{label ?? machine ?? "Unassigned"}</span>
 
             {inTransferMode && !isIncompatible && transferRow?.incompatible_lot_ids?.length > 0 && (
                 <span className="absolute top-0.5 right-0.5 text-[8px] font-bold px-1 rounded bg-warning/80 text-warning-content z-10">
@@ -158,6 +159,7 @@ function isPseudoMachine(m) {
 
 export default function MachineSelectionGrid({
     machines,
+    nonMachines = [],
     machinePlatform,
     selectedMachine: selectedMachineProp,
     defaultSelectedMachine = null,
@@ -192,15 +194,22 @@ export default function MachineSelectionGrid({
         return realMachines.filter((m) => m.toLowerCase().includes(q));
     }, [realMachines, query]);
 
-    const inTransferMode = transferCandidates !== null && !transferLoading;
+    const filteredNonMachines = useMemo(() => {
+        if (!query.trim()) return nonMachines;
+        const q = query.toLowerCase();
+        return nonMachines.filter((n) => n.name.toLowerCase().includes(q));
+    }, [nonMachines, query]);
 
+    
+    const inTransferMode = transferCandidates !== null && !transferLoading;
+    
     const grouped = useMemo(() => {
         if (inTransferMode) return groupByTier(filteredMachines, transferCandidates);
         return groupByPlatform(filteredMachines, machinePlatform);
     }, [filteredMachines, machinePlatform, inTransferMode, transferCandidates]);
-
+    
     const selectedTier =
-        inTransferMode && !isPseudoMachine(selectedMachine)
+        inTransferMode && !isPseudoMachine(selectedMachine) && !isNonMachineKey(selectedMachine)
             ? (transferCandidates[selectedMachine]?.tier ?? 5)
             : null;
 
@@ -251,10 +260,32 @@ export default function MachineSelectionGrid({
                     </div>
                 )}
 
-                {grouped.length === 0 ? (
-                    <div className="text-center text-xs text-base-content/40 py-8">
-                        No machines match "{query}"
+                {nonMachines.length > 0 && (
+                    <div className="mb-3 pb-3 border-b border-dashed border-base-content/10">
+                        <div className="text-[10px] font-semibold text-base-content/30 uppercase tracking-wide mb-1.5">
+                            Non-machines
+                        </div>
+                        {filteredNonMachines.length === 0 ? (
+                            <div className="text-xs text-base-content/40">No non-machine matches "{query}"</div>
+                        ) : (
+                            <div className="grid grid-cols-4 gap-1.5">
+                                {filteredNonMachines.map((n) => (
+                                    <MachineChipButton
+                                        key={n.key}
+                                        machine={n.key}
+                                        label={n.name}
+                                        isPseudo
+                                        selected={selectedMachine === n.key}
+                                        onClick={handleSelect}
+                                    />
+                                ))}
+                            </div>
+                        )}
                     </div>
+                )}
+
+                {grouped.length === 0 && filteredNonMachines.length === 0 ? (
+                    <div className="text-center text-xs text-base-content/40 py-8">No machines match "{query}"</div>
                 ) : (
                     <div className="space-y-4">
                         {grouped.map(([groupKey, group]) => {

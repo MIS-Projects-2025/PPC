@@ -23,6 +23,7 @@ class LoadingPlanEntry extends Model
         'package_name',
         'scheduled_date',
         'machine_id',
+        'non_machine_id',
         'sequence_order',
         'status',
         'tag',
@@ -57,9 +58,21 @@ class LoadingPlanEntry extends Model
         'time_end'       => 'datetime',
     ];
 
+    public function getPlacementKey(): ?string
+    {
+        return $this->non_machine_id !== null
+            ? NonMachine::keyFor($this->non_machine_id)
+            : $this->getMachineName();
+    }
+
     public function getIsReworkAttribute(): bool
     {
         return ($this->rework_seq ?? 0) > 0;
+    }
+
+    public function nonMachine(): BelongsTo
+    {
+        return $this->belongsTo(NonMachine::class, 'non_machine_id');
     }
 
     /**

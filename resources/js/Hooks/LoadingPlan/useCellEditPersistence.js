@@ -1,7 +1,9 @@
+import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { applyAffectedTimings, applyTimeStartEdit } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import toSnakeCase from "@/Utils/toSnakeCase";
+import dayjs from "dayjs";
 import { useCallback } from "react";
 
 export function useCellEditPersistence({
@@ -38,6 +40,34 @@ export function useCellEditPersistence({
             if (value === prevRow[field]) return;
 
             if (field === "time_start") {
+                if (isNonMachineKey(prevRow.machine)) {
+                    const lane = dataRows.filter((r) => r.machine === prevRow.machine);
+
+                    // first row of a non-machine lane: its start IS the lane start
+                    if (lane[0]?._dndId === prevRow._dndId) {
+                        const [h, m] = String(value).split(":").map(Number);
+                        if (!Number.isFinite(h) || !Number.isFinite(m)) {
+                            toast?.error?.("That time isn't valid.");
+                            return;
+                        }
+                        const timeStart = dayjs(date).hour(h).minute(m).format("YYYY-MM-DD HH:mm:00");
+                        const nonMachineId = Number(prevRow.machine.slice(3));
+
+                        withUpdating(
+                            mutate(route("loading-plan.non-machines.start", { nonMachine: nonMachineId }), {
+                                method: "PATCH",
+                                body: { time_start: timeStart },
+                            }),
+                        )
+                            .then(({ affected_timings }) => applyAffectedTimings(update, affected_timings, date))
+                            .catch((err) => {
+                                console.error("Failed to set non-machine start:", err);
+                                toast?.error?.(err?.message ?? "Couldn't change the start time.");
+                            });
+                        return;
+                    }
+                }
+
                 if (!baseTimes) {
                     toast?.error?.("Can't recompute the schedule — baseTimes wasn't provided to the grid.");
                     return;

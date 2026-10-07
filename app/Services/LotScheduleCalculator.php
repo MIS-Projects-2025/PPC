@@ -20,6 +20,58 @@ class LotScheduleCalculator
     private ?Collection $packageListByDeviceName = null;
     private array $dates;
     private array $lotIds;
+    public const NON_MACHINE_DEFAULT_START = '06:00:00';
+
+    public function nonMachineLaneStart(int $nonMachineId, string $date): Carbon
+    {
+        return LoadingPlanEntry::where('non_machine_id', $nonMachineId)
+            ->where('scheduled_date', $date)
+            ->orderBy('sequence_order')
+            ->orderBy('id')
+            ->first()?->time_start?->copy()
+            ?? Carbon::parse("{$date} " . self::NON_MACHINE_DEFAULT_START);
+    }
+
+    /**
+     * Per-date lane with no stored day start. Starts at $anchor, else the first
+     * row's current time_start, else 06:00. Walks the whole lane (lanes are small).
+     * accu_time is manual here, null counts as 0.
+     */
+    public function recomputeNonMachineTimes(int $nonMachineId, string $date, ?Carbon $anchor = null): void
+    {
+        $chain = LoadingPlanEntry::where('non_machine_id', $nonMachineId)
+            ->where('scheduled_date', $date)
+            ->orderBy('sequence_order')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        if ($chain->isEmpty()) {
+            return;
+        }
+
+        $cursor = ($anchor
+            ?? $chain->first()->time_start
+            ?? Carbon::parse("{$date} " . self::NON_MACHINE_DEFAULT_START))->copy();
+
+        foreach ($chain as $current) {
+            $newStart = $cursor->copy();
+            $newEnd = $cursor->copy()->addMinutes($current->accu_time ?? 0);
+
+            $unchanged = $current->time_start !== null
+                && $current->time_end !== null
+                && $current->time_start->eq($newStart)
+                && $current->time_end->eq($newEnd);
+
+            if (!$unchanged) {
+                $current->time_start = $newStart;
+                $current->time_end = $newEnd;
+                $current->save();
+            }
+
+            $cursor = $newEnd;
+        }
+    }
 
     public function __construct(array|Collection $dates = [], array|Collection $lotIds = [])
     {
@@ -113,7 +165,16 @@ class LotScheduleCalculator
 
         $this->recalculate($entry, $machineName, $newPartName);
 
-        if ($machineId === null || !$retime) {
+        if (!$retime) {
+            return;
+        }
+
+        if ($entry->non_machine_id !== null) {
+            $this->recomputeNonMachineTimes($entry->non_machine_id, $entry->scheduled_date->toDateString());
+            return;
+        }
+
+        if ($machineId === null) {
             return;
         }
 
@@ -138,8 +199,17 @@ class LotScheduleCalculator
      * 
      * TODO: we can even just make affectedEntry into just all the entry starting from firts anchor towards the end
      */
-    public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, int $machineId): void
+    public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, ?int $machineId): void
     {
+        if ($affectedEntry->non_machine_id !== null) {
+            $this->recomputeNonMachineTimes($affectedEntry->non_machine_id, $affectedEntry->scheduled_date->toDateString());
+            return;
+        }
+
+        if ($machineId === null) {
+            return;
+        }
+
         $date = $affectedEntry->scheduled_date->toDateString();
 
         $chain = LoadingPlanEntry::where('machine_id', $machineId)
@@ -311,7 +381,7 @@ class LotScheduleCalculator
      * call in a tight loop (bulk placement). Requires loadPackageList()
      * already called.
      */
-    public function computeMetrics(string $partName, int $effectiveQty, ?string $machineName): array
+    public function computeMetrics(string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null): array
     {
         if ($this->packageListByDeviceName === null) {
             throw new \LogicException(
@@ -334,6 +404,10 @@ class LotScheduleCalculator
         if ($this->isTubeOrTrayAllocation($packageListRow?->allocation)) {
             $commit = (int) floor($effectiveQty * 0.95);
             $recipeStatus = 'ok';
+        }
+
+        if ($commitOverride !== null) {
+            $commit = min($commitOverride, $effectiveQty);
         }
 
         $capacityUph = $this->capacityUph($machineName, $effectiveQty);
@@ -365,7 +439,21 @@ class LotScheduleCalculator
         }
 
         $effectiveQty = $lotQuantity->effectiveQty();
-        $metrics = $this->computeMetrics($lotQuantity->part_name, $effectiveQty, $machineName);
+
+        if (
+            $lotQuantity->commit_override !== null
+            && (int) $lotQuantity->commit_override_qty !== $effectiveQty
+        ) {
+            $lotQuantity->commit_override = null;
+            $lotQuantity->commit_override_qty = null;
+        }
+
+        $metrics = $this->computeMetrics(
+            $lotQuantity->part_name,
+            $effectiveQty,
+            $machineName,
+            $lotQuantity->commit_override
+        );
 
         $lotQuantity->recipe_used = $metrics['recipe_used'];
         $lotQuantity->recipe_source_id = $metrics['recipe_source_id'];
@@ -374,8 +462,10 @@ class LotScheduleCalculator
         $lotQuantity->capacity_uph_snapshot = $metrics['capacity_uph_snapshot'];
         $lotQuantity->save();
 
-        $entry->accu_time = $metrics['accu_time'];
-        $entry->save();
+        if ($entry->non_machine_id === null) {
+            $entry->accu_time = $metrics['accu_time'];
+            $entry->save();
+        }
     }
 
     public function capacityUph(?string $machine, int $qty): ?int

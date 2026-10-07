@@ -7,6 +7,7 @@ use App\Models\MachineFocusGroupRule;
 use App\Models\MachinePartExclusion;
 use App\Models\PackageGroupLoadingPlan;
 use App\Services\RuleExplorerService;
+use App\Services\RuleViewService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
@@ -18,16 +19,22 @@ use App\Models\MachineTransitionRuleException;
 
 class RuleExplorerController extends Controller
 {
-    public function __construct(protected RuleExplorerService $service) {}
+    public function __construct(protected RuleExplorerService $service, protected RuleViewService $viewService) {}
 
     /** GET /rules -- the dashboard page */
     public function index()
     {
-        // return Inertia::render('LoadingPlanRulesDashboard');
         return Inertia::render('LoadingPlanRulesDashboard', [
-            'rules' => $this->service->getAllRules(),
             'machines' => $this->machineList()->getData(true),
+            'packageOptions' => $this->viewService->packageOptions(),
         ]);
+    }
+
+    public function view(Request $request)
+    {
+        return response()->json($this->viewService->getMachineView(
+            $request->only(['machine', 'package', 'process', 'factory', 'leadcount', 'part'])
+        ));
     }
 
     public function data(Request $request)
@@ -73,6 +80,8 @@ class RuleExplorerController extends Controller
             'machine_id' => 'required|integer',
             'factory' => 'required|in:F1,F2,F3',
             'package_name' => 'nullable|string|max:50',
+            'focus_group' => 'nullable|string|max:50',
+            'lot_type' => 'nullable|string|max:20',
             'body_size' => 'nullable|string|max:20',
             'thickness' => 'nullable|numeric',
             'leadcount_min' => 'nullable|integer',
@@ -101,6 +110,8 @@ class RuleExplorerController extends Controller
             'package_name' => 'nullable|string|max:50',
             'body_size' => 'nullable|string|max:20',
             'thickness' => 'nullable|numeric',
+            'focus_group' => 'nullable|string|max:50',
+            'lot_type' => 'nullable|string|max:20',
             'leadcount_min' => 'nullable|integer',
             'leadcount_max' => 'nullable|integer',
             'leadcount_exclude' => 'nullable|string|max:50',
