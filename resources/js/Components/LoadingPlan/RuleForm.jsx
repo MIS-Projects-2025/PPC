@@ -16,10 +16,10 @@ const FIELD_DEFS = {
         { name: 'package_name', label: 'Package Name (blank = any)', type: 'text' },
         { name: 'body_size', label: 'Body Size (blank = any)', type: 'text' },
         { name: 'thickness', label: 'Thickness', type: 'number' },
-        { name: 'leadcount_min', label: 'Leadcount Min', type: 'number' },
-        { name: 'leadcount_max', label: 'Leadcount Max', type: 'number' },
-        { name: 'leadcount_exclude', label: 'Leadcount Exclude (csv)', type: 'text' },
-        { name: 'leadcount_include', label: 'Leadcount Include (csv)', type: 'text' },
+        { name: 'leadcount_min', label: 'Leadcount Min', type: 'number', half: true},
+        { name: 'leadcount_max', label: 'Leadcount Max', type: 'number', half: true},
+        { name: 'leadcount_exclude', label: 'Leadcount Exclude (csv)', type: 'text', half: true},
+        { name: 'leadcount_include', label: 'Leadcount Include (csv)', type: 'text', half: true},
         { name: 'process_type', label: 'Process Type', type: 'select', options: ['taping', 'tubing', 'both', 'tray'], required: true },
         { name: 'remarks', label: 'Remarks', type: 'text' },
         { name: 'focus_group', label: 'Focus Group (blank = any)', type: 'text' },
@@ -340,72 +340,74 @@ export default function RuleForm({ machines, type, initialValues, editId = null,
 
     return (
         <form onSubmit={submit}>
-            <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
                 {fields.map((field) => {
                     const error = errors[field.name];
                     const locked = isLocked(field) || frozen;
                     return (
-                        <div key={field.name}>
-                            <label className="mb-1 block text-xs font-semibold">
-                                {field.label}
-                                {field.required && <span className="text-red-500"> *</span>}
-                                {isLocked(field) && <span className="ml-1 font-normal text-gray-500">(can't be changed here -- delete and re-add)</span>}
-                            </label>
+                        <div key={field.name} className={field.half ? '' : 'col-span-2'}>
+                            <div >
+                                <label className="mb-1 block text-xs font-semibold">
+                                    {field.label}
+                                    {field.required && <span className="text-red-500"> *</span>}
+                                    {isLocked(field) && <span className="ml-1 font-normal text-gray-500">(can't be changed here -- delete and re-add)</span>}
+                                </label>
 
-                            {field.type === 'select' && (
-                                <select
-                                    value={values[field.name]}
-                                    disabled={frozen}
-                                    onChange={(e) => updateValue(field.name, e.target.value)}
-                                    className={fieldInputClasses(!!error)}
-                                >
-                                    <option value="">-- select --</option>
-                                    {field.options.map((o) => (
-                                        <option key={o} value={o}>{o}</option>
-                                    ))}
-                                </select>
-                            )}
+                                {field.type === 'select' && (
+                                    <select
+                                        value={values[field.name]}
+                                        disabled={frozen}
+                                        onChange={(e) => updateValue(field.name, e.target.value)}
+                                        className={fieldInputClasses(!!error)}
+                                    >
+                                        <option value="">-- select --</option>
+                                        {field.options.map((o) => (
+                                            <option key={o} value={o}>{o}</option>
+                                        ))}
+                                    </select>
+                                )}
 
-                            {field.type === 'machine_select' && (
-                                <select
-                                    value={values[field.name]}
-                                    disabled={locked}
-                                    onChange={(e) => updateValue(field.name, e.target.value)}
-                                    className={fieldInputClasses(!!error)}
-                                >
-                                    <option value="">-- select machine --</option>
-                                    {machines.map((m) => (
-                                        <option key={m.id} value={m.id}>{m.machine_num}</option>
-                                    ))}
-                                </select>
-                            )}
+                                {field.type === 'machine_select' && (
+                                    <select
+                                        value={values[field.name]}
+                                        disabled={locked}
+                                        onChange={(e) => updateValue(field.name, e.target.value)}
+                                        className={fieldInputClasses(!!error)}
+                                    >
+                                        <option value="">-- select machine --</option>
+                                        {machines.map((m) => (
+                                            <option key={m.id} value={m.id}>{m.machine_num}</option>
+                                        ))}
+                                    </select>
+                                )}
 
-                            {field.type === 'state_select' && (
-                                <StateSelectField
-                                    field={field}
-                                    states={states[field.name]}
-                                    loading={!!loadingStates[field.name]}
-                                    disabled={!values[field.dependsOn]}
-                                    locked={locked}
-                                    value={values[field.name]}
-                                    error={error}
-                                    onChange={(val) => updateValue(field.name, val)}
-                                />
-                            )}
+                                {field.type === 'state_select' && (
+                                    <StateSelectField
+                                        field={field}
+                                        states={states[field.name]}
+                                        loading={!!loadingStates[field.name]}
+                                        disabled={!values[field.dependsOn]}
+                                        locked={locked}
+                                        value={values[field.name]}
+                                        error={error}
+                                        onChange={(val) => updateValue(field.name, val)}
+                                    />
+                                )}
 
-                            {['text', 'number'].includes(field.type) && (
-                                <input
-                                    type={field.type}
-                                    value={values[field.name]}
-                                    disabled={frozen}
-                                    onChange={(e) => updateValue(field.name, e.target.value)}
-                                    className={fieldInputClasses(!!error)}
-                                />
-                            )}
+                                {['text', 'number'].includes(field.type) && (
+                                    <input
+                                        type={field.type}
+                                        value={values[field.name]}
+                                        disabled={frozen}
+                                        onChange={(e) => updateValue(field.name, e.target.value)}
+                                        className={fieldInputClasses(!!error)}
+                                    />
+                                )}
 
-                            {field.type !== 'state_select' && error && (
-                                <div className="mt-1 text-xs text-red-600">{error}</div>
-                            )}
+                                {field.type !== 'state_select' && error && (
+                                    <div className="mt-1 text-xs text-red-600">{error}</div>
+                                )}
+                            </div>
                         </div>
                     );
                 })}

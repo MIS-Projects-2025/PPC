@@ -49,24 +49,24 @@ Route::redirect('/', "/$app_name");
 require __DIR__ . '/auth.php';
 
 Route::prefix('rules')->group(function () {
-    Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page'])->whereNumber('machine');
-    Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data'])->whereNumber('machine');
+    Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page']);
+    Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data']);
     Route::post('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkStore']);
     Route::patch('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkUpdate']);
     Route::delete('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkDestroy']);
 
     // groups
-    Route::get('/machines/{machine}/groups', [TransitionGroupController::class, 'data'])->whereNumber('machine');
-    Route::post('/machines/{machine}/groups', [TransitionGroupController::class, 'storeGroup'])->whereNumber('machine');
-    Route::get('/machines/{machine}/pair-cost', [TransitionGroupController::class, 'pairCost'])->whereNumber('machine');
-    Route::post('/machines/{machine}/group-rules', [TransitionGroupController::class, 'saveRule'])->whereNumber('machine');
+    Route::get('/machines/{machine}/groups', [TransitionGroupController::class, 'data']);
+    Route::post('/machines/{machine}/groups', [TransitionGroupController::class, 'storeGroup']);
+    Route::get('/machines/{machine}/pair-cost', [TransitionGroupController::class, 'pairCost']);
+    Route::post('/machines/{machine}/group-rules', [TransitionGroupController::class, 'saveRule']);
     Route::patch('/groups/{group}', [TransitionGroupController::class, 'updateGroup'])->whereNumber('group');
     Route::delete('/groups/{group}', [TransitionGroupController::class, 'destroyGroup'])->whereNumber('group');
     Route::put('/groups/{group}/members', [TransitionGroupController::class, 'syncMembers'])->whereNumber('group');
     Route::delete('/group-rules/{rule}', [TransitionGroupController::class, 'destroyRule'])->whereNumber('rule');
 
-    Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page'])->whereNumber('machine');
-    Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data'])->whereNumber('machine');
+    Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page']);
+    Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data']);
     Route::post('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkStore']);
     Route::patch('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkUpdate']);
     Route::delete('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkDestroy']);

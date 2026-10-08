@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesMachine;
 use App\Models\MachineSetupState;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,27 +15,33 @@ use Inertia\Inertia;
  * different way to look at and edit those rows, so the scheduler is untouched.
  * Bulk endpoints exist so painting a row or column is one request, in one
  * transaction, with duplicate protection and an audit snapshot.
+ *
+ * Anywhere a machine is referenced (URL {machine} or body machine_id) it may be
+ * either machine_list.id or machine_num.
  */
 class CapabilityMatrixController extends Controller
 {
-    /** GET /rules/machines/{machine} */
-    public function page(int $machine)
+    use ResolvesMachine;
+
+    /** GET /rules/machines/{machine}  ({machine} = id or machine_num) */
+    public function page(string $machine)
     {
-        $db = DB::connection('qdn_db');
-        $m = $db->table('machine_list')->select('id', 'machine_num', 'factory')->where('id', $machine)->first();
-        abort_unless($m, 404);
+        $m = $this->resolveMachine($machine);
 
         return Inertia::render('MachineCapabilities', [
-            'machine'  => $m,
-            'machines' => $db->table('machine_list')->select('id', 'machine_num')->orderBy('machine_num')->get(),
+            'machine'  => $m, // frontend should use $m->id for later API calls
+            'machines' => DB::connection('qdn_db')->table('machine_list')
+                ->select('id', 'machine_num')->orderBy('machine_num')->get(),
         ]);
     }
 
     /** GET /rules/machines/{machine}/capabilities */
-    public function data(int $machine)
+    public function data(string $machine)
     {
+        $machineId = $this->resolveMachineId($machine);
+
         $db = DB::connection('qdn_db');
-        $states = $db->table('machine_setup_states')->where('machine_id', $machine)->get();
+        $states = $db->table('machine_setup_states')->where('machine_id', $machineId)->get();
         $ids = $states->pluck('setup_state_id');
 
         $count = fn(string $table, string $col) => $db->table($table)
@@ -45,6 +52,7 @@ class CapabilityMatrixController extends Controller
         $excIn     = $count('machine_transition_rule_exceptions', 'to_state_id');
 
         return response()->json([
+            'machine_id' => $machineId,
             'states' => $states->map(fn($s) => (array) $s + [
                 'part_rule_count'  => (int) ($partRules[$s->setup_state_id] ?? 0),
                 'transition_count' => (int) ($transIn[$s->setup_state_id] ?? 0),
@@ -57,7 +65,7 @@ class CapabilityMatrixController extends Controller
     public function bulkStore(Request $request)
     {
         $data = $request->validate([
-            'machine_id'                  => 'required|integer',
+            'machine_id'                  => 'required', // id or machine_num
             'states'                      => 'required|array|min:1|max:500',
             'states.*.factory'            => 'required|in:F1,F2,F3',
             'states.*.focus_group'        => 'nullable|string|max:50',
@@ -73,8 +81,7 @@ class CapabilityMatrixController extends Controller
             'states.*.remarks'            => 'nullable|string|max:255',
         ]);
 
-        $machineId = $data['machine_id'];
-        abort_unless(DB::connection('qdn_db')->table('machine_list')->where('id', $machineId)->exists(), 404);
+        $machineId = $this->resolveMachineId($data['machine_id']);
 
         $taken = array_flip(
             MachineSetupState::where('machine_id', $machineId)->get()->map(fn($s) => $this->tupleKey($s))->all()
@@ -103,7 +110,7 @@ class CapabilityMatrixController extends Controller
     public function bulkUpdate(Request $request)
     {
         $data = $request->validate([
-            'machine_id'            => 'required|integer',
+            'machine_id'            => 'required', // id or machine_num
             'ids'                   => 'required|array|min:1|max:500',
             'ids.*'                 => 'integer',
             'fields'                => 'required|array',
@@ -115,7 +122,7 @@ class CapabilityMatrixController extends Controller
             'fields.lot_type'       => 'nullable|string|max:20',
         ]);
 
-        $machineId = $data['machine_id'];
+        $machineId = $this->resolveMachineId($data['machine_id']);
         $fields = $data['fields'];
 
         $all = MachineSetupState::where('machine_id', $machineId)->get();
@@ -160,12 +167,12 @@ class CapabilityMatrixController extends Controller
     public function bulkDestroy(Request $request)
     {
         $data = $request->validate([
-            'machine_id' => 'required|integer',
+            'machine_id' => 'required', // id or machine_num
             'ids'        => 'required|array|min:1|max:500',
             'ids.*'      => 'integer',
         ]);
 
-        $machineId = $data['machine_id'];
+        $machineId = $this->resolveMachineId($data['machine_id']);
         $states = MachineSetupState::where('machine_id', $machineId)->whereIn('setup_state_id', $data['ids'])->get();
         $ids = $states->pluck('setup_state_id')->all();
 

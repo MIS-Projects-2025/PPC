@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesMachine;
 use App\Models\MachineGroupTransitionRule;
 use App\Models\MachineTransitionGroup;
 use App\Models\MachineTransitionGroupMember;
@@ -11,11 +12,15 @@ use Illuminate\Support\Facades\DB;
 
 class TransitionGroupController extends Controller
 {
+    use ResolvesMachine;
+
     private const PALETTE = ['#7F77DD', '#1D9E75', '#D85A30', '#378ADD', '#D4537E', '#BA7517', '#639922', '#888780'];
 
-    /** GET /rules/machines/{machine}/groups */
-    public function data(int $machine)
+    /** GET /rules/machines/{machine}/groups  ({machine} = id or machine_num) */
+    public function data(string $machine)
     {
+        $machine = $this->resolveMachineId($machine);
+
         $groups = MachineTransitionGroup::where('machine_id', $machine)->orderBy('id')->get();
         $members = MachineTransitionGroupMember::whereIn('group_id', $groups->pluck('id'))->get()->groupBy('group_id');
 
@@ -31,10 +36,10 @@ class TransitionGroupController extends Controller
     }
 
     /** POST /rules/machines/{machine}/groups */
-    public function storeGroup(Request $request, int $machine)
+    public function storeGroup(Request $request, string $machine)
     {
         $data = $request->validate(['name' => 'required|string|max:60']);
-        $this->assertMachine($machine);
+        $machine = $this->resolveMachineId($machine);
 
         if (MachineTransitionGroup::where('machine_id', $machine)->where('name', $data['name'])->exists()) {
             return response()->json(['message' => 'This machine already has a group with that name.'], 422);
@@ -115,7 +120,7 @@ class TransitionGroupController extends Controller
     }
 
     /** POST /rules/machines/{machine}/group-rules -- creates or updates the rule between two groups */
-    public function saveRule(Request $request, int $machine)
+    public function saveRule(Request $request, string $machine)
     {
         $data = $request->validate([
             'from_group_id'        => 'required|integer',
@@ -125,6 +130,8 @@ class TransitionGroupController extends Controller
             'symmetric'            => 'sometimes|boolean',
             'notes'                => 'nullable|string|max:255',
         ]);
+
+        $machine = $this->resolveMachineId($machine);
 
         $count = MachineTransitionGroup::where('machine_id', $machine)
             ->whereIn('id', [$data['from_group_id'], $data['to_group_id']])->count();
@@ -161,9 +168,10 @@ class TransitionGroupController extends Controller
     }
 
     /** GET /rules/machines/{machine}/pair-cost?from=&to= -- uses the same resolver as the scheduler */
-    public function pairCost(Request $request, int $machine)
+    public function pairCost(Request $request, string $machine)
     {
         $data = $request->validate(['from' => 'required|integer', 'to' => 'required|integer']);
+        $machine = $this->resolveMachineId($machine);
         $db = DB::connection('qdn_db');
 
         if ($data['from'] === $data['to']) {
@@ -216,11 +224,6 @@ class TransitionGroupController extends Controller
     }
 
     // ---------------------------------------------------------------------
-
-    private function assertMachine(int $machine): void
-    {
-        abort_unless(DB::connection('qdn_db')->table('machine_list')->where('id', $machine)->exists(), 404);
-    }
 
     private function audit(string $action, ?int $machineId, $snapshot): void
     {

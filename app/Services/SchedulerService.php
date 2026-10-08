@@ -58,6 +58,16 @@ class SchedulerService
 
     protected ?LotScheduleCalculator $calc = null;
 
+    private function norm(?string $v): ?string
+    {
+        return $v === null ? null : mb_strtolower(trim($v));
+    }
+
+    private function eq(?string $a, ?string $b): bool
+    {
+        return $this->norm($a) === $this->norm($b);
+    }
+
     /**
      * Scopes the shared calculator's package-list load to exactly the part
      * names this batch needs, instead of loadPackageList()'s fallback of
@@ -194,8 +204,19 @@ class SchedulerService
         $generalSetupStates = $setupStates->whereNotIn('setup_state_id', $overrideOnlyStateIds)->values();
 
         $this->ref = [
+            'package_group_by_name' => PackageGroupLoadingPlan::all()
+                ->mapWithKeys(fn($r) => [$this->norm($r->package_name) => $this->norm($r->group_name)]),
+            'transition_exceptions_by_machine_part' => MachineTransitionRuleException::query()
+                ->whereIn('machine_id', $relevantMachineIds)
+                ->whereIn('part_name', $partNames)
+                ->get()
+                ->groupBy(fn($e) => "{$e->machine_id}|" . $this->norm($e->part_name)),
+
+            'part_exclusions_by_part' => MachinePartExclusion::query()
+                ->whereIn('part_name', $partNames)
+                ->get()
+                ->groupBy(fn($e) => $this->norm($e->part_name)),
             'setup_states_by_id' => $setupStates->keyBy('setup_state_id'),
-            'package_group_by_name' => PackageGroupLoadingPlan::all()->pluck('group_name', 'package_name'),
             'transition_axis_rules_by_machine' => MachineTransitionAxisRule::query()
                 ->whereIn('machine_id', $relevantMachineIds)->get()->groupBy('machine_id'),
             // 'setup_states' => $setupStates,
@@ -205,14 +226,6 @@ class SchedulerService
                 ->whereIn('machine_id', $relevantMachineIds)
                 ->get()
                 ->groupBy('machine_id'),
-            // scoped by the SAME part_names as dedicated_parts above —
-            // an exception only ever applies to a part_name actually in
-            // this batch, so no need to load the whole table
-            'transition_exceptions_by_machine_part' => MachineTransitionRuleException::query()
-                ->whereIn('machine_id', $relevantMachineIds)
-                ->whereIn('part_name', $partNames)
-                ->get()
-                ->groupBy(fn($e) => "{$e->machine_id}|{$e->part_name}"),
             'auto_part_rules_by_machine' => MachineAutoPartRule::query()
                 ->whereIn('machine_id', $relevantMachineIds)
                 ->get()
@@ -222,11 +235,6 @@ class SchedulerService
                 ->whereIn('machine_id', $relevantMachineIds)
                 ->get()
                 ->groupBy('machine_id'),
-
-            'part_exclusions_by_part' => MachinePartExclusion::query()
-                ->whereIn('part_name', $partNames)
-                ->get()
-                ->groupBy('part_name'),
         ];
 
         $this->ref += $this->loadGroupReferenceData($relevantMachineIds);
@@ -264,21 +272,21 @@ class SchedulerService
         ?string $rampProcessType,
         ?string $lotType
     ): bool {
-        if ($state->factory !== $factory) {
+        if (!$this->eq($state->factory, $factory)) {
             return false;
         }
-        if ($state->focus_group !== null && $state->focus_group !== $focusGroup) {
+        if ($state->focus_group !== null && !$this->eq($state->focus_group, $focusGroup)) {
             return false;
         }
         if ($state->package_name !== null) {
-            $isLiteralMatch = $state->package_name === $packageName;
-            $isGroupMatch = $this->ref['package_group_by_name']->get($packageName) === $state->package_name;
+            $isLiteralMatch = $this->eq($state->package_name, $packageName);
+            $isGroupMatch = $this->ref['package_group_by_name']->get($this->norm($packageName)) === $this->norm($state->package_name);
 
             if (!$isLiteralMatch && !$isGroupMatch) {
                 return false;
             }
         }
-        if ($state->body_size !== null && $state->body_size !== $bodySize2d) {
+        if ($state->body_size !== null && !$this->eq($state->body_size, $bodySize2d)) {
             return false;
         }
         if ($state->thickness !== null) {
@@ -287,11 +295,10 @@ class SchedulerService
             }
         }
         if ($state->leadcount_include !== null) {
-            if ($leadCount === null) {
+            $included = array_map('trim', explode(',', $state->leadcount_include));
+            if (!in_array((string) $leadCount, $included, true)) {
                 return false;
             }
-            $included = array_map('trim', explode(',', $state->leadcount_include));
-            return in_array((string) $leadCount, $included, true);
         }
         if ($state->leadcount_min !== null) {
             if ($leadCount === null || $leadCount < $state->leadcount_min) {
@@ -315,11 +322,11 @@ class SchedulerService
         if ($rampProcessType === null) {
             return false; // unrecognized ramp_time -- reject outright, even against 'both' states
         }
-        if ($state->process_type !== 'both' && $state->process_type !== $rampProcessType) {
+        if ($this->norm($state->process_type) !== 'both' && !$this->eq($state->process_type, $rampProcessType)) {
             return false;
         }
         if ($state->lot_type !== null) {
-            if ($lotType === null || $state->lot_type !== $lotType) {
+            if ($lotType === null || !$this->eq($state->lot_type, $lotType)) {
                 return false;
             }
         }
@@ -460,7 +467,7 @@ class SchedulerService
             'candidateStates' => $candidateStates,
             'candidateMachineIds' => $candidateStates->pluck('machine_id')->unique()->values(),
             'estimatedCommit' => $this->estimateCommit($lot),
-            'isCr3Dedicated' => $lot->CR3 === 'RES', // resolved per-state below
+            'isCr3Dedicated' => $this->eq($lot->CR3, 'RES'), // resolved per-state below
         ];
     }
 
@@ -554,7 +561,13 @@ class SchedulerService
             $capacityRow = MachineCapacity::effectiveFor($machineId, $targetDate);
             return $capacityRow
                 ? [$machineId => $capacityRow->capacity - $committedByMachine[$machineId]]
-                : [$machineId => null];
+                : [$machineId => PHP_INT_MAX];
+
+            // NOTE: Can't decide if non-TNR machine is literally unlimited capacity.
+            // for now, they ARE!!!
+            // return $capacityRow
+            //     ? [$machineId => $capacityRow->capacity - $committedByMachine[$machineId]]
+            //     : [$machineId => null];
         });
     }
 
@@ -642,8 +655,8 @@ class SchedulerService
 
         return $partNames->mapWithKeys(function ($partName) use ($rules, $states) {
             $matched = $rules->filter(fn($rule) => match ($rule->match_type) {
-                'exact', 'dedicated_list' => $rule->match_value === $partName,
-                'contains' => str_contains($partName, $rule->match_value),
+                'exact', 'dedicated_list' => $this->eq($rule->match_value, $partName),
+                'contains' => str_contains($this->norm($partName), $this->norm($rule->match_value)),
                 default => false,
             });
 
@@ -663,7 +676,7 @@ class SchedulerService
     {
         // machine_part_exclusions — pure negative, checked first
         if (
-            $partName && $this->ref['part_exclusions_by_part']->get($partName, collect())
+            $partName && $this->ref['part_exclusions_by_part']->get($this->norm($partName), collect())
             ->contains(fn($e) => $e->machine_id === $machineId)
         ) {
             return false;
@@ -671,7 +684,7 @@ class SchedulerService
 
         // machine_focus_group_rules
         $fgRules = $this->ref['focus_group_rules_by_machine']->get($machineId, collect())
-            ->where('focus_group', $focusGroup);
+            ->filter(fn($r) => $this->eq($r->focus_group, $focusGroup));
         if ($fgRules->contains(fn($r) => $r->rule_type === 'exclude')) {
             return false;
         }
@@ -680,7 +693,7 @@ class SchedulerService
         if ($isAutoPart) {
             $allAutoRulesForPackage = $this->ref['auto_part_rules_by_machine']
                 ->flatten(1)
-                ->filter(fn($r) => $r->package_name === null || $r->package_name === $packageName);
+                ->filter(fn($r) => $r->package_name === null || $this->eq($r->package_name, $packageName));
 
             $includeOnlyMachineIds = $allAutoRulesForPackage
                 ->where('rule_type', 'include_only')
@@ -769,7 +782,7 @@ class SchedulerService
         }
 
         if ($partName) {
-            $exceptions = $this->ref['transition_exceptions_by_machine_part'][$machineId . '|' . $partName] ?? collect();
+            $exceptions = $this->ref['transition_exceptions_by_machine_part'][$machineId . '|' . $this->norm($partName)] ?? collect();
 
             $exception = $exceptions->first(fn($e) => $e->to_state_id === $toStateId && $e->from_state_id === $fromStateId)
                 ?? $exceptions->first(fn($e) => $e->to_state_id === $toStateId && $e->from_state_id === null);
@@ -823,10 +836,10 @@ class SchedulerService
             $toState = $this->ref['setup_states_by_id']->get($toStateId);
 
             if ($fromState && $toState) {
-                $groupOf = fn($pkg) => $this->ref['package_group_by_name']->get($pkg, $pkg);
+                $groupOf = fn($pkg) => $this->norm($this->ref['package_group_by_name']->get($this->norm($pkg), $pkg));
 
                 $applicable = collect();
-                if ($fromState->factory !== $toState->factory) {
+                if (!$this->eq($fromState->factory, $toState->factory)) {
                     $applicable->push($axisRules->firstWhere('axis', 'factory'));
                 }
                 if ($groupOf($fromState->package_name) !== $groupOf($toState->package_name)) {
@@ -838,10 +851,10 @@ class SchedulerService
                 ) {
                     $applicable->push($axisRules->firstWhere('axis', 'leadcount'));
                 }
-                if ($fromState->body_size !== $toState->body_size) {
+                if (!$this->eq($fromState->body_size, $toState->body_size)) {
                     $applicable->push($axisRules->firstWhere('axis', 'body_size'));
                 }
-                if ($fromState->process_type !== $toState->process_type) {
+                if (!$this->eq($fromState->process_type, $toState->process_type)) {
                     $applicable->push($axisRules->firstWhere('axis', 'process_type'));
                 }
 
@@ -914,6 +927,8 @@ class SchedulerService
                     $lot->Part_Name
                 );
 
+                $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
+
                 $candidate = [
                     'machine_id' => $state->machine_id,
                     'resulting_setup_state_id' => $state->setup_state_id,
@@ -925,6 +940,7 @@ class SchedulerService
                     '_marginal_duration' => $entryCost['duration'],
                     '_is_free' => $entryCost['duration'] === 0,
                     '_is_cr3_dedicated' => $isCr3Dedicated,
+                    '_is_lot_type_dedicated' => $isLotTypeDedicated,
                     '_remaining_capacity' => $remainingCapacity,
                 ];
 
@@ -964,6 +980,8 @@ class SchedulerService
                     $marginalDuration = $entryCost['duration'];
                 }
 
+                $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
+
                 $candidate = [
                     'machine_id' => $state->machine_id,
                     'resulting_setup_state_id' => $state->setup_state_id,
@@ -974,6 +992,7 @@ class SchedulerService
                     'insert_before_entry_id' => $succEntry->id ?? null,
                     '_marginal_duration' => $marginalDuration,
                     '_is_free' => $marginalDuration === 0,
+                    '_is_lot_type_dedicated' => $isLotTypeDedicated,
                     '_is_cr3_dedicated' => $isCr3Dedicated,
                     '_remaining_capacity' => $remainingCapacity,
                 ];
@@ -988,7 +1007,7 @@ class SchedulerService
             return null;
         }
 
-        unset($best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
+        unset($best['_is_lot_type_dedicated'], $best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
         return $best;
     }
 
@@ -1044,7 +1063,7 @@ class SchedulerService
                 continue;
             }
 
-            $isCr3Dedicated = ($lot->CR3 === 'RES')
+            $isCr3Dedicated = ($this->eq($lot->CR3, 'RES'))
                 && $this->isDedicatedListMatch($lot->Part_Name, $state->setup_state_id);
 
             $openLots = ($openEntriesByMachine[$state->machine_id] ?? collect())
@@ -1075,6 +1094,8 @@ class SchedulerService
                     $marginalDuration = $entryCost['duration'];
                 }
 
+                $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
+
                 $candidate = [
                     'machine_id' => $state->machine_id,
                     'resulting_setup_state_id' => $state->setup_state_id,
@@ -1085,6 +1106,7 @@ class SchedulerService
                     'insert_before_entry_id' => $succEntry->id ?? null,
                     '_marginal_duration' => $marginalDuration,
                     '_is_free' => $marginalDuration === 0,
+                    '_is_lot_type_dedicated' => $isLotTypeDedicated,
                     '_is_cr3_dedicated' => $isCr3Dedicated,
                     '_remaining_capacity' => $remainingCapacity,
                 ];
@@ -1099,13 +1121,16 @@ class SchedulerService
             return null;
         }
 
-        unset($best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
+        unset($best['_is_lot_type_dedicated'], $best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
 
         return $best;
     }
 
     protected function isBetterCandidate(array $candidate, array $incumbent): bool
     {
+        if ($candidate['_is_lot_type_dedicated'] !== $incumbent['_is_lot_type_dedicated']) {
+            return $candidate['_is_lot_type_dedicated'];
+        }
         if ($candidate['_is_free'] !== $incumbent['_is_free']) {
             return $candidate['_is_free'];
         }
@@ -1401,7 +1426,7 @@ class SchedulerService
             'Body_Size'    => $wip->Body_Size,
             'Focus_Group'  => $wip->Focus_Group,
             'Ramp_Time'    => $wip->Ramp_Time,
-            'is_auto_part' => $wip->Auto_Part === 'Y',
+            'is_auto_part' => $this->eq($wip->Auto_Part, 'Y'),
             'CR3'          => $wip->CR3,
             'Lot_Type'     => $wip->Lot_Type,
             'isExpedite'   => false, // no entry -> no tag to read
@@ -1498,7 +1523,7 @@ class SchedulerService
             'Lead_Count' => $wip->Lead_Count,
             'Body_Size' => $wip->Body_Size,
             'Focus_Group' => $wip->Focus_Group,
-            'is_auto_part' => $wip->Auto_Part === 'Y',
+            'is_auto_part' => $this->eq($wip->Auto_Part, 'Y'),
             'Ramp_Time' => $wip->Ramp_Time,
             'CR3' => $wip->CR3,
             'Lot_Type' => $wip->Lot_Type,
@@ -1527,7 +1552,7 @@ class SchedulerService
                 'is_manual_expedite'         => (bool) ($lot->isExpedite ?? false),
                 'cycle_time_exceed'          => (bool) ($lot->aboveCT ?? false),
                 'cycle_time_exceed_residual' => (bool) ($lot->cycleTimeExceedResidual ?? false),
-                'is_res'                     => ($lot->CR3 ?? null) === 'RES',
+                'is_res'                     => $this->eq($lot->CR3, 'RES'),
                 'ct'                         => $lot->CT ?? null,
                 'entry_days'                 => $lot->Lot_Entry_Time_Days ?? null,
                 'seq'                        => 0, // overwritten below

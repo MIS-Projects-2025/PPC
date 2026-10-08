@@ -1,6 +1,6 @@
+import { buildGrid, cellKey, colInfo, colLabel, rowTitle } from '@/Lib/LoadingPlan/capabilityModel';
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import { buildGrid, cellKey, colInfo, colLabel, rowTitle } from './capabilityModel';
 
 const PROCESS_LABEL = { taping: 'tape', tubing: 'tube', both: 'both', tray: 'tray' };
 const SOFT_GROUP_LIMIT = 8;
