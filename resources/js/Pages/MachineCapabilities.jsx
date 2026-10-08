@@ -244,7 +244,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
     };
 
     const addColumn = () => {
-                const n = parseInt(newCol, 10);
+        const n = parseInt(newCol, 10);
         if (Number.isNaN(n) || n < 0) return;
         setDraftCols((d) => (d.includes(n) ? d : [...d, n]));
         setNewCol('');
@@ -320,7 +320,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                 </div>
 
                 {tab === 'groups' && !loading && <MachineGroups machine={machine} states={states} dev={isDev} />}
-{tab === 'rules' && !loading && <MachineTransitionRules machine={machine} machines={machines} />}
+                {tab === 'rules' && !loading && <MachineTransitionRules machine={machine} machines={machines} />}
 
                 {tab === 'capabilities' && (
                 <>
