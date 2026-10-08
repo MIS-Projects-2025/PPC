@@ -1,9 +1,10 @@
 import MachineGroups from '@/Components/LoadingPlan/MachineGroups';
+import MachineTransitionRules from '@/Components/LoadingPlan/MachineTransitionRules';
 import RuleForm from '@/Components/LoadingPlan/RuleForm';
 import { blank, buildGrid, canPaint, colLabel, dependents, rowKey, rowTitle } from '@/Lib/LoadingPlan/capabilityModel';
 import { Head, Link } from '@inertiajs/react';
 import axios from 'axios';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const PROCESSES = ['taping', 'tubing', 'both', 'tray'];
 
@@ -110,13 +111,13 @@ export default function MachineCapabilities({ machine, machines = [] }) {
     const [states, setStates] = useState([]);
     const [loading, setLoading] = useState(true);
     const [layer, setLayer] = useState('all'); // all | taping | tubing | both | tray
-    const [isDev, setIsDev] = useState(false);
+    const [dev, setDev] = useState(false);
     const [note, setNote] = useState(null);
     const [draftRows, setDraftRows] = useState([]);
     const [draftCols, setDraftCols] = useState([]);
     const [newCol, setNewCol] = useState('');
     const [drawer, setDrawer] = useState(null); // { kind: 'state' | 'row', ... }
-    const [tab, setTab] = useState('capabilities'); // capabilities | groups
+    const [tab, setTab] = useState('capabilities'); // capabilities | groups | rules
     const deleteButtonRef = useRef(null);
 
     useEffect(() => {
@@ -243,11 +244,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
     };
 
     const addColumn = () => {
-        console.log("LOG ~ MachineCapabilities.jsx:239 ~ addColumn ~ newCol:", newCol);
-        const n = parseInt(newCol, 10);
-
-
-        console.log("LOG ~ MachineCapabilities.jsx:239 ~ addColumn ~ n:", n);
+                const n = parseInt(newCol, 10);
         if (Number.isNaN(n) || n < 0) return;
         setDraftCols((d) => (d.includes(n) ? d : [...d, n]));
         setNewCol('');
@@ -304,13 +301,13 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                         {states.length} total, {model.rows.length} rows{model.routed.length ? `, ${model.routed.length} part-routed` : ''}
                     </span>
                     <label className="ml-auto flex items-center gap-2 text-sm">
-                        <input type="checkbox" checked={isDev} onChange={(e) => setIsDev(e.target.checked)} />
+                        <input type="checkbox" checked={dev} onChange={(e) => setDev(e.target.checked)} />
                         Show IDs and details
                     </label>
                 </div>
 
                 <div className="mb-4 flex gap-1 border-b border-gray-200">
-                    {[['capabilities', 'Capabilities'], ['groups', 'Groups']].map(([v, label]) => (
+                    {[['capabilities', 'Capabilities'], ['groups', 'Groups'], ['rules', 'Pair and axis rules']].map(([v, label]) => (
                         <button
                             key={v}
                             type="button"
@@ -323,6 +320,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                 </div>
 
                 {tab === 'groups' && !loading && <MachineGroups machine={machine} states={states} dev={isDev} />}
+{tab === 'rules' && !loading && <MachineTransitionRules machine={machine} machines={machines} />}
 
                 {tab === 'capabilities' && (
                 <>
@@ -405,7 +403,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                                                     className={`rounded px-1.5 py-0.5 text-[11px] ${PROCESS_STYLE[s.process_type]} hover:opacity-80`}
                                                                 >
                                                                     {s.process_type}
-                                                                    {isDev && <span className="ml-1 opacity-60">#{s.setup_state_id}</span>}
+                                                                    {dev && <span className="ml-1 opacity-60">#{s.setup_state_id}</span>}
                                                                 </button>
                                                             ))}
                                                             <button type="button" onClick={() => openAdd(r, c)} aria-label="Add capability" className="px-1 text-gray-300 hover:text-gray-700">+</button>
@@ -423,7 +421,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                                         onClick={() => toggleCell(r, c)}
                                                         className={`h-8 w-full rounded text-xs ${hit.length ? PROCESS_FILL[layer] : disabled ? 'cursor-not-allowed bg-gray-50 text-gray-300' : 'border border-dashed border-gray-300 text-gray-300 hover:border-gray-500 hover:text-gray-600'}`}
                                                     >
-                                                        {hit.length ? (hit.length > 1 ? `✓ ×${hit.length}` : isDev ? `#${hit[0].setup_state_id}` : '✓') : disabled ? '–' : '+'}
+                                                        {hit.length ? (hit.length > 1 ? `✓ ×${hit.length}` : dev ? `#${hit[0].setup_state_id}` : '✓') : disabled ? '–' : '+'}
                                                     </button>
                                                 </td>
                                             );
@@ -478,7 +476,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                             <td className="px-3 py-2">{s.factory}</td>
                                             <td className="px-3 py-2">{rowTitle(s)}</td>
                                             <td className="px-3 py-2"><Chip className={PROCESS_STYLE[s.process_type]}>{s.process_type}</Chip></td>
-                                            <td className="px-3 py-2 text-gray-600">{s.remarks}{isDev && <span className="ml-2 text-gray-400">#{s.setup_state_id}</span>}</td>
+                                            <td className="px-3 py-2 text-gray-600">{s.remarks}{dev && <span className="ml-2 text-gray-400">#{s.setup_state_id}</span>}</td>
                                             <td className="px-3 py-2">{s.part_rule_count}</td>
                                             <td className="space-x-3 px-3 py-2 text-right">
                                                 <button type="button" className={linkBtn} onClick={() => openEdit(s)}>Edit</button>
