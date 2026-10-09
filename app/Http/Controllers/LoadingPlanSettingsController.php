@@ -19,7 +19,9 @@ class LoadingPlanSettingsController extends Controller
             // Only the capacity section needs the machine list.
             // Assumes machine_list has `machine_num` and `factory` columns.
             'machines' => $section === 'capacity'
-                ? QdnMachine::orderBy('machine_num')->get(['id', 'machine_num', 'factory'])
+                ? QdnMachine::with('currentCapacity:id,machine_id,capacity')
+                ->orderBy('machine_num')
+                ->get(['id', 'machine_num', 'factory'])
                 : [],
         ]);
     }

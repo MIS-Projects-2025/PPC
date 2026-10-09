@@ -1,46 +1,34 @@
 import axios from 'axios';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BiChevronDown, BiChevronRight } from 'react-icons/bi';
 import { Alert, errMsg, today } from './Lib';
 const API = '/loading-plan/machine-capacities';
 
-export default function CapacitySettings({ machines = [] }) {
-    const [search, setSearch] = useState('');
-    const [machineId, setMachineId] = useState('');
+const fmt = (n) => (n === null || n === undefined || n === '' ? '—' : Number(n).toLocaleString());
+
+function MachineHistory({ machine, onCurrent, setMsg }) {
     const [rows, setRows] = useState([]);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
-    const [msg, setMsg] = useState(null);
     const [form, setForm] = useState({ capacity: '', effective_from: today() });
     const [editId, setEditId] = useState(null);
     const [draft, setDraft] = useState({});
-    const reqRef = useRef(0);
 
-    const filtered = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        return q ? machines.filter((m) => String(m.machine_num).toLowerCase().includes(q)) : machines;
-    }, [machines, search]);
-
-    const load = useCallback(async (id) => {
-        const req = ++reqRef.current;
-        if (!id) {
-            setRows([]);
-            return;
-        }
-        setLoading(true);
+    const load = useCallback(async () => {
         try {
-            const { data } = await axios.get(API, { params: { machine_id: id } });
-            if (req === reqRef.current) setRows(data);
+            const { data } = await axios.get(API, { params: { machine_id: machine.id } });
+            setRows(data);
+            onCurrent(machine.id, data.find((r) => !r.effective_to)?.capacity ?? null);
         } catch (err) {
-            if (req === reqRef.current) setMsg({ type: 'error', text: errMsg(err) });
+            setMsg({ type: 'error', text: errMsg(err) });
         } finally {
-            if (req === reqRef.current) setLoading(false);
+            setLoading(false);
         }
-    }, []);
+    }, [machine.id, onCurrent, setMsg]);
 
     useEffect(() => {
-        setEditId(null);
-        load(machineId);
-    }, [machineId, load]);
+        load();
+    }, [load]);
 
     const current = rows.find((r) => !r.effective_to);
 
@@ -49,7 +37,7 @@ export default function CapacitySettings({ machines = [] }) {
         try {
             await fn();
             if (okText) setMsg({ type: 'success', text: okText });
-            await load(machineId);
+            await load();
             return true;
         } catch (err) {
             setMsg({ type: 'error', text: errMsg(err) });
@@ -71,7 +59,7 @@ export default function CapacitySettings({ machines = [] }) {
         const ok = await run(
             () =>
                 axios.post(API, {
-                    machine_id: Number(machineId),
+                    machine_id: machine.id,
                     capacity: form.capacity === '' ? null : Number(form.capacity),
                     effective_from: form.effective_from,
                 }),
@@ -103,181 +91,203 @@ export default function CapacitySettings({ machines = [] }) {
     };
 
     const remove = (r) => {
-        const warn = !r.effective_to
-            ? 'This is the CURRENT version. Deleting it leaves the machine with no open-ended record.'
-            : 'Deleting a historical version can leave a gap in the timeline.';
-        if (!window.confirm(`${warn}\n\nDelete this record?`)) return;
+        if (!window.confirm('Deleting a historical version can leave a gap in the timeline.\n\nDelete this record?')) return;
         run(() => axios.delete(`${API}/${r.id}`), 'Record deleted.');
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-4 border-t border-base-300 bg-base-100 p-4">
+            <form onSubmit={add} className="space-y-2">
+                <p className="text-sm opacity-70">
+                    Add new version — saving closes the current open-ended version the day before the new start date.
+                </p>
+                <div className="flex flex-wrap items-end gap-3">
+                    <label className="form-control">
+                        <span className="label-text mb-1">Capacity</span>
+                        <input
+                            type="number"
+                            min="0"
+                            className="input input-bordered input-sm w-40"
+                            value={form.capacity}
+                            onChange={(e) => setForm({ ...form, capacity: e.target.value })}
+                        />
+                    </label>
+                    <label className="form-control">
+                        <span className="label-text mb-1">Effective from</span>
+                        <input
+                            type="date"
+                            required
+                            className="input input-bordered input-sm"
+                            value={form.effective_from}
+                            onChange={(e) => setForm({ ...form, effective_from: e.target.value })}
+                        />
+                    </label>
+                    <button className="btn btn-primary btn-sm" disabled={busy}>
+                        Save version
+                    </button>
+                </div>
+            </form>
+
+            {loading ? (
+                <span className="loading loading-spinner" />
+            ) : rows.length === 0 ? (
+                <p className="opacity-70">No capacity records for this machine.</p>
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="table table-zebra table-sm">
+                        <thead>
+                            <tr>
+                                <th>Effective from</th>
+                                <th>Effective to</th>
+                                <th>Capacity</th>
+                                <th />
+                                <th className="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((r) =>
+                                editId === r.id ? (
+                                    <tr key={r.id}>
+                                        <td>
+                                            <input
+                                                type="date"
+                                                className="input input-bordered input-sm"
+                                                value={draft.effective_from}
+                                                onChange={(e) => setDraft({ ...draft, effective_from: e.target.value })}
+                                            />
+                                        </td>
+                                        <td>
+                                            <input
+                                                type="date"
+                                                className="input input-bordered input-sm"
+                                                value={draft.effective_to}
+                                                onChange={(e) => setDraft({ ...draft, effective_to: e.target.value })}
+                                            />
+                                        </td>
+                                        <td>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                className="input input-bordered input-sm w-32"
+                                                value={draft.capacity}
+                                                onChange={(e) => setDraft({ ...draft, capacity: e.target.value })}
+                                            />
+                                        </td>
+                                        <td />
+                                        <td className="space-x-2 text-right">
+                                            <button
+                                                className="btn btn-primary btn-xs"
+                                                disabled={busy}
+                                                onClick={() => saveEdit(r.id)}
+                                            >
+                                                Save
+                                            </button>
+                                            <button className="btn btn-ghost btn-xs" onClick={() => setEditId(null)}>
+                                                Cancel
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    <tr key={r.id}>
+                                        <td>{r.effective_from}</td>
+                                        <td>{r.effective_to ?? '—'}</td>
+                                        <td>{fmt(r.capacity)}</td>
+                                        <td>
+                                            {!r.effective_to && <span className="badge badge-success badge-sm">Current</span>}
+                                        </td>
+                                        <td className="space-x-2 text-right">
+                                            <button className="btn btn-ghost btn-xs" onClick={() => startEdit(r)}>
+                                                Edit
+                                            </button>
+                                            <button
+                                                className="btn btn-ghost btn-xs text-error"
+                                                disabled={busy || !r.effective_to}
+                                                title={!r.effective_to ? 'Add a new version instead' : undefined}
+                                                onClick={() => remove(r)}
+                                            >
+                                                Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                )
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export default function CapacitySettings({ machines = [] }) {
+    const [search, setSearch] = useState('');
+    const [openId, setOpenId] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const [caps, setCaps] = useState(() =>
+        Object.fromEntries(machines.map((m) => [m.id, m.current_capacity?.capacity ?? null]))
+    );
+
+    const onCurrent = useCallback(
+        (id, cap) => setCaps((p) => (p[id] === cap ? p : { ...p, [id]: cap })),
+        []
+    );
+
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        return q ? machines.filter((m) => String(m.machine_num).toLowerCase().includes(q)) : machines;
+    }, [machines, search]);
+
+    const missing = machines.filter((m) => caps[m.id] == null).length;
+
+    return (
+        <div className="space-y-4">
             <Alert msg={msg} onClose={() => setMsg(null)} />
 
-            <div className="card border border-base-300 bg-base-100">
-                <div className="card-body gap-3">
-                    <h3 className="font-medium">Machine</h3>
-                    <div className="flex flex-wrap gap-3">
-                        <input
-                            className="input input-bordered w-48"
-                            placeholder="Filter machines…"
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                        />
-                        <select
-                            className="select select-bordered w-72"
-                            value={machineId}
-                            onChange={(e) => setMachineId(e.target.value)}
-                        >
-                            <option value="">Select a machine…</option>
-                            {filtered.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                    {m.machine_num}
-                                    {m.factory ? ` (${m.factory})` : ''}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-                </div>
+            <div className="flex flex-wrap items-center gap-3">
+                <input
+                    className="input input-bordered w-64"
+                    placeholder="Search machines…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                />
+                <span className="text-sm opacity-70">
+                    {filtered.length} machines · {missing} without capacity
+                </span>
             </div>
 
-            {machineId && (
-                <>
-                    <form onSubmit={add} className="card border border-base-300 bg-base-100">
-                        <div className="card-body gap-3">
-                            <h3 className="font-medium">Add new version</h3>
-                            <p className="text-sm opacity-70">
-                                Saving closes the current open-ended version the day before the new start date.
-                            </p>
-                            <div className="flex flex-wrap items-end gap-3">
-                                <label className="form-control">
-                                    <span className="label-text mb-1">Capacity</span>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        className="input input-bordered w-40"
-                                        value={form.capacity}
-                                        onChange={(e) => setForm({ ...form, capacity: e.target.value })}
-                                    />
-                                </label>
-                                <label className="form-control">
-                                    <span className="label-text mb-1">Effective from</span>
-                                    <input
-                                        type="date"
-                                        required
-                                        className="input input-bordered"
-                                        value={form.effective_from}
-                                        onChange={(e) => setForm({ ...form, effective_from: e.target.value })}
-                                    />
-                                </label>
-                                <button className="btn btn-primary" disabled={busy}>
-                                    Save version
-                                </button>
-                            </div>
+            <div className="space-y-2">
+                {filtered.map((m) => {
+                    const open = openId === m.id;
+                    const none = caps[m.id] == null;
+                    return (
+                        <div
+                            key={m.id}
+                            className={`overflow-hidden rounded-lg border ${
+                                none ? 'border-warning bg-warning/10' : 'border-base-300 bg-base-100'
+                            }`}
+                        >
+                            <button
+                                type="button"
+                                className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                                onClick={() => setOpenId(open ? null : m.id)}
+                            >
+                                {open ? <BiChevronDown size={18} /> : <BiChevronRight size={18} />}
+                                <span className="font-medium">{m.machine_num}</span>
+                                {m.factory && <span className="text-sm opacity-60">({m.factory})</span>}
+                                <span className="ml-auto">
+                                    {none ? (
+                                        <span className="badge badge-warning">No capacity</span>
+                                    ) : (
+                                        <span className="font-mono">{fmt(caps[m.id])}</span>
+                                    )}
+                                </span>
+                            </button>
+                            {open && <MachineHistory machine={m} onCurrent={onCurrent} setMsg={setMsg} />}
                         </div>
-                    </form>
-
-                    <div className="card border border-base-300 bg-base-100">
-                        <div className="card-body">
-                            <h3 className="mb-2 font-medium">History</h3>
-                            {loading ? (
-                                <span className="loading loading-spinner" />
-                            ) : rows.length === 0 ? (
-                                <p className="opacity-70">No capacity records for this machine.</p>
-                            ) : (
-                                <div className="overflow-x-auto">
-                                    <table className="table table-zebra">
-                                        <thead>
-                                            <tr>
-                                                <th>Effective from</th>
-                                                <th>Effective to</th>
-                                                <th>Capacity</th>
-                                                <th />
-                                                <th className="text-right">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {rows.map((r) =>
-                                                editId === r.id ? (
-                                                    <tr key={r.id}>
-                                                        <td>
-                                                            <input
-                                                                type="date"
-                                                                className="input input-bordered input-sm"
-                                                                value={draft.effective_from}
-                                                                onChange={(e) =>
-                                                                    setDraft({ ...draft, effective_from: e.target.value })
-                                                                }
-                                                            />
-                                                        </td>
-                                                        <td>
-                                                            <input
-                                                                type="date"
-                                                                className="input input-bordered input-sm"
-                                                                value={draft.effective_to}
-                                                                onChange={(e) =>
-                                                                    setDraft({ ...draft, effective_to: e.target.value })
-                                                                }
-                                                            />
-                                                        </td>
-                                                        <td>
-                                                            <input
-                                                                type="number"
-                                                                min="0"
-                                                                className="input input-bordered input-sm w-28"
-                                                                value={draft.capacity}
-                                                                onChange={(e) =>
-                                                                    setDraft({ ...draft, capacity: e.target.value })
-                                                                }
-                                                            />
-                                                        </td>
-                                                        <td />
-                                                        <td className="space-x-2 text-right">
-                                                            <button
-                                                                className="btn btn-primary btn-xs"
-                                                                disabled={busy}
-                                                                onClick={() => saveEdit(r.id)}
-                                                            >
-                                                                Save
-                                                            </button>
-                                                            <button className="btn btn-ghost btn-xs" onClick={() => setEditId(null)}>
-                                                                Cancel
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ) : (
-                                                    <tr key={r.id}>
-                                                        <td>{r.effective_from}</td>
-                                                        <td>{r.effective_to ?? '—'}</td>
-                                                        <td>{r.capacity ?? '—'}</td>
-                                                        <td>
-                                                            {!r.effective_to && (
-                                                                <span className="badge badge-success badge-sm">Current</span>
-                                                            )}
-                                                        </td>
-                                                        <td className="space-x-2 text-right">
-                                                            <button className="btn btn-ghost btn-xs" onClick={() => startEdit(r)}>
-                                                                Edit
-                                                            </button>
-                                                            <button
-                                                                className="btn btn-ghost btn-xs text-error"
-                                                                disabled={busy}
-                                                                onClick={() => remove(r)}
-                                                            >
-                                                                Delete
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                )
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </>
-            )}
+                    );
+                })}
+                {filtered.length === 0 && <p className="opacity-70">No machines found.</p>}
+            </div>
         </div>
     );
 }
