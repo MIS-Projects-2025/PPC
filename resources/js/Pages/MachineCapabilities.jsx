@@ -2,7 +2,7 @@ import MachineGroups from '@/Components/LoadingPlan/MachineGroups';
 import MachineTransitionRules from '@/Components/LoadingPlan/MachineTransitionRules';
 import RuleForm from '@/Components/LoadingPlan/RuleForm';
 import { blank, buildGrid, canPaint, colLabel, dependents, rowKey, rowTitle } from '@/Lib/LoadingPlan/capabilityModel';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import axios from 'axios';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -255,6 +255,15 @@ export default function MachineCapabilities({ machine, machines = [] }) {
         load();
     };
 
+    const goToMachine = (machineNum) => {
+        if (!machineNum || machineNum === machine.machine_num) return;
+        router.visit(`/rules/machines/${encodeURIComponent(machineNum)}`);
+    };
+
+    const currentIdx = machines.findIndex((m) => m.id === machine.id);
+    const prevMachine = currentIdx > 0 ? machines[currentIdx - 1] : null;
+    const nextMachine = currentIdx >= 0 && currentIdx < machines.length - 1 ? machines[currentIdx + 1] : null;
+
     const openAdd = (row, col) =>
         setDrawer({
             kind: 'state',
@@ -287,6 +296,15 @@ export default function MachineCapabilities({ machine, machines = [] }) {
         </button>
     );
 
+    useEffect(() => {
+      setLoading(true);
+      setDraftRows([]);
+      setDraftCols([]);
+      setDrawer(null);
+      setNote(null);
+      load();
+  }, [machine.id]);
+
     return (
         <>
             <Head title={`${machine.machine_num} capabilities`} />
@@ -296,7 +314,37 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                     <Link href="/rules" className={linkBtn}>← All rules</Link>
                 </div>
                 <div className="mb-4 flex flex-wrap items-center gap-4">
-                    <h1 className="text-xl font-semibold">{machine.machine_num} capabilities</h1>
+                    <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            disabled={!prevMachine}
+                            onClick={() => prevMachine && goToMachine(prevMachine.machine_num)}
+                            aria-label="Previous machine"
+                            className="rounded border border-gray-300 px-2 py-1 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            ←
+                        </button>
+                        <select
+                            value={machine.machine_num}
+                            onChange={(e) => goToMachine(e.target.value)}
+                            aria-label="Select machine"
+                            className="rounded border border-gray-300 px-3 py-1.5 text-lg font-semibold"
+                        >
+                            {machines.map((m) => (
+                                <option key={m.id} value={m.machine_num}>{m.machine_num}</option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            disabled={!nextMachine}
+                            onClick={() => nextMachine && goToMachine(nextMachine.machine_num)}
+                            aria-label="Next machine"
+                            className="rounded border border-gray-300 px-2 py-1 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            →
+                        </button>
+                        <h1 className="ml-2 text-xl font-semibold">capabilities</h1>
+                    </div>
                     <span className="text-sm text-gray-500">
                         {states.length} total, {model.rows.length} rows{model.routed.length ? `, ${model.routed.length} part-routed` : ''}
                     </span>

@@ -102,10 +102,10 @@ export const ENDPOINTS = {
     package_group: '/rules/package-groups',
 };
 
-// The backend PATCH endpoints (setup states, transition rules) ignore these
+// The backend PATCH endpoints (setup states, transition rules, axis rules) ignore these
 // fields, so the form locks them when editing instead of letting a change
 // silently do nothing. To change one of these, delete the rule and re-add it.
-const LOCKED_ON_EDIT = new Set(['machine_id', 'from_state_id', 'to_state_id']);
+const LOCKED_ON_EDIT = new Set(['machine_id', 'from_state_id', 'to_state_id', 'axis']);
 
 // Builds the same plain-English label the server uses, so the picker
 // never shows a bare numeric ID.
@@ -356,7 +356,7 @@ export default function RuleForm({ machines, type, initialValues, editId = null,
                                 {field.type === 'select' && (
                                     <select
                                         value={values[field.name]}
-                                        disabled={frozen}
+                                        disabled={locked}
                                         onChange={(e) => updateValue(field.name, e.target.value)}
                                         className={fieldInputClasses(!!error)}
                                     >

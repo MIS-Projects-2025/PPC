@@ -1,6 +1,6 @@
+import RuleForm from '@/Components/LoadingPlan/RuleForm';
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import RuleForm from './RuleForm';
 
 const linkBtn = 'text-xs text-blue-600 underline hover:text-blue-800';
 const dangerBtn = 'text-xs text-red-600 hover:text-red-800';
@@ -185,7 +185,8 @@ export default function MachineTransitionRules({ machine, machines }) {
                                         <td className={`px-3 py-1.5 font-medium ${OP_STYLE[a.operation_type]}`}>{a.operation_type}</td>
                                         <td className="px-3 py-1.5">{a.est_duration_minutes} min</td>
                                         <td className="px-3 py-1.5 text-gray-500">combined by {a.combination_rule}</td>
-                                        <td className="px-3 py-1.5 text-right">
+                                        <td className="space-x-3 px-3 py-1.5 text-right">
+                                            <button type="button" className={linkBtn} onClick={() => setDrawer({ type: 'axis_rule', initialValues: a, editId: a.id })}>Edit</button>
                                             <button type="button" className={dangerBtn} onClick={() => remove('axis_rule', a.id)}>Delete</button>
                                         </td>
                                     </tr>

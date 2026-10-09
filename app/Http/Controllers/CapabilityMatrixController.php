@@ -103,6 +103,27 @@ class CapabilityMatrixController extends Controller
         ]);
     }
 
+    /** PATCH /rules/axis-rules/{id} -- the axis and the machine stay fixed; delete and re-add to change those */
+    public function updateAxisRule(Request $request, int $id)
+    {
+        $db = DB::connection('qdn_db');
+        $rule = $db->table('machine_transition_axis_rules')->where('id', $id)->first();
+        abort_unless($rule, 404);
+
+        $data = $request->validate([
+            'operation_type'       => 'sometimes|in:setup,conversion',
+            'est_duration_minutes' => 'sometimes|integer|min:0|max:100000',
+            'combination_rule'     => 'sometimes|in:max,sum',
+        ]);
+
+        if ($data) {
+            $this->audit('update_axis_rule', (int) $rule->machine_id, ['before' => $rule, 'changes' => $data], 'machine_transition_axis_rules');
+            $db->table('machine_transition_axis_rules')->where('id', $id)->update($data);
+        }
+
+        return response()->json($db->table('machine_transition_axis_rules')->where('id', $id)->first());
+    }
+
     /** POST /rules/setup-states/bulk -- creates missing states, skips ones that already exist */
     public function bulkStore(Request $request)
     {
@@ -266,12 +287,12 @@ class CapabilityMatrixController extends Controller
         ]);
     }
 
-    private function audit(string $action, int $machineId, array $snapshot): void
+    private function audit(string $action, int $machineId, array $snapshot, string $table = 'machine_setup_states'): void
     {
         DB::connection('qdn_db')->table('rule_audit_logs')->insert([
             'user_id'    => auth()->id(),
             'action'     => $action,
-            'table_name' => 'machine_setup_states',
+            'table_name' => $table,
             'machine_id' => $machineId,
             'snapshot'   => json_encode($snapshot),
             'created_at' => now(),

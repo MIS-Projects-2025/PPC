@@ -36,35 +36,35 @@ $allowedPackages = [
     // 'SOIC_N',
     // 'QSOP',
     // 'SOIC_N_EP',
-    'MINI_SO',
-    'MINI_SO_EP'
+    // 'MINI_SO',
+    // 'MINI_SO_EP'
 ];
 
 // Pinned lot per machine: machine_id => [lot_id (must exist in the csv), optional setup_state_id]
 $pinnedByNum = [
-    '02LEDCON' => ['lot_id' => 'BD15687.20'],
-    '14HSI250' => ['lot_id' => 'BD26747.2'],
-    '02AT468' => ['lot_id' => 'BD26580.3'],
-    '01SRMXD244' => ['lot_id' => 'BD26135.7'],
-    '25AT128' => ['lot_id' => 'BD25787.2'],
-    '21AT128' => ['lot_id' => 'G165793.11'],
-    '54G6L' => ['lot_id' => 'BB53409.4'],
-    '13G6L' => ['lot_id' => 'BD26243.2'],
-    '33G6L' => ['lot_id' => 'BD26772.4'],
-    '42G6L' => ['lot_id' => 'BD26134.3'],
-    '47G6L' => ['lot_id' => 'BD26246.2'],
-    '10G6L' => ['lot_id' => 'BD25326.2'],
-    '45AT28' => ['lot_id' => 'BD26663.3'],
-    '04MV853A (ADGT)' => ['lot_id' => 'BD25932.9'],
-    '05MV853A (ADGT)' => ['lot_id' => 'BD25932.8'],
-    '48AT28' => ['lot_id' => 'BD25521.2'],
-    '51AT28' => ['lot_id' => 'BD25800.3'],
-    '09HSI200' => ['lot_id' => 'BD26396.2'],
-    '58AT28' => ['lot_id' => 'BD26461.2'],
-    '06HSI200' => ['lot_id' => 'BD26106.3'],
-    '33HSI250' => ['lot_id' => 'BD26461.3'],
-    '29G6L' => ['lot_id' => 'BD26573.2'],
-    '41G6L' => ['lot_id' => 'BD26447.2'],
+    // '02LEDCON' => ['lot_id' => 'BD15687.20'],
+    // '14HSI250' => ['lot_id' => 'BD26747.2'],
+    // '02AT468' => ['lot_id' => 'BD26580.3'],
+    // '01SRMXD244' => ['lot_id' => 'BD26135.7'],
+    // '25AT128' => ['lot_id' => 'BD25787.2'],
+    // '21AT128' => ['lot_id' => 'G165793.11'],
+    // '54G6L' => ['lot_id' => 'BB53409.4'],
+    // '13G6L' => ['lot_id' => 'BD26243.2'],
+    // '33G6L' => ['lot_id' => 'BD26772.4'],
+    // '42G6L' => ['lot_id' => 'BD26134.3'],
+    // '47G6L' => ['lot_id' => 'BD26246.2'],
+    // '10G6L' => ['lot_id' => 'BD25326.2'],
+    // '45AT28' => ['lot_id' => 'BD26663.3'],
+    // '04MV853A (ADGT)' => ['lot_id' => 'BD25932.9'],
+    // '05MV853A (ADGT)' => ['lot_id' => 'BD25932.8'],
+    // '48AT28' => ['lot_id' => 'BD25521.2'],
+    // '51AT28' => ['lot_id' => 'BD25800.3'],
+    // '09HSI200' => ['lot_id' => 'BD26396.2'],
+    // '58AT28' => ['lot_id' => 'BD26461.2'],
+    // '06HSI200' => ['lot_id' => 'BD26106.3'],
+    // '33HSI250' => ['lot_id' => 'BD26461.3'],
+    // '29G6L' => ['lot_id' => 'BD26573.2'],
+    // '41G6L' => ['lot_id' => 'BD26447.2'],
 ];
 
 // Same station rules as scopeLoadingPlanStations + scopeExcludingPostTnr
@@ -317,8 +317,16 @@ $sim = new class(
         $remainingCapacityByMachine = $this->getRemainingCapacityByMachine($machineIds, $targetDate);
         $openEntriesByMachine       = collect();
 
+
+        $capacityByMachine = $machineIds->mapWithKeys(
+            fn($id) => [$id => \App\Models\MachineCapacity::effectiveFor($id, $targetDate)?->capacity]
+        )->all();
+        $initialRemaining = $remainingCapacityByMachine->all();
+        $pinnedCommit = [];
+
         // Pinned lot = the machine's current state, and it eats capacity.
         foreach ($pinned as $machineId => $p) {
+            $pinnedCommit[$machineId] = $p['commit'];
             $anchorStateByMachine[$machineId] = $p['state_id'];
 
             if ($remainingCapacityByMachine[$machineId] !== null) {
@@ -361,6 +369,26 @@ $sim = new class(
             $results
         );
 
+        $capacityReport = [];
+        foreach ($machineIds as $id) {
+            $cap = $capacityByMachine[$id] ?? null;
+            if ($cap === null) {
+                $capacityReport[$id] = null;
+                continue;
+            }
+            $initial = $initialRemaining[$id];
+            $pinnedC = $pinnedCommit[$id] ?? 0;
+            $final   = $remainingCapacityByMachine[$id];
+
+            $capacityReport[$id] = [
+                'capacity'     => $cap,
+                'db_committed' => $cap - $initial,            // already on the machine today (DB)
+                'pinned'       => $pinnedC,
+                'planned'      => ($initial - $pinnedC) - $final,  // newly placed by this run
+                'remaining'    => $final,
+            ];
+        }
+
         // --- same final sort as production (pinned lots aren't in the plan) --
         $plan = $readPlan();
         foreach ($plan as $machineId => $rows) {
@@ -382,6 +410,7 @@ $sim = new class(
             'warnings'     => $warnings,
             'plan'         => $plan,
             'pinned'       => $pinned,
+            'capacity'     => $capacityReport,
             'unassigned'   => $results['unassigned'],
             'machineIds'   => $machineIds,
             'stationByLot' => $stationByLot,
@@ -560,9 +589,29 @@ $pad = function (array $cells) use ($cols, $rightAligned, &$widths, $cell) {
     return '  ' . rtrim(implode('  ', $out));
 };
 
+$capLine = function ($id) use ($r) {
+    $c = $r['capacity'][$id] ?? null;
+    if ($c === null) {
+        return 'Capacity: n/a (no capacity row for this date)';
+    }
+    $used = $c['capacity'] - $c['remaining'];
+    $pct  = $c['capacity'] > 0 ? round($used / $c['capacity'] * 100, 1) : 0;
+    return sprintf(
+        'Capacity: %d used of %d (%s%%) | DB committed %d, pinned %d, newly planned %d, remaining %d',
+        $used,
+        $c['capacity'],
+        $pct,
+        $c['db_committed'],
+        $c['pinned'],
+        $c['planned'],
+        $c['remaining']
+    );
+};
+
 // pass 2: print
 foreach ($blocks as $machineId => $items) {
     $log("Machine " . $machineLabel($machineId) . ":");
+    $log("  " . $capLine($machineId));
     $log($pad($cols));
     foreach ($items as $item) {
         $log(isset($item['text']) ? '  ' . $item['text'] : $pad($item['cells']) . $item['suffix']);
@@ -577,6 +626,33 @@ foreach ($blocks as $machineId => $items) {
 $log(str_repeat('=', 60));
 $log("SUMMARY: placed {$placedTotal} / " . $r['lots']->count()
     . " WIP lot(s); unassigned " . $r['unassigned']->count());
+
+$log(str_repeat('=', 60));
+$log('CAPACITY BY MACHINE (commit units)');
+$log(str_repeat('=', 60));
+$log(sprintf('  %-22s %9s %9s %7s %8s %9s %9s %7s', 'Machine', 'Capacity', 'DB commit', 'Pinned', 'Planned', 'Remaining', 'Used', 'Used%'));
+
+foreach ($r['machineIds']->sort()->values() as $id) {
+    $c = $r['capacity'][$id] ?? null;
+    if ($c === null) {
+        $log(sprintf('  %-22s %s', $machineLabel($id), 'n/a (no capacity row)'));
+        continue;
+    }
+    $used = $c['capacity'] - $c['remaining'];
+    $pct  = $c['capacity'] > 0 ? round($used / $c['capacity'] * 100, 1) : 0;
+    $log(sprintf(
+        '  %-22s %9d %9d %7d %8d %9d %9d %6s%%',
+        $machineLabel($id),
+        $c['capacity'],
+        $c['db_committed'],
+        $c['pinned'],
+        $c['planned'],
+        $c['remaining'],
+        $used,
+        $pct
+    ));
+}
+$log();
 
 if ($r['unassigned']->isNotEmpty()) {
     $log();

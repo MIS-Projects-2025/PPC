@@ -97,6 +97,7 @@ Route::prefix('rules')->group(function () {
     // axis rules
     Route::post('/axis-rules', [RuleExplorerController::class, 'storeAxisRule']);
     Route::delete('/axis-rules/{id}', [RuleExplorerController::class, 'destroyAxisRule']);
+    Route::patch('/axis-rules/{id}', [CapabilityMatrixController::class, 'updateAxisRule'])->whereNumber('id');
 
     // transition exceptions
     Route::post('/transition-exceptions', [RuleExplorerController::class, 'storeTransitionException']);
