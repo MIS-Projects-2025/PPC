@@ -51,6 +51,7 @@ require __DIR__ . '/auth.php';
 Route::prefix('rules')->group(function () {
     Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page']);
     Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data']);
+    Route::get('/machines/{machine}/transition-rules', [CapabilityMatrixController::class, 'transitionRules']);
     Route::post('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkStore']);
     Route::patch('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkUpdate']);
     Route::delete('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkDestroy']);

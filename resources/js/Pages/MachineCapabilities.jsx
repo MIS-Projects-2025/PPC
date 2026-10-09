@@ -4,7 +4,7 @@ import RuleForm from '@/Components/LoadingPlan/RuleForm';
 import { blank, buildGrid, canPaint, colLabel, dependents, rowKey, rowTitle } from '@/Lib/LoadingPlan/capabilityModel';
 import { Head, Link } from '@inertiajs/react';
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const PROCESSES = ['taping', 'tubing', 'both', 'tray'];
 
@@ -319,7 +319,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                     ))}
                 </div>
 
-                {tab === 'groups' && !loading && <MachineGroups machine={machine} states={states} dev={isDev} />}
+                {tab === 'groups' && !loading && <MachineGroups machine={machine} states={states} dev={dev} />}
                 {tab === 'rules' && !loading && <MachineTransitionRules machine={machine} machines={machines} />}
 
                 {tab === 'capabilities' && (

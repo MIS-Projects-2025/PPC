@@ -1,6 +1,6 @@
-import RuleForm from '@/components/rules/RuleForm';
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
+import RuleForm from './RuleForm';
 
 const linkBtn = 'text-xs text-blue-600 underline hover:text-blue-800';
 const dangerBtn = 'text-xs text-red-600 hover:text-red-800';

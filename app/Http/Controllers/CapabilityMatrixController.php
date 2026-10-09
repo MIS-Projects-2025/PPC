@@ -61,6 +61,48 @@ class CapabilityMatrixController extends Controller
         ]);
     }
 
+    /** GET /rules/machines/{machine}/transition-rules -- the existing (pre-groups) cost rules, with readable labels */
+    public function transitionRules(string $machine)
+    {
+        $machineId = $this->resolveMachineId($machine);
+
+        $db = DB::connection('qdn_db');
+        $states = $db->table('machine_setup_states')->where('machine_id', $machineId)->get()->keyBy('setup_state_id');
+
+        $label = function ($id) use ($states) {
+            if ($id === null) {
+                return 'ANY state';
+            }
+            $s = $states->get($id);
+            if (! $s) {
+                return "state #{$id}";
+            }
+            if ($s->leadcount_include !== null && $s->leadcount_include !== '') {
+                $lc = "only {$s->leadcount_include}";
+            } elseif ($s->leadcount_min === null && $s->leadcount_max === null) {
+                $lc = 'any';
+            } elseif ($s->leadcount_min !== null && $s->leadcount_min === $s->leadcount_max) {
+                $lc = (string) $s->leadcount_min;
+            } else {
+                $lc = ($s->leadcount_min ?? 'any') . '–' . ($s->leadcount_max ?? 'any');
+            }
+
+            return "{$s->factory} " . ($s->package_name ?? 'ANY pkg') . ($s->body_size ? " {$s->body_size}" : '') . " · {$lc}L · {$s->process_type}";
+        };
+
+        $withLabels = fn($rows) => $rows->map(fn($r) => (array) $r + [
+            'from_label' => $label($r->from_state_id ?? null),
+            'to_label'   => $label($r->to_state_id ?? null),
+        ])->values();
+
+        return response()->json([
+            'machine_id' => $machineId,
+            'pair_rules' => $withLabels($db->table('machine_transition_rules')->where('machine_id', $machineId)->get()),
+            'exceptions' => $withLabels($db->table('machine_transition_rule_exceptions')->where('machine_id', $machineId)->get()),
+            'axis_rules' => $db->table('machine_transition_axis_rules')->where('machine_id', $machineId)->get(),
+        ]);
+    }
+
     /** POST /rules/setup-states/bulk -- creates missing states, skips ones that already exist */
     public function bulkStore(Request $request)
     {
