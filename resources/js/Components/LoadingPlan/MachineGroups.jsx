@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 const PROCESS_LABEL = { taping: 'tape', tubing: 'tube', both: 'both', tray: 'tray' };
 const SOFT_GROUP_LIMIT = 8;
+const AXIS_LABEL = { factory: 'factory', package_group: 'package group', leadcount: 'leadcount', body_size: 'body size', process_type: 'process' };
 const linkBtn = 'text-xs text-blue-600 underline hover:text-blue-800';
 const dangerBtn = 'text-xs text-red-600 hover:text-red-800';
 
@@ -74,7 +75,7 @@ function PairRow({ a, b, rule, onSave, onClear }) {
 // ---------------------------------------------------------------------
 // Tab
 // ---------------------------------------------------------------------
-export default function MachineGroups({ machine, states, dev = false }) {
+export default function MachineGroups({ machine, states, dev = false, onOpenRules }) {
     const [groups, setGroups] = useState([]);
     const [rules, setRules] = useState([]);
     const [active, setActive] = useState(null);
@@ -85,6 +86,7 @@ export default function MachineGroups({ machine, states, dev = false }) {
     const [from, setFrom] = useState('');
     const [to, setTo] = useState('');
     const [pair, setPair] = useState(null);
+    const [axisRules, setAxisRules] = useState([]);
 
     const base = `/rules/machines/${machine.id}`;
     const errorText = (err) => err.response?.data?.message ?? Object.values(err.response?.data?.errors ?? {}).flat().join(' ') ?? 'Something went wrong.';
@@ -104,7 +106,16 @@ export default function MachineGroups({ machine, states, dev = false }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [machine.id]);
 
+    useEffect(() => {
+        axios
+            .get(`/rules/machines/${machine.id}/transition-rules`)
+            .then(({ data }) => setAxisRules(data.axis_rules ?? []))
+            .catch((err) => console.error(err));
+    }, [machine.id]);
+
     const grid = useMemo(() => buildGrid(states), [states]);
+    const pairRuleCount = states.reduce((n, s) => n + (s.transition_count ?? 0), 0);
+    const overrideCount = states.reduce((n, s) => n + (s.exception_count ?? 0), 0);
     const groupById = useMemo(() => Object.fromEntries(groups.map((g) => [g.id, g])), [groups]);
     const activeGroup = groupById[active] ?? null;
 
@@ -274,6 +285,30 @@ export default function MachineGroups({ machine, states, dev = false }) {
 
     return (
         <div>
+            {axisRules.length > 0 && (
+                <div className="mb-4 max-w-3xl rounded border border-blue-200 bg-blue-50 px-4 py-3 text-blue-900">
+                    <div className="mb-1 text-sm font-semibold">This machine already has axis rules, so you do not have to set up groups</div>
+                    <ul className="mb-2 ml-5 list-disc text-xs">
+                        {axisRules.map((a) => (
+                            <li key={a.id}>
+                                Changing {AXIS_LABEL[a.axis] ?? a.axis} costs {a.operation_type}, {a.est_duration_minutes} min
+                            </li>
+                        ))}
+                    </ul>
+                    <p className="text-xs">
+                        When two states differ on more than one of these, the longest one applies. These rules work out the cost by themselves, including for states you add later.
+                        Use groups only for exceptions: sets of states that should move into each other for free even though an axis rule would charge for it.
+                        Groups are checked first, so a pair in the same group is free even if an axis rule says otherwise.
+                    </p>
+                    {axisRules.some((a) => a.combination_rule === 'sum') && (
+                        <p className="mt-1 text-xs text-amber-800">An axis rule is set to 'sum', but the scheduler always uses the longest one, so 'sum' has no effect.</p>
+                    )}
+                    {onOpenRules && (
+                        <button type="button" className={`${linkBtn} mt-2`} onClick={onOpenRules}>View or change the axis rules</button>
+                    )}
+                </div>
+            )}
+
             <p className="mb-3 max-w-3xl text-xs text-gray-600">
                 States that share a group move into each other for free. Moving between states that share no group costs whatever the rule between their groups says. A state can be in several groups, which makes it free with all of them.
             </p>
@@ -337,7 +372,12 @@ export default function MachineGroups({ machine, states, dev = false }) {
             {/* Grid */}
             {groups.length === 0 ? (
                 <div className="rounded border border-dashed border-gray-300 px-3 py-10 text-center text-sm text-gray-500">
-                    No groups on this machine yet. Create one to start. Until then the machine uses its axis rules, pair rules and the 240 min default.
+                    <p>
+                        No groups on this machine yet. That does not mean it has no transition costs: its existing rules still decide every changeover
+                        ({pairRuleCount} pair rule{pairRuleCount === 1 ? '' : 's'} and {overrideCount} part override{overrideCount === 1 ? '' : 's'} into its capabilities,
+                        plus any axis rules and the 240 min default for pairs nothing covers).
+                    </p>
+                    <p className="mt-2">Groups are optional. Creating one does not replace or delete any of those rules.</p>
                 </div>
             ) : (
                 <div className="overflow-x-auto rounded border border-gray-200">

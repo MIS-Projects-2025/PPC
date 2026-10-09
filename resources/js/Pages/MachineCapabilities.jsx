@@ -319,7 +319,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                     ))}
                 </div>
 
-                {tab === 'groups' && !loading && <MachineGroups machine={machine} states={states} dev={dev} />}
+                {tab === 'groups' && !loading && <MachineGroups machine={machine} states={states} dev={dev} onOpenRules={() => setTab('rules')} />}
                 {tab === 'rules' && !loading && <MachineTransitionRules machine={machine} machines={machines} />}
 
                 {tab === 'capabilities' && (
