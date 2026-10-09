@@ -463,6 +463,60 @@ class SchedulerService
             $lot->Lot_Type
         );
 
+        if ($lot->Lot_Id === 'BD20338.13') {
+            $why = $this->ref['setup_states']->where('machine_id', 330)->map(function ($s) use (
+                $factory,
+                $lot,
+                $bodySize2d,
+                $thickness,
+                $rampProcessType
+            ) {
+                $reasons = [];
+                if (!$this->eq($s->factory, $factory)) $reasons[] = "factory {$s->factory} vs {$factory}";
+                if ($s->focus_group !== null && !$this->eq($s->focus_group, $lot->Focus_Group)) $reasons[] = "focus_group {$s->focus_group}";
+                if (
+                    $s->package_name !== null
+                    && !$this->eq($s->package_name, $lot->Package_Name)
+                    && $this->ref['package_group_by_name']->get($this->norm($lot->Package_Name)) !== $this->norm($s->package_name)
+                ) {
+                    $reasons[] = "package {$s->package_name} vs {$lot->Package_Name}";
+                }
+                if ($s->body_size !== null && !$this->eq($s->body_size, $bodySize2d)) $reasons[] = "body {$s->body_size} vs {$bodySize2d}";
+                if ($s->thickness !== null) $reasons[] = "thickness {$s->thickness} vs " . var_export($thickness, true);
+                foreach (['leadcount_include', 'leadcount_min', 'leadcount_max', 'leadcount_exclude'] as $c) {
+                    if ($s->$c !== null) $reasons[] = "$c={$s->$c} (lead {$lot->Lead_Count})";
+                }
+                if ($s->process_type !== 'both' && !$this->eq($s->process_type, $rampProcessType)) $reasons[] = "process {$s->process_type} vs {$rampProcessType}";
+                if ($s->lot_type !== null && !$this->eq($s->lot_type, $lot->Lot_Type)) $reasons[] = "lot_type {$s->lot_type}";
+                return [
+                    'state' => $s->setup_state_id,
+                    'lot_type' => $s->lot_type,
+                    'reasons' => $reasons,
+                    'passes_restrictions' => $this->passesNewRestrictions(330, $factory, $lot->Package_Name, $lot->Focus_Group, $lot->is_auto_part, $lot->Part_Name),
+                ];
+            })->values();
+
+            Log::info('why not 330', [
+                'factory' => $factory,
+                'rampProcessType' => $rampProcessType,
+                'is_auto_part' => $lot->is_auto_part,
+                'has_override' => $this->ref['part_name_override_states']->get($lot->Part_Name, collect())->isNotEmpty(),
+                'states' => $why,
+            ]);
+        }
+
+        $m = 330;
+        Log::info('restriction breakdown 330', [
+            'part_excluded' => $this->ref['part_exclusions_by_part']->get($this->norm($lot->Part_Name), collect())->contains(fn($e) => $e->machine_id === $m),
+            'fg_excluded' => $this->ref['focus_group_rules_by_machine']->get($m, collect())
+                ->contains(fn($r) => $this->eq($r->focus_group, $lot->Focus_Group) && $r->rule_type === 'exclude'),
+            'auto_rules_330' => $this->ref['auto_part_rules_by_machine']->get($m, collect())->toArray(),
+            'include_only_machines' => $this->ref['auto_part_rules_by_machine']->flatten(1)
+                ->filter(fn($r) => $r->rule_type === 'include_only'
+                    && ($r->package_name === null || $this->eq($r->package_name, $lot->Package_Name)))
+                ->pluck('machine_id')->unique()->values(),
+        ]);
+
         return (object) [
             'candidateStates' => $candidateStates,
             'candidateMachineIds' => $candidateStates->pluck('machine_id')->unique()->values(),
@@ -699,12 +753,21 @@ class SchedulerService
                 ->where('rule_type', 'include_only')
                 ->pluck('machine_id');
 
+            // IMPORTANT NOTES:::::::
+            // THIS IS TEMPORARY REMOVAL. FOR THIS TO WORK AS INTENDED, I NEED TO COMPLETE SEEDING MACHINES THAT IS ABLE TO DO AUTO PARTS
+            // IMPORTANT NOTES:::::::
+
             // GLOBAL check: if ANY include_only rule exists for this
             // package (on any machine, not just this one), this machine
             // is only valid if it's IN that set
-            if ($includeOnlyMachineIds->isNotEmpty() && !$includeOnlyMachineIds->contains($machineId)) {
-                return false;
-            }
+            // if ($includeOnlyMachineIds->isNotEmpty() && !$includeOnlyMachineIds->contains($machineId)) {
+            //     return false;
+            // }
+
+            // if ($includeOnlyMachineIds->isNotEmpty() && !$includeOnlyMachineIds->contains($machineId)) {
+            //     return false;
+            // }
+
 
             // exclude check unchanged, still per-machine
             $excludedHere = $allAutoRulesForPackage
@@ -741,17 +804,37 @@ class SchedulerService
                 ->values();
         }
 
-        return $this->ref['setup_states']->filter(fn($state) => $this->matchesLotCapability(
-            $state,
-            $factory,
-            $focusGroup,
-            $packageName,
-            $bodySize2d,
-            $thickness,
-            $leadCount,
-            $rampProcessType,
-            $lotType
-        ))->filter(fn($state) => $this->passesNewRestrictions($state->machine_id, $factory, $packageName, $focusGroup, $isAutoPart, $partName));;
+        $matched = $this->ref['setup_states']
+            ->filter(fn($state) => $this->matchesLotCapability(
+                $state,
+                $factory,
+                $focusGroup,
+                $packageName,
+                $bodySize2d,
+                $thickness,
+                $leadCount,
+                $rampProcessType,
+                $lotType
+            ))
+            ->filter(fn($state) => $this->passesNewRestrictions(
+                $state->machine_id,
+                $factory,
+                $packageName,
+                $focusGroup,
+                $isAutoPart,
+                $partName
+            ));
+
+        // A lot with a lot_type is restricted to states dedicated to that type,
+        // if any exist; blank ('any') states are only a fallback.
+        if ($lotType !== null) {
+            $dedicated = $matched->filter(fn($s) => $this->eq($s->lot_type, $lotType));
+            if ($dedicated->isNotEmpty()) {
+                return $dedicated->values();
+            }
+        }
+
+        return $matched;
     }
 
     protected function isDedicatedListMatch(string $partName, int $setupStateId): bool
@@ -2489,7 +2572,13 @@ class SchedulerService
                 'result_count' => count($results['placed']),
             ]);
 
-            return $results;
+            // return $results;
+
+            return [
+                'placed_count' => count($results['placed']),
+                'unassigned' => $results['unassigned'],
+                'unmatched_part_names' => $results['unmatched_part_names'],
+            ];
         });
     }
 }

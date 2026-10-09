@@ -161,12 +161,10 @@ export function useBulkOperations({
     );
 
     const handleBulkDelete = useCallback(() => {
-        if (!beginWrite()) return;  
-        console.log("🚀 ~ useBulkOperations ~ selectedRows:", selectedRows)
+        if (!beginWrite()) return false;  
         const targets = dataRows.filter((r) => {
             return selectedRows.has(r.id) && r.entry_id;
         });
-        console.log("🚀 ~ useBulkOperations ~ targets:", targets)
         const entryIds = targets.map((r) => r.entry_id);
         const prevSnapshot = dataRows;
 
@@ -189,7 +187,7 @@ export function useBulkOperations({
         setIsDirty(true);
         clearSelection();
 
-        if (entryIds.length === 0) return;
+        if (entryIds.length === 0) return false;
 
         withUpdating(mutate(route("loading-plan.bulk-delete"), { body: { ids: entryIds, scheduled_date: date } }))
             .then(({ unassigned, affected_timings }) => {
@@ -205,6 +203,8 @@ export function useBulkOperations({
                 update(() => prevSnapshot, true);
                 toast?.error?.("Couldn't delete/unassign — reverted.");
             });
+
+        return true;
     }, [selectedRows, update, dataRows, date, clearSelection, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
 
     const handleRework = useCallback(
@@ -229,6 +229,8 @@ export function useBulkOperations({
                     console.error("Rework failed:", err);
                     toast?.error?.(err?.data?.message ?? "Couldn't create the rework row.");
                 });
+
+            return true;
         },
         [beginWrite, withUpdating, mutate, update, date, setIsDirty, clearSelection, toast],
     );

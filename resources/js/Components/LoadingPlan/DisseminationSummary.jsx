@@ -30,6 +30,9 @@ export default function DisseminationSummaryModal({
     summary,
     triggerLabel = "View Dissemination Summary",
 }) {
+    // imporant note: this is deprecated we now have new scheduler service.
+    // this is useless now
+    
     const modalId = useId();
     const dialogRef = useRef(null);
 

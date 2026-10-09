@@ -21,8 +21,6 @@ export function useCellEditPersistence({
 }) {
     return useCallback(
         (updatedRows, { indexes, column }) => {
-            if (!beginWrite()) return;
-
             const validChangedIndexes = indexes.filter((index) => displayRows[index]?.__type === "data");
             if (validChangedIndexes.length === 0) return;
 
@@ -41,6 +39,7 @@ export function useCellEditPersistence({
 
             const value = changedRow[field];
             if (value === prevRow[field]) return;
+            if (!beginWrite()) return;
 
             if (field === "time_start") {
                 if (isNonMachineKey(prevRow.machine)) {

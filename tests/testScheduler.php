@@ -33,9 +33,11 @@ $limit = null;   // max lots to schedule from the csv. null = all (slow!)
 
 // Only keep these packages. Empty array = no package filter.
 $allowedPackages = [
-    'SOIC_N',
-    'QSOP',
-    'SOIC_N_EP',
+    // 'SOIC_N',
+    // 'QSOP',
+    // 'SOIC_N_EP',
+    'MINI_SO',
+    'MINI_SO_EP'
 ];
 
 // Pinned lot per machine: machine_id => [lot_id (must exist in the csv), optional setup_state_id]

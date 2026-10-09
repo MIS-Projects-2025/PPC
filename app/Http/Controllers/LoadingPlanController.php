@@ -88,6 +88,13 @@ class LoadingPlanController extends Controller
             'pickups.*.isExpedite' => 'boolean',
         ]);
 
+        $date = Carbon::parse($validated['date'])->toDateString();
+
+        // if on deployed
+        // if ($date === ShiftDay::yesterday()) {
+        //     return response()->json(['error' => 'bad_request', 'message' => 'Cannot schedule on a past date.'], 422);
+        // }
+
         // resolvePickupLots() reads part_name/lot_id/package_name/qty/is_expedite —
         // translate the modal's camelCase keys to that shape here
         $pickup = collect($validated['pickups'])->map(fn($row) => [
@@ -98,9 +105,17 @@ class LoadingPlanController extends Controller
             'is_expedite'  => $row['isExpedite'] ?? false,
         ]);
 
-        $result = $scheduler->rebuildForPickupArrival($pickup, Carbon::parse($validated['date']));
+        $lock = Cache::lock("scheduler-run-lock:{$date}", 300);
+        if (!$lock->get()) {
+            return response()->json(['error' => 'busy', 'message' => 'The scheduler is already running for this date.'], 423);
+        }
 
-        return response()->json($result);
+        try {
+            $result = $scheduler->rebuildForPickupArrival($pickup, Carbon::parse($date));
+            return response()->json($result);
+        } finally {
+            $lock->release();
+        }
     }
 
     /**

@@ -488,7 +488,10 @@ export default function Deemo({
 
     const mutate = useCallback((...args) => rawMutate(...args).catch((err) => {
         const status = err?.status ?? err?.response?.status;
-        if (status === 409 || status === 404) setStaleInfo({ message: err?.message });
+        if (status === 409 || status === 404) {
+            staleRef.current = { message: err?.message };
+            setStaleInfo(staleRef.current);
+        }
         throw err;
     }), [rawMutate]);
 
@@ -517,7 +520,8 @@ export default function Deemo({
 
     const handleRefresh = () => {
         if (isSaving()) return;
-        router.reload({ preserveScroll: true, onSuccess: () => setStaleInfo(null) });
+        const release = holdLock();
+        router.reload({ preserveScroll: true, onSuccess: () => setStaleInfo(null), onFinish: release });
     };
 
     const handleDateChange = (newDate) => {
@@ -529,7 +533,8 @@ export default function Deemo({
             date: newDate.toISOString().slice(0, 10),
             location: selectedLocation,
         }, {
-            preserveScroll: true, replace: true, onFinish: release
+            onSuccess: () => setStaleInfo(null),
+            onFinish: release
         });
     };
 
@@ -541,7 +546,7 @@ export default function Deemo({
         router.get(
             route(readOnly ? "loading-plan.readonly" : "loading-plan.index"),
             { date, location: line },
-            { preserveScroll: true, replace: true, onFinish: release },
+            { preserveScroll: true, replace: true, onSuccess: () => setStaleInfo(null), onFinish: release }
         );
     };
 
@@ -761,7 +766,10 @@ export default function Deemo({
 
     const handleStatusChange = useCallback(
         (newStatus) => {
-            if (!beginWrite()) return;
+            if (!beginWrite()) {
+                setStatusMenu(null);
+                return
+            };
             if (readOnly) return;
 
             const normalizedStatus = newStatus === "NONE" ? null : newStatus;
@@ -857,7 +865,7 @@ export default function Deemo({
     // ── Add lot / add block ──────────────────────────────────────────────
     const handleAddRow = useCallback(
         (machine, { partName, packageName, qty, beforeEntryId = null, afterEntryId = null } = {}) => {
-            if (!beginWrite()) Promise.reject(new Error("Still saving…"));
+            if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
             if (readOnly) return Promise.reject(new Error("Read-only view"));
             const trimmedPart = (partName ?? "").trim();
             if (!trimmedPart) return Promise.reject(new Error("Part name is required"));
@@ -910,7 +918,7 @@ export default function Deemo({
 
     const saveBlock = useCallback(
         (machine, label, duration, { beforeEntryId = null, afterEntryId = null } = {}) => {
-            if (!beginWrite()) Promise.reject(new Error("Still saving…"));
+            if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
             if (readOnly) return Promise.reject(new Error("Read-only view"));
             return withUpdating(
                 mutate(route("loading-plan.blocks.store"), {
@@ -929,6 +937,8 @@ export default function Deemo({
                     update((prev) => [...prev, { ...row, _dndId: `entry-${row.entry_id}` }]);
                     applyAffectedTimings(update, affected_timings, date);
                     setIsDirty(true);
+
+                    document.getElementById("deemo_add_block_modal")?.close();
                     return entry;
                 })
                 .catch((err) => {
@@ -956,8 +966,8 @@ export default function Deemo({
             label = preset.label;
             duration = preset.duration;
         }
-        saveBlock(blockModalMachine, label, duration);
-        document.getElementById("deemo_add_block_modal")?.close();
+
+        saveBlock(blockModalMachine, label, duration).catch(() => {});
     }, [
         readOnly,
         blockOption,
@@ -1578,14 +1588,14 @@ export default function Deemo({
             if (e.ctrlKey || e.metaKey) {
                 const k = e.key.toLowerCase();
                 if (k === "z" && !e.shiftKey) {
+                    e.preventDefault();
                     if (!beginWrite()) return;
                     
-                    e.preventDefault();
                     handleUndo();
                 } else if (k === "y" || (k === "z" && e.shiftKey)) {
+                    e.preventDefault();
                     if (!beginWrite()) return;
 
-                    e.preventDefault();
                     handleRedo();
                 }
             }
@@ -1663,7 +1673,6 @@ export default function Deemo({
         collapsedRunsById,
         dataRows,
         update,
-        isLocked,
         withUpdating,
         beginWrite,
         mutate,
@@ -1818,7 +1827,7 @@ export default function Deemo({
     }, [toast]);
 
     const handleSaveOverride = useCallback((doable) => {
-        if (!beginWrite()) return;
+        if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
 
         const row = doableEditRow;
         return withUpdating(
@@ -1842,9 +1851,9 @@ export default function Deemo({
     }, [syncServerFields, update, date, setIsDirty]);
 
     const handleSaveRecipe = useCallback((partName, recipe) => {
-        if (!beginWrite()) return;
+        if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
 
-        withUpdating(mutate(route("loading-plan.part-recipe.update"), {
+        return withUpdating(mutate(route("loading-plan.part-recipe.update"), {
             method: "PATCH",
             body: { part_name: partName, recipe, scheduled_date: date },
         }))
@@ -1882,16 +1891,59 @@ export default function Deemo({
     }, [date, toast]);
 
     const handleMissingPartsSaved = useCallback(async (rows) => {
-        if (!beginWrite()) return;
-
-        const names = rows.map((r) => r.devicename).filter(Boolean);
         document.getElementById("missing_parts_modal")?.close();
         setMissingParts(null);
+
+        const names = rows.map((r) => r.devicename).filter(Boolean);
         if (names.length === 0) return;
+        
+        if (!beginWrite()) {
+            toast?.info?.("Part records saved. Refresh to recalculate doable.", { id: "parts-saved-no-recalc" });
+            return;
+        }
+
         await withUpdating(mutate(route("loading-plan.parts.recalculate"), {
             body: { part_names: names, scheduled_date: date },
         })).then(applyRecalc).catch((err) => reportError(err, "Saved, but couldn't recalculate doable. Refresh to see it."));
-    }, [beginWrite, withUpdating, mutate, date, applyRecalc, reportError]);
+    }, [beginWrite, withUpdating, toast, mutate, date, applyRecalc, reportError]);
+
+    const handleSchedulePickups = useCallback(async (pickups) => {
+        const release = holdLock();                      // one lock for submit + reload
+        try {
+            if (!beginWrite()) throw new Error("Still saving…");
+            if (pickups.length === 0) {
+                toast?.error?.("Pickup is Empty");
+                throw new Error();
+            }
+
+            const result = await mutate(route("loading-plan.schedule-pickup"), {
+                body: { date, pickups },
+            });
+
+            await new Promise((resolve) =>
+                router.reload({
+                    preserveScroll: true,
+                    onSuccess: () => setStaleInfo(null),
+                    onFinish: resolve,
+                    onError: () => {throw new Error()},
+                }),
+            );
+
+            const unplaced = result?.unassigned?.length ?? 0;
+            const unmatched = result?.unmatched_part_names?.length ?? 0;
+            if (unplaced || unmatched) {
+                toast?.info?.(`${unplaced} lot(s) couldn't be placed. ${unmatched} part name(s) weren't found in the part list.`);
+            } else {
+                toast?.success?.("Pickups scheduled.");
+            }
+            return result;
+        } catch (err) {
+            reportError(err, "Couldn't schedule the pickups.");
+            throw err;                                   // keeps the modal open
+        } finally {
+            release();
+        }
+    }, [beginWrite, holdLock, mutate, date, router, toast, reportError]);
 
     return (
         <div
@@ -1914,6 +1966,7 @@ export default function Deemo({
                     // onConfirm={({ targetLotEntryId, sourceLotEntryId }) =>
                     //     onMergeRows({ targetLotEntryId, sourceLotEntryId })
                     // }
+                    onSubmit={handleSchedulePickups}
                     onClose={() => pickupInsertModalRef.current?.close()}
                 />
             )}
@@ -1941,6 +1994,8 @@ export default function Deemo({
                                         <button
                                             type="button"
                                             onClick={() => {
+                                                if (isSaving()) return;
+
                                                 const release = holdLock();
                                                 router.get(route("import.index"), {}, {
                                                     preserveScroll: true,
@@ -2134,7 +2189,7 @@ export default function Deemo({
                                 </div>
                             </fieldset>
 
-                            <button
+                            {/* <button
                                 className="btn btn-sm rounded-box btn-secondary"
                                 onClick={() =>
                                     document
@@ -2146,7 +2201,7 @@ export default function Deemo({
                                 <span>
                                     {disseminationSummary?.unplaced?.length}
                                 </span>
-                            </button>
+                            </button> */}
 
                             <button className="btn btn-sm z-50" onClick={() => search.openSearch()}>
                                 <BsSearch size={16} />
@@ -2206,14 +2261,14 @@ export default function Deemo({
                                 inputRef={search.searchInputRef}
                             />
                         )}
+                        {staleInfo && !readOnly && (
+                            <div role="alert" className="alert alert-warning alert-soft my-2 flex justify-between">
+                                <span>Someone changed this plan after you loaded it. Your last change may have been reverted. Refresh to get the latest rows before editing.</span>
+                                <button className="btn btn-sm btn-warning" onClick={handleRefresh}>Refresh</button>
+                            </div>
+                        )}
                         {activePackage === "Bake" ? (
                             <div className="border-none" style={{ position: "relative" }}>
-                                {staleInfo && !readOnly && (
-                                    <div role="alert" className="alert alert-warning alert-soft my-2 flex justify-between">
-                                        <span>Someone changed this plan after you loaded it. Your last change may have been reverted. Refresh to get the latest rows before editing.</span>
-                                        <button className="btn btn-sm btn-warning" onClick={handleRefresh}>Refresh</button>
-                                    </div>
-                                )}
 
                                 <DataGrid
                                     ref={gridRef}
@@ -2573,6 +2628,7 @@ export default function Deemo({
                             </form>
                             <button
                                 className="btn btn-primary"
+                                disabled={writesLocked}
                                 onClick={handleConfirmBlock}
                             >
                                 Add Block

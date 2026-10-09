@@ -15,7 +15,7 @@ import {
     useRef,
     useState,
 } from "react";
-import { DataGrid, renderHeaderCell, renderTextEditor, SelectColumn } from "react-data-grid";
+import { DataGrid, renderHeaderCell, renderTextEditor } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 
 // The fields the system actually cares about -- only enforced at submit time.
@@ -384,9 +384,12 @@ function makeColumn(index) {
     };
 }
 
-function emptyRow(id, columnCount) {
+// columnKeys must be an ARRAY of column key strings (e.g. ["col0", "col1"]).
+function emptyRow(id, columnKeys) {
     const row = { id };
-    for (let i = 0; i < columnCount; i++) row[`col${i}`] = "";
+    columnKeys.forEach((key) => {
+        row[key] = "";
+    });
     return row;
 }
 
@@ -443,33 +446,42 @@ function parseHtmlTable(html) {
 const INITIAL_COLUMN_COUNT = 8; // just a comfortable starting width, grows as needed
 const INITIAL_ROW_COUNT = 10;
 
+const initialKeys = () => Array.from({ length: INITIAL_COLUMN_COUNT }, (_, i) => `col${i}`);
+
+const makeInitialRows = () =>
+    Array.from({ length: INITIAL_ROW_COUNT }, (_, i) => emptyRow(i, initialKeys()));
+
 const PickupInsertModal = forwardRef(function PickupInsertModal(
-    { onClose },
+    { onSubmit, onClose },
     ref,
 ) {
     const nextRowIndex = useRef(INITIAL_ROW_COUNT);
+    const nextColIndex = useRef(INITIAL_COLUMN_COUNT);
 
     const [columns, setColumns] = useState(() =>
         Array.from({ length: INITIAL_COLUMN_COUNT }, (_, i) => makeColumn(i)),
     );
 
-    const [rows, setRows] = useState(() =>
-        Array.from({ length: INITIAL_ROW_COUNT }, (_, i) =>
-            emptyRow(i, INITIAL_COLUMN_COUNT),
-        ),
-    );
-
-    const handleAddRowAtBottom = () => {
-        // Get current ID and increment the ref for the next addition
-        const newId = nextRowIndex.current;
-        nextRowIndex.current += 1;
-
-        const newRow = emptyRow(newId, INITIAL_COLUMN_COUNT);
-
-        setRows((prevRows) => [...prevRows, newRow]);
-    };
+    const [rows, setRows] = useState(makeInitialRows);
 
     const [expediteRows, setExpediteRows] = useState(() => new Set());
+    const [mapping, setMapping] = useState({}); // colKey -> REQUIRED_FIELDS key | "ignore"
+    const [showClearConfirm, setShowClearConfirm] = useState(false);
+    const [apiFilledCells, setApiFilledCells] = useState(() => new Set()); // "rowId:colKey"
+    const [submitting, setSubmitting] = useState(false);
+    const selectedPositionRef = useRef({ rowIdx: 0, colIdx: 0 });
+    const manualOverridesRef = useRef(new Set()); // colKeys the user has mapped by hand
+    const prevPartnamesRef = useRef({}); // rowId -> last-seen partname value
+    const lookupCacheRef = useRef({}); // partname -> details | null
+    const inFlightRef = useRef(new Set());
+
+    const handleAddRowAtBottom = () => {
+        const newId = nextRowIndex.current++;
+        setRows((prevRows) => [
+            ...prevRows,
+            emptyRow(newId, columns.map((c) => c.key)),
+        ]);
+    };
 
     const toggleExpediteRow = useCallback((rowId, checked) => {
         setExpediteRows((prev) => {
@@ -478,28 +490,20 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
             else next.delete(rowId);
             return next;
         });
-    }, []); // Empty deps because functional state updater setExpediteRows is used
+    }, []);
 
-    const toggleExpediteAll = useCallback((checked) => {
-        if (checked) {
-            setExpediteRows(new Set(rows.map((r) => r.id)));
-        } else {
-            setExpediteRows(new Set());
-        }
-    }, [rows]);
+    const toggleExpediteAll = useCallback(
+        (checked) => {
+            if (checked) {
+                setExpediteRows(new Set(rows.map((r) => r.id)));
+            } else {
+                setExpediteRows(new Set());
+            }
+        },
+        [rows],
+    );
 
     const isAllExpedite = rows.length > 0 && expediteRows.size === rows.length;
-
-    const [mapping, setMapping] = useState({}); // colKey -> REQUIRED_FIELDS key | "ignore"
-    const [showClearConfirm, setShowClearConfirm] = useState(false);
-    const [apiFilledCells, setApiFilledCells] = useState(() => new Set()); // "rowId:colKey"
-
-    const selectedPositionRef = useRef({ rowIdx: 0, colIdx: 0 });
-    const nextRowId = useRef(INITIAL_ROW_COUNT);
-    const manualOverridesRef = useRef(new Set()); // colKeys the user has mapped by hand
-    const prevPartnamesRef = useRef({}); // rowId -> last-seen partname value
-    const lookupCacheRef = useRef({}); // partname -> details | null
-    const inFlightRef = useRef(new Set());
 
     // Require a small pointer movement before a drag starts, so clicking a
     // header to sort/select doesn't get eaten by dnd-kit.
@@ -551,7 +555,7 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
 
             let pasteGrid = html ? parseHtmlTable(html) : null;
             if (!pasteGrid) {
-                pasteGrid = text
+                pasteGrid = (text || "")
                     .replace(/\r\n/g, "\n")
                     .replace(/\r/g, "\n")
                     .split("\n")
@@ -584,26 +588,28 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                           ...columns,
                           ...Array.from(
                               { length: neededColumnCount - columns.length },
-                              (_, i) => makeColumn(columns.length + i),
+                              () => makeColumn(nextColIndex.current++),
                           ),
                       ];
 
             const paddedRows = rows.map((r) => {
                 const row = { ...r };
-                for (let i = 0; i < neededColumnCount; i++) {
-                    if (!(`col${i}` in row)) row[`col${i}`] = "";
-                }
+                newColumns.forEach((c) => {
+                    if (!(c.key in row)) row[c.key] = "";
+                });
                 return row;
             });
 
             pasteGrid.forEach((lineCells, r) => {
                 const targetRowIdx = startRow + r;
                 while (targetRowIdx >= paddedRows.length) {
-                    paddedRows.push(emptyRow(nextRowId.current++, neededColumnCount));
+                    paddedRows.push(
+                        emptyRow(nextRowIndex.current++, newColumns.map((c) => c.key)),
+                    );
                 }
                 lineCells.forEach((cellValue, c) => {
                     const targetColIdx = startCol + c;
-                    paddedRows[targetRowIdx][`col${targetColIdx}`] = cellValue;
+                    paddedRows[targetRowIdx][newColumns[targetColIdx].key] = cellValue;
                 });
             });
 
@@ -617,7 +623,8 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                 setMapping((prev) => {
                     const next = { ...prev };
                     Object.entries(headerFieldsByIndex).forEach(([idx, field]) => {
-                        const colKey = `col${startCol + Number(idx)}`;
+                        const colKey = newColumns[startCol + Number(idx)]?.key;
+                        if (!colKey) return;
                         next[colKey] = field;
                         manualOverridesRef.current.add(colKey);
                     });
@@ -668,50 +675,62 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
         });
     }, []);
 
-    const deleteRow = useCallback((rowId) => {
-        setRows((prev) => {
-            const filtered = prev.filter((r) => r.id !== rowId);
+    const deleteRow = useCallback(
+        (rowId) => {
+            setRows((prev) => {
+                const filtered = prev.filter((r) => r.id !== rowId);
 
-            // If no rows remain after deletion, generate a new empty row
-            if (filtered.length === 0) {
-                const newId = nextRowIndex.current;
-                nextRowIndex.current += 1;
-                return [emptyRow(newId, INITIAL_COLUMN_COUNT)];
-            }
-
-            return filtered;
-        });
-
-        setApiFilledCells((prev) => {
-            const next = new Set(prev);
-            [...next].forEach((entry) => {
-                if (entry.startsWith(`${rowId}:`)) next.delete(entry);
+                // If no rows remain after deletion, generate a new empty row
+                if (filtered.length === 0) {
+                    return [
+                        emptyRow(nextRowIndex.current++, columns.map((c) => c.key)),
+                    ];
+                }
+                return filtered;
             });
-            return next;
-        });
 
-        delete prevPartnamesRef.current[rowId];
-    }, [INITIAL_COLUMN_COUNT]);
+            setApiFilledCells((prev) => {
+                const next = new Set(prev);
+                [...next].forEach((entry) => {
+                    if (entry.startsWith(`${rowId}:`)) next.delete(entry);
+                });
+                return next;
+            });
 
-    const updateMapping = (colKey, fieldKey) => {
+            setExpediteRows((prev) => {
+                if (!prev.has(rowId)) return prev;
+                const next = new Set(prev);
+                next.delete(rowId);
+                return next;
+            });
+
+            delete prevPartnamesRef.current[rowId];
+        },
+        [columns],
+    );
+
+    const updateMapping = useCallback((colKey, fieldKey) => {
         manualOverridesRef.current.add(colKey);
         setMapping((m) => ({ ...m, [colKey]: fieldKey }));
-    };
+    }, []);
 
     const clearAll = useCallback(() => {
-        const freshColumns = Array.from({ length: INITIAL_COLUMN_COUNT }, (_, i) => makeColumn(i));
-        setColumns(freshColumns);
-        setRows(Array.from({ length: INITIAL_ROW_COUNT }, (_, i) => emptyRow(i, INITIAL_COLUMN_COUNT)));
+        setColumns(
+            Array.from({ length: INITIAL_COLUMN_COUNT }, (_, i) => makeColumn(i)),
+        );
+        setRows(makeInitialRows());
         setMapping({});
         setApiFilledCells(new Set());
+        setExpediteRows(new Set());
         manualOverridesRef.current = new Set();
         prevPartnamesRef.current = {};
         lookupCacheRef.current = {};
-        nextRowId.current = INITIAL_ROW_COUNT;
+        nextColIndex.current = INITIAL_COLUMN_COUNT;
+        nextRowIndex.current = INITIAL_ROW_COUNT;
         setShowClearConfirm(false);
     }, []);
 
-    // ---- PartName lookup (LC / Package / Body Size auto-fill) ----------
+    // ---- PartName lookup (Package auto-fill) ---------------------------
 
     const partnameColKey = useMemo(
         () => Object.keys(mapping).find((k) => mapping[k] === "partname") || null,
@@ -879,21 +898,20 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                     return classes.join(" ") || undefined;
                 },
             })),
-        [columns, deleteColumn, mapping, apiFilledCells],
+        [columns, deleteColumn, updateMapping, mapping, apiFilledCells],
     );
 
     const gridColumns = useMemo(
         () => [
             rowActionsColumn,
             {
-                key: 'expedite',
-                name: 'Expedite',
+                key: "expedite",
+                name: "Expedite",
                 width: 80,
                 renderHeaderCell: () => (
                     <div className="flex items-center justify-center h-5 w-5 gap-2">
                         <input
                             type="checkbox"
-                            /* Added shrink-0 and aspect-square to lock the dimensions */
                             className="checkbox checkbox-sm shrink-0 aspect-square"
                             checked={isAllExpedite}
                             onChange={(e) => toggleExpediteAll(e.target.checked)}
@@ -905,7 +923,6 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                     <div className="flex items-center justify-center h-5 w-5">
                         <input
                             type="checkbox"
-                            /* Added shrink-0 and aspect-square here as well */
                             className="checkbox checkbox-sm shrink-0 aspect-square"
                             checked={expediteRows.has(row.id)}
                             onChange={(e) => toggleExpediteRow(row.id, e.target.checked)}
@@ -913,12 +930,14 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                     </div>
                 ),
             },
-            ...columnsWithSwap
+            ...columnsWithSwap,
         ],
         [rowActionsColumn, columnsWithSwap, expediteRows, isAllExpedite, toggleExpediteRow, toggleExpediteAll],
     );
 
     const handleSubmit = async () => {
+        if (submitting) return;
+
         const mappedCols = columns.filter(
             (c) => mapping[c.key] && mapping[c.key] !== "ignore",
         );
@@ -933,30 +952,44 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
         const payload = rows
             .filter((row) => !invalidRowIds.has(row.id))
             .filter((row) => mappedCols.some((c) => row[c.key]))
-            .map((row, index) => {
+            .map((row) => {
                 const record = {
-                    isExpedite: expediteRows.has(index),
+                    isExpedite: expediteRows.has(row.id),
                 };
+
                 mappedCols.forEach((c) => {
-                    record[mapping[c.key]] = row[c.key];
+                    const raw = String(row[c.key] ?? "").replace(/\u00a0/g, " ").trim();
+                    record[mapping[c.key]] =
+                        mapping[c.key] === "qty" ? raw.replace(/[,\s]/g, "") : raw;
                 });
                 return record;
             });
-        
+
+        if (payload.length === 0) {
+            alert("There are no complete rows to submit.");
+            return;
+        }
+
+        setSubmitting(true);
+
         try {
-            const { data } = await axios.post(route('loading-plan.schedule-pickup'), {
-                date: new Date().toISOString().split('T')[0],
-                pickups: payload,
-            });
-            onClose(); // or however you want to close/reset on success
-        } catch (err) {
-            console.error('Pickup submit failed', err);
-            // surface err.response?.data to the user — validation errors, unmatched_part_names, etc.
+            await onSubmit?.(payload);
+            clearAll();
+            onClose();
+        } catch {
+            // Caller already toasted; keep the modal open so nothing typed is lost
+        } finally {
+            setSubmitting(false);
         }
     };
 
     return (
-        <dialog ref={ref} id="pickup_insert_modal" className="modal">
+        <dialog
+            ref={ref}
+            id="pickup_insert_modal"
+            className="modal"
+            onCancel={(e) => submitting && e.preventDefault()}
+        >
             <style>{`
                 .cell-ignored { background-color: rgba(239, 68, 68, 0.5) !important; }
                 .cell-api-filled { background-color: rgba(250, 204, 21, 0.5) !important; }
@@ -968,7 +1001,7 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                     <div className="gap-2 flex">
                         <button
                             className="btn btn-sm btn-outline btn-primary"
-                            onClick={() => handleAddRowAtBottom()}
+                            onClick={handleAddRowAtBottom}
                         >
                             Add Row
                         </button>
@@ -1006,17 +1039,17 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
 
                 <div className="modal-action mt-4">
                     <form method="dialog">
-                        <button className="btn" onClick={onClose}>
+                        <button className="btn" onClick={onClose} disabled={submitting}>
                             Cancel
                         </button>
                     </form>
-                    <button className="btn btn-primary" onClick={handleSubmit}>
+                    <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
                         Submit
                     </button>
                 </div>
             </div>
 
-            <form method="dialog" className="modal-backdrop">
+            <form method="dialog" className="modal-backdrop" disabled={submitting}>
                 <button onClick={onClose}>close</button>
             </form>
 

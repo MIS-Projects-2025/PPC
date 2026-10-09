@@ -7,7 +7,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 export function useDragReorder({
     dataRows,
     update,
-    isLocked,
     withUpdating,
     beginWrite,
     mutate,
