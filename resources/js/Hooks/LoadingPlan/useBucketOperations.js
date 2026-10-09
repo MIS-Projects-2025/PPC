@@ -139,7 +139,7 @@ export function useBucketOperations({
 
     const createBucket = useCallback(
         async ({ label, machine = null }) => {
-            if (!beginWrite()) return;
+            if (!beginWrite()) return false;
 
             const bucket = await withUpdating(
                 mutate(route("loading-plan.buckets.store"), { body: { location: selectedLocation, label, machine } }),

@@ -209,7 +209,7 @@ export function useBulkOperations({
 
     const handleRework = useCallback(
         (row) => {
-            if (!beginWrite()) return;
+            if (!beginWrite()) return false;
 
             if (!row || isBlockRow(row) || !row.entry_id || row.machine === null) return;
 

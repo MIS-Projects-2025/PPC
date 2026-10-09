@@ -7,6 +7,7 @@ export function useNonMachineOperations({
     store,
     serverNonMachines,
     update,
+    beginWrite,
     withUpdating,
     mutate,
     toast,
@@ -21,6 +22,8 @@ export function useNonMachineOperations({
 
     const createNonMachine = useCallback(
         async (name) => {
+            if (!beginWrite()) return;
+
             try {
                 const created = await withUpdating(
                     mutate(route("loading-plan.non-machines.store"), {
@@ -35,11 +38,13 @@ export function useNonMachineOperations({
                 return null;
             }
         },
-        [withUpdating, mutate, selectedLocation, date, toast],
+        [beginWrite, withUpdating, mutate, selectedLocation, date, toast],
     );
 
     const renameNonMachine = useCallback(
         async (id, name) => {
+            if (!beginWrite()) return;
+
             const oldName = nonMachineList.find((n) => n.id === id)?.name;
             setNonMachineList((prev) => prev.map((n) => (n.id === id ? { ...n, name } : n)));
             try {
@@ -55,12 +60,14 @@ export function useNonMachineOperations({
                 toast?.error?.("Couldn't rename it, reverted.");
             }
         },
-        [nonMachineList, withUpdating, mutate, toast],
+        [nonMachineList, beginWrite, withUpdating, mutate, toast],
     );
 
     // Lots go back to Unassigned, blocks (and rework rows) are deleted.
     const deleteNonMachine = useCallback(
         async (id) => {
+            if (!beginWrite()) return;
+            
             const key = `nm:${id}`;
             try {
                 const res = await withUpdating(
@@ -102,7 +109,7 @@ export function useNonMachineOperations({
                 toast?.error?.(err?.message ?? "Couldn't delete the non-machine.");
             }
         },
-        [withUpdating, mutate, update, store, setIsDirty, toast],
+        [beginWrite, withUpdating, mutate, update, store, setIsDirty, toast],
     );
 
     return { nonMachineList, createNonMachine, renameNonMachine, deleteNonMachine };

@@ -475,12 +475,16 @@ export default function Deemo({
 
     const beginWrite = useCallback(() => {
         if (readOnly) return false;
-        if (isLocked()) {
+        if (inFlightRef.current > 0) {
             toast?.info?.("Still saving the previous change…", { id: "write-locked" });
             return false;
         }
+        if (!!staleRef.current) {
+            toast?.info?.("This plan has been changed somewhere by someone. Refresh first");
+            return false;
+        }
         return true;
-    }, [readOnly, isLocked, toast]);
+    }, [readOnly, toast]);
 
     const mutate = useCallback((...args) => rawMutate(...args).catch((err) => {
         const status = err?.status ?? err?.response?.status;
@@ -509,30 +513,35 @@ export default function Deemo({
         return Promise.resolve(maybePromise).finally(release);
     }, [holdLock]);
 
-    const handleRefresh = () => {
-        if (isLocked()) return;
+    const isSaving = useCallback(() => inFlightRef.current > 0, []);
 
+    const handleRefresh = () => {
+        if (isSaving()) return;
         router.reload({ preserveScroll: true, onSuccess: () => setStaleInfo(null) });
     };
 
     const handleDateChange = (newDate) => {
-        if (isLocked()) return;
+        if (isSaving()) return;
 
         setSelectedDate(newDate);
+        const release = holdLock();
         router.get(route(readOnly ? "loading-plan.readonly" : "loading-plan.index"), {
             date: newDate.toISOString().slice(0, 10),
             location: selectedLocation,
+        }, {
+            preserveScroll: true, replace: true, onFinish: release
         });
     };
 
     const setLocation = (line) => {
-        if (isLocked()) return;
+        if (isSaving()) return;
         
         if (line === selectedLocation) return;
+        const release = holdLock();
         router.get(
             route(readOnly ? "loading-plan.readonly" : "loading-plan.index"),
             { date, location: line },
-            { preserveScroll: true, replace: true },
+            { preserveScroll: true, replace: true, onFinish: release },
         );
     };
 
@@ -658,7 +667,7 @@ export default function Deemo({
 
     const { nonMachineList, createNonMachine, renameNonMachine, deleteNonMachine } =
         useNonMachineOperations({
-            store: useLoadingPlanStore, serverNonMachines, update, withUpdating, mutate, toast,
+            store: useLoadingPlanStore, serverNonMachines, update, beginWrite, withUpdating, mutate, toast,
             date, selectedLocation, setIsDirty,
         });
 
@@ -692,6 +701,8 @@ export default function Deemo({
 
     const autoSortMachine = async ({ machine }) => {
         try {
+            if (!beginWrite()) return;
+            
             const res = await mutate(
                 route("loading-plan.auto-sort", { machine }),
                 { method: "POST", body: { scheduled_date: date } },
@@ -750,7 +761,9 @@ export default function Deemo({
 
     const handleStatusChange = useCallback(
         (newStatus) => {
+            if (!beginWrite()) return;
             if (readOnly) return;
+
             const normalizedStatus = newStatus === "NONE" ? null : newStatus;
             const entryId = statusMenu.entryId;
             // entryId here IS a backend entry_id (see handleStatusClick /
@@ -802,7 +815,7 @@ export default function Deemo({
                     toast?.error?.("Couldn't save status change — reverted.");
                 });
         },
-        [readOnly, statusMenu, update, dataRows, date, withUpdating, mutate, toast],
+        [readOnly, statusMenu, update, dataRows, date, beginWrite, withUpdating, mutate, toast],
     );
 
     const syncServerFields = useLoadingPlanStore.getState().syncServerFields;
@@ -844,6 +857,7 @@ export default function Deemo({
     // ── Add lot / add block ──────────────────────────────────────────────
     const handleAddRow = useCallback(
         (machine, { partName, packageName, qty, beforeEntryId = null, afterEntryId = null } = {}) => {
+            if (!beginWrite()) Promise.reject(new Error("Still saving…"));
             if (readOnly) return Promise.reject(new Error("Read-only view"));
             const trimmedPart = (partName ?? "").trim();
             if (!trimmedPart) return Promise.reject(new Error("Part name is required"));
@@ -882,7 +896,7 @@ export default function Deemo({
                     throw err;
                 });
         },
-        [readOnly, activePackage, packageGroups, baseTimes, date, update, withUpdating, mutate, toast],
+        [readOnly, activePackage, packageGroups, baseTimes, date, update, beginWrite, withUpdating, mutate, toast],
     );
 
     const handleAddBlock = useCallback((machine) => {
@@ -896,6 +910,7 @@ export default function Deemo({
 
     const saveBlock = useCallback(
         (machine, label, duration, { beforeEntryId = null, afterEntryId = null } = {}) => {
+            if (!beginWrite()) Promise.reject(new Error("Still saving…"));
             if (readOnly) return Promise.reject(new Error("Read-only view"));
             return withUpdating(
                 mutate(route("loading-plan.blocks.store"), {
@@ -922,7 +937,7 @@ export default function Deemo({
                     throw err;
                 });
         },
-        [readOnly, baseTimes, date, update, withUpdating, mutate, toast],
+        [readOnly, baseTimes, date, update, beginWrite, withUpdating, mutate, toast],
     );
 
     // NOTE: no stub here — this handler never talks to the backend itself
@@ -1585,6 +1600,7 @@ export default function Deemo({
         baseTimes,
         date,
         update,
+        beginWrite,
         withUpdating,
         mutate,
         toast,
@@ -1605,11 +1621,11 @@ export default function Deemo({
         if (parked.length) {
             unparkRows(parked); // same call the drag path uses (onUnpark)
         }
-        
+
         if (rest.length) {
             const returned = rest.filter((r) => r.entry_id && !isBlockRow(r) && !r.is_rework && isOtherLoc(r));
-            handleBulkDelete();
-            if (returned.length) {
+            const isSucceed = handleBulkDelete();
+            if (returned.length && isSucceed !== false) {
                 const locs = [...new Set(returned.map((r) => r.location))].join("/");
                 toast?.info?.(`${returned.length} lot(s) will return to ${locs} Unassigned. Not visible under ${selectedLocation}.`);
             }
@@ -1802,6 +1818,8 @@ export default function Deemo({
     }, [toast]);
 
     const handleSaveOverride = useCallback((doable) => {
+        if (!beginWrite()) return;
+
         const row = doableEditRow;
         return withUpdating(
             mutate(route("loading-plan.entries.doable", { id: row.entry_id }), {
@@ -1815,7 +1833,7 @@ export default function Deemo({
                 setIsDirty(true);
             })
             .catch((err) => { reportError(err, "Couldn't save doable."); throw err; });
-    }, [doableEditRow, withUpdating, mutate, syncServerFields, update, date, setIsDirty, reportError]);
+    }, [doableEditRow, beginWrite, withUpdating, mutate, syncServerFields, update, date, setIsDirty, reportError]);
 
     const applyRecalc = useCallback(({ entries, affected_timings }) => {
         syncServerFields?.((entries ?? []).map(doablePatch));
@@ -1823,14 +1841,16 @@ export default function Deemo({
         setIsDirty(true);
     }, [syncServerFields, update, date, setIsDirty]);
 
-    const handleSaveRecipe = useCallback((partName, recipe) =>
+    const handleSaveRecipe = useCallback((partName, recipe) => {
+        if (!beginWrite()) return;
+
         withUpdating(mutate(route("loading-plan.part-recipe.update"), {
             method: "PATCH",
             body: { part_name: partName, recipe, scheduled_date: date },
         }))
             .then(applyRecalc)
-            .catch((err) => { reportError(err, "Couldn't save recipe."); throw err; }),
-    [withUpdating, mutate, date, applyRecalc, reportError]);
+            .catch((err) => { reportError(err, "Couldn't save recipe."); throw err; });
+    }, [beginWrite, withUpdating, mutate, date, applyRecalc, reportError]);
 
     // ── missing part names ──
     const [missingParts, setMissingParts] = useState(null);
@@ -1862,6 +1882,8 @@ export default function Deemo({
     }, [date, toast]);
 
     const handleMissingPartsSaved = useCallback(async (rows) => {
+        if (!beginWrite()) return;
+
         const names = rows.map((r) => r.devicename).filter(Boolean);
         document.getElementById("missing_parts_modal")?.close();
         setMissingParts(null);
@@ -1869,7 +1891,7 @@ export default function Deemo({
         await withUpdating(mutate(route("loading-plan.parts.recalculate"), {
             body: { part_names: names, scheduled_date: date },
         })).then(applyRecalc).catch((err) => reportError(err, "Saved, but couldn't recalculate doable. Refresh to see it."));
-    }, [withUpdating, mutate, date, applyRecalc, reportError]);
+    }, [beginWrite, withUpdating, mutate, date, applyRecalc, reportError]);
 
     return (
         <div
@@ -1918,9 +1940,13 @@ export default function Deemo({
                                     {!readOnly && (
                                         <button
                                             type="button"
-                                            onClick={() =>
-                                                router.get(route("import.index"))
-                                            }
+                                            onClick={() => {
+                                                const release = holdLock();
+                                                router.get(route("import.index"), {}, {
+                                                    preserveScroll: true,
+                                                    onFinish: release
+                                                })
+                                            }}
                                             className="btn p-0 btn-link"
                                         >
                                             Go to Import
@@ -2576,8 +2602,11 @@ export default function Deemo({
                             <form method="dialog"><button className="btn btn-ghost">Cancel</button></form>
                             <button className="btn btn-primary" disabled={!bucketLabel.trim() || writesLocked}
                                 onClick={async () => {
-                                    await createBucket({ label: bucketLabel.trim(), machine: bucketModalMachine });
-                                    document.getElementById("add_bucket_modal")?.close();
+                                    const isSucceed = await createBucket({ label: bucketLabel.trim(), machine: bucketModalMachine });
+
+                                    if (isSucceed !== false) {
+                                        document.getElementById("add_bucket_modal")?.close();
+                                    }
                                 }}>Add</button>
                         </div>
                     </div>
@@ -2711,17 +2740,24 @@ export default function Deemo({
 
                                 setIsRunningScheduler(true);
 
-                                router.post(
-                                    "/loading-plan/run-scheduler", 
-                                    { date, location: selectedLocation }, 
-                                    { 
-                                        preserveScroll: true, 
-                                        onFinish: () => { 
-                                            release(); 
-                                            setIsRunningScheduler(false); 
-                                        } 
-                                    }
-                                );
+                                try {
+                                    router.post(
+                                        "/loading-plan/run-scheduler", 
+                                        { date, location: selectedLocation }, 
+                                        { 
+                                            preserveScroll: true, 
+                                            onFinish: () => { 
+                                                release(); 
+                                                setIsRunningScheduler(false); 
+                                            } 
+                                        }
+                                    );
+                                } catch (e) { 
+                                    release(); 
+                                    setIsRunningScheduler(false); 
+                                    throw e; 
+                                }
+
                             }}
                         >
                             {isRunningScheduler ? "Running…" : "Run Scheduler"}

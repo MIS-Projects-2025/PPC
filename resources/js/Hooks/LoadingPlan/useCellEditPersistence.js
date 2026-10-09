@@ -12,6 +12,7 @@ export function useCellEditPersistence({
     baseTimes,
     date,
     update,
+    beginWrite,
     withUpdating,
     mutate,
     toast,
@@ -20,6 +21,8 @@ export function useCellEditPersistence({
 }) {
     return useCallback(
         (updatedRows, { indexes, column }) => {
+            if (!beginWrite()) return;
+
             const validChangedIndexes = indexes.filter((index) => displayRows[index]?.__type === "data");
             if (validChangedIndexes.length === 0) return;
 

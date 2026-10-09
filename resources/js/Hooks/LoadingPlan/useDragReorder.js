@@ -74,7 +74,7 @@ export function useDragReorder({
 
     const handleDragStart = useCallback(
         (event) => {
-            if (isLocked()) { refusedRef.current = true; return; };
+            if (!beginWrite()) { refusedRef.current = true; return; }
 
             const group = groupFor(event.active.id);
             const problem = group.length > 1 ? groupProblem(group) : null;
@@ -87,7 +87,7 @@ export function useDragReorder({
             setActiveId(event.active.id);
             if (group.length <= 1) clearSelection();
         },
-        [groupFor, groupProblem, toast, isLocked, clearSelection],
+        [groupFor, groupProblem, toast, beginWrite, clearSelection],
     );
 
     const draggedCount = useMemo(
@@ -255,13 +255,12 @@ export function useDragReorder({
 
     const handleDragEnd = useCallback(
         (event) => {
-            if (!beginWrite()) return;
-
             setActiveId(null);
             setHoveredRowId(null);
             if (refusedRef.current) { refusedRef.current = false; return; }
             const { active, over } = event;
             if (!over) return;
+            if (!beginWrite()) return;
 
             const overId = String(over.id);
 
