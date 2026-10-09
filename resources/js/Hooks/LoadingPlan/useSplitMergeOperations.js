@@ -20,7 +20,7 @@ import { useCallback, useState } from "react";
  * stub. Removed here; loadMergeHistory now behaves like loadSplitHistory
  * (loading stays true until the fetch settles).
  */
-export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate, date, toast, setIsDirty, syncServerFields }) {
+export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpdating, mutate, date, toast, setIsDirty, syncServerFields }) {
     const [currentLotId, setCurrentLotId] = useState(null);
     const [splitHistoryData, setSplitHistoryData] = useState(null);
     const [mergeHistoryData, setMergeHistoryData] = useState(null);
@@ -71,6 +71,8 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
 
     const revertSplit = useCallback(
         ({ splitId, revertedBy, childLotId }, { onDone } = {}) => {
+            if (!beginWrite()) return;
+
             const childRow = dataRows.find((r) => r.lot_id === childLotId);
             if (!childRow) {
                 toast?.error?.("Couldn't find the split lot — please refresh.");
@@ -123,11 +125,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 })
                 .finally(() => onDone?.());
         },
-        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const revertMerge = useCallback(
         ({ targetLotId, sourceLotId }, { onDone } = {}) => {
+            if (!beginWrite()) return;
+
             const targetRow = dataRows.find((r) => r.lot_id === targetLotId);
             const sourceRow = dataRows.find((r) => r.lot_id === sourceLotId);
             if (!targetRow || !sourceRow) {
@@ -194,11 +198,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                 })
                 .finally(() => onDone?.());
         },
-        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const mergeRows = useCallback(
         ({ targetLotEntryId, sourceLotEntryId }) => {
+            if (!beginWrite()) return;
+
             const targetRow = dataRows.find((r) => r.entry_id === targetLotEntryId);
             const sourceRow = dataRows.find((r) => r.entry_id === sourceLotEntryId);
             if (!targetRow || !sourceRow) {
@@ -242,11 +248,13 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                     toast?.error?.(err?.message ?? "Couldn't merge the lots — please try again.");
                 });
         },
-        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const splitRow = useCallback(
         ({ parentEntryId, childLotId, childQty, targetMachine, beforeEntryId, afterEntryId }) => {
+            if (!beginWrite()) return;
+
             const parentRow = dataRows.find((r) => r.entry_id === parentEntryId);
             if (!parentRow) {
                 toast?.error?.("Couldn't find the lot to split — please refresh.");
@@ -296,7 +304,7 @@ export function useSplitMergeOperations({ dataRows, update, withUpdating, mutate
                     toast?.error?.(err?.message ?? "Couldn't split the lot — please try again.");
                 });
         },
-        [dataRows, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     return {

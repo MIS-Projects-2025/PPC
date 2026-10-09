@@ -6,6 +6,7 @@ export function useBulkOperations({
     dataRows,
     selectedRows,
     update,
+    beginWrite,
     withUpdating,
     mutate,
     toast,
@@ -16,6 +17,8 @@ export function useBulkOperations({
 }) {
     const runFieldUpdate = useCallback(
         ({ filter, fields, applyLocal, conflictLabel, afterSuccess }) => {
+            if (!beginWrite()) return;
+
             const targets = dataRows.filter(filter);
             if (targets.length === 0) return;
 
@@ -60,7 +63,7 @@ export function useBulkOperations({
                     }
                 });
         },
-        [dataRows, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkTag = useCallback(
@@ -104,6 +107,8 @@ export function useBulkOperations({
 
     const handleBulkTransfer = useCallback(
         (targetMachine) => {
+            if (!beginWrite()) return;
+
             const selected = dataRows.filter((r) => selectedRows.has(r.id));
             const lotEntryIds = selected.filter((r) => !isBlockRow(r) && r.entry_id).map((r) => r.entry_id);
             const unplannedLotIds = selected.filter((r) => !isBlockRow(r) && !r.entry_id && r.lot_id).map((r) => r.lot_id);
@@ -152,10 +157,11 @@ export function useBulkOperations({
                     toast?.error?.(err?.message ?? "Couldn't transfer the selected rows — reverted.");
                 });
         },
-        [selectedRows, update, dataRows, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [selectedRows, update, dataRows, date, clearSelection, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkDelete = useCallback(() => {
+        if (!beginWrite()) return;  
         console.log("🚀 ~ useBulkOperations ~ selectedRows:", selectedRows)
         const targets = dataRows.filter((r) => {
             return selectedRows.has(r.id) && r.entry_id;
@@ -199,10 +205,12 @@ export function useBulkOperations({
                 update(() => prevSnapshot, true);
                 toast?.error?.("Couldn't delete/unassign — reverted.");
             });
-    }, [selectedRows, update, dataRows, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
+    }, [selectedRows, update, dataRows, date, clearSelection, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
 
     const handleRework = useCallback(
         (row) => {
+            if (!beginWrite()) return;
+
             if (!row || isBlockRow(row) || !row.entry_id || row.machine === null) return;
 
             withUpdating(
@@ -222,7 +230,7 @@ export function useBulkOperations({
                     toast?.error?.(err?.data?.message ?? "Couldn't create the rework row.");
                 });
         },
-        [withUpdating, mutate, update, date, setIsDirty, clearSelection, toast],
+        [beginWrite, withUpdating, mutate, update, date, setIsDirty, clearSelection, toast],
     );
 
     return {

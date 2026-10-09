@@ -29,10 +29,12 @@ function optimisticPositions(rows, bucketId, lotIds, prevLotId, nextLotId) {
 }
 
 export function useBucketOperations({
-    store, dataRows, selectedRows, update, withUpdating, mutate, toast, date, selectedLocation, setIsDirty, clearSelection, setBucketList,
+    store, dataRows, selectedRows, update, withUpdating, beginWrite, mutate, toast, date, selectedLocation, setIsDirty, clearSelection, setBucketList,
 }) {
     const parkRows = useCallback(
         (rows, bucketId, { prevLotId = null, nextLotId = null } = {}) => {
+            if (!beginWrite()) return;
+            
             const lots = rows.filter((r) => !isBlockRow(r) && r.lot_id && !r.is_leaked);
 
             if (lots.length === 0) {
@@ -96,11 +98,13 @@ export function useBucketOperations({
                     toast?.error?.(err?.message ?? "Couldn't move to group — reverted.");
                 });
         },
-        [store, dataRows, update, withUpdating, mutate, toast, date, setIsDirty, clearSelection],
+        [store, dataRows, update, withUpdating, beginWrite, mutate, toast, date, setIsDirty, clearSelection],
     );
 
     const unparkRows = useCallback(
         (rows) => {
+            if (!beginWrite()) return;
+
             const lots = rows.filter((r) => r.bucket_id != null && r.lot_id && !r.is_leaked);
             const rowIds = new Set(lots.map((r) => r.id));
 
@@ -121,7 +125,7 @@ export function useBucketOperations({
                     toast?.error?.("Couldn't remove from group — reverted.");
                 });
         },
-        [store, dataRows, withUpdating, mutate, toast, date, setIsDirty, clearSelection],
+        [store, dataRows, withUpdating, beginWrite, mutate, toast, date, setIsDirty, clearSelection],
     );
 
     const handleBulkPark = useCallback(
@@ -135,29 +139,35 @@ export function useBucketOperations({
 
     const createBucket = useCallback(
         async ({ label, machine = null }) => {
+            if (!beginWrite()) return;
+
             const bucket = await withUpdating(
                 mutate(route("loading-plan.buckets.store"), { body: { location: selectedLocation, label, machine } }),
             );
             setBucketList((prev) => [...prev, bucket]);
         },
-        [withUpdating, mutate, selectedLocation, setBucketList],
+        [withUpdating, beginWrite, mutate, selectedLocation, setBucketList],
     );
 
     const renameBucket = useCallback(
         async (id, label) => {
+            if (!beginWrite()) return;
+
             const bucket = await withUpdating(mutate(route("loading-plan.buckets.update", { bucket: id }), { method: "PATCH", body: { label } }));
             setBucketList((prev) => prev.map((b) => (b.id === id ? bucket : b)));
         },
-        [withUpdating, mutate, setBucketList],
+        [withUpdating, beginWrite, mutate, setBucketList],
     );
 
     const deleteBucket = useCallback(
         async (id) => {
+            if (!beginWrite()) return;
+
             await withUpdating(mutate(route("loading-plan.buckets.destroy", { bucket: id }), { method: "DELETE" }));
             setBucketList((prev) => prev.filter((b) => b.id !== id));
             update((prev) => prev.map((r) => (r.bucket_id === id ? { ...r, bucket_id: null, bucket_position: null } : r)), true);
         },
-        [withUpdating, mutate, setBucketList, update],
+        [withUpdating, beginWrite, mutate, setBucketList, update],
     );
 
     return { parkRows, unparkRows, handleBulkPark, handleBulkUnpark, createBucket, renameBucket, deleteBucket };

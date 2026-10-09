@@ -1,4 +1,5 @@
 import { mergeCompoundResponse } from "@/Lib/LoadingPlan/compoundActions";
+import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import {
     callRevertMerge,
     callRevertSplit,
@@ -9,9 +10,8 @@ import {
 } from "@/Lib/LoadingPlan/splitMergeApi";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import { useCallback, useEffect, useRef } from "react";
-import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 
-export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }) {
+export function useUndoRedoSync({ store, withUpdating, isLocked, dataRows, date, mutate, update, toast }) {
     const dataRowsRef = useRef(dataRows);
     useEffect(() => { dataRowsRef.current = dataRows; }, [dataRows]);
 
@@ -60,21 +60,23 @@ export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }
     }, [store, mutate, update, toast]);
 
     const applyHistoryStep = useCallback(async (direction) => {
-        if (isSyncingRef.current) return;
+        if (isSyncingRef.current || isLocked()) return;
+
         isSyncingRef.current = true;
+
         try {
             const { pendingUndoAction, pendingRedoAction, undo, redo } = store.getState();
             const action = direction === "undo" ? pendingUndoAction() : pendingRedoAction();
 
             if (action?.type === "split" || action?.type === "merge") {
-                await applyCompoundStep(action, direction);
+                await withUpdating(applyCompoundStep(action, direction));
             } else {
-                await applyRowStep(direction === "undo" ? undo : redo);
+                await withUpdating(applyRowStep(direction === "undo" ? undo : redo));
             }
         } finally {
             isSyncingRef.current = false;
         }
-    }, [store, applyRowStep, applyCompoundStep]);
+    }, [store, isLocked, withUpdating, applyRowStep, applyCompoundStep]);
 
     return {
         handleUndo: useCallback(() => applyHistoryStep("undo"), [applyHistoryStep]),

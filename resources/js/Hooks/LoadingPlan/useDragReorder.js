@@ -7,7 +7,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 export function useDragReorder({
     dataRows,
     update,
+    isLocked,
     withUpdating,
+    beginWrite,
     mutate,
     date,
     onReorder,
@@ -72,6 +74,8 @@ export function useDragReorder({
 
     const handleDragStart = useCallback(
         (event) => {
+            if (isLocked()) { refusedRef.current = true; return; };
+
             const group = groupFor(event.active.id);
             const problem = group.length > 1 ? groupProblem(group) : null;
             if (problem) {
@@ -83,7 +87,7 @@ export function useDragReorder({
             setActiveId(event.active.id);
             if (group.length <= 1) clearSelection();
         },
-        [groupFor, groupProblem, toast, clearSelection],
+        [groupFor, groupProblem, toast, isLocked, clearSelection],
     );
 
     const draggedCount = useMemo(
@@ -251,6 +255,8 @@ export function useDragReorder({
 
     const handleDragEnd = useCallback(
         (event) => {
+            if (!beginWrite()) return;
+
             setActiveId(null);
             setHoveredRowId(null);
             if (refusedRef.current) { refusedRef.current = false; return; }
@@ -457,21 +463,14 @@ export function useDragReorder({
                     if (leftBucket) store.getState().reset(store.getState().present.rows);
                 })
                 .catch((err) => {
-                    // NOTE (carried over): still no rollback on failure here —
-                    // preserved as-is per the original comment. Flag separately
-                    // if you want this to restore the pre-drag snapshot too;
-                    // it's the same missing-rollback pattern fixed elsewhere
-                    // in this conversation (bulk transfer, status change, etc.)
-                    // but this file's own comment suggested it might be
-                    // intentional, so left untouched pending your call.
-                    console.error("Failed to persist move/transfer:", err?.message);
+                    console.error("Failed to persist move/transfer:", err);
                     if (leftBucket) store.getState().reset(prevSnapshot);
-                    toast?.error?.(err?.message);
+                    else update(() => prevSnapshot, true);
+                    toast?.error?.(err?.message ?? "Couldn't move the row — reverted.");
                 });
         },
-        [update, date, groupFor, handleGroupDrop, onReorder, collapsedRunsById, onLotTransfer, store, dataRows, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [update, date, groupFor, handleGroupDrop, onReorder, collapsedRunsById, onLotTransfer, store, dataRows, withUpdating, beginWrite, mutate, toast, setIsDirty, syncServerFields],
     );
-
 
     const draggedRow = useMemo(
         () => dataRows.find((r) => r.id === activeId),

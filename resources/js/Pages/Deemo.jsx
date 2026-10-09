@@ -402,10 +402,9 @@ export default function Deemo({
     const [selectedRows, setSelectedRows] = useState(() => new Set());
     const [selectedBakeRows, setSelectedBakeRows] = useState(() => new Set());
     // console.log("🚀 ~ Deemo ~ selectedRows:", selectedRows)
-    const [inFlightCount, setInFlightCount] = useState(0);
     const [, setIsDirty] = useState(false);
     const [statusMenu, setStatusMenu] = useState(null);
-
+    
     // ── Column width overrides (shrink-to-min resize + the "Columns"
     // visibility modal — see the column-decoration block further down,
     // right after `columns` is built). Persisted across reloads the same
@@ -429,18 +428,18 @@ export default function Deemo({
             // ignore write errors (private browsing quota, etc.)
         }
     }, [columnWidths]);
-
+    
     const [collapsedMachines, setCollapsedMachines] = usePersistedSet('collapsedMachines');
     const [collapsedOvens, setCollapsedOvens] = usePersistedSet('collapsedOven');
-
+    
     const addEntryModalRef = useRef(null);
     const splitHistoryModalRef = useRef(null);
     const mergeHistoryModalRef = useRef(null);
     const pickupInsertModalRef = useRef(null);
-
+    
     const [selectedDate, setSelectedDate] = useState(new Date(date));
     const [showAllMachines, setShowAllMachines] = useState(false);
-
+    
     // add-block modal
     const [blockModalMachine, setBlockModalMachine] = useState(null);
     const [blockOption, setBlockOption] = useState("setup");
@@ -451,33 +450,74 @@ export default function Deemo({
         config: { label: "Config", duration: 240 },
         conversion: { label: "Conversion", duration: 360 },
     };
-
+    
     const [placementOfNewEntry, setPlacementOfNewEntry] = useState(null);
-
+    
     const [isExporting, setIsExporting] = useState(false);
-
+    
     // console.log("LOG ~ Deemo.jsx:831 ~ Deemo ~ hoveredRow:", hoveredRow);
-
+    
     function handleInsertRow(rowIdx, position) {
         // position: 'above' | 'below'
         // ...your existing addBlock / createManualLot logic here
     }
-
+    
     // console.log("LOG ~ Deemo.jsx:782 ~ Deemo ~ rowIdxByElement:", rowIdxByElement);
-
-    const isUpdating = inFlightCount > 0;
-
+    
+    
     const [staleInfo, setStaleInfo] = useState(null);
+    
+    const inFlightRef = useRef(0);
+    const staleRef = useRef(null);
+    staleRef.current = staleInfo;
+
+    const isLocked = useCallback(() => inFlightRef.current > 0 || !!staleRef.current, []);
+
+    const beginWrite = useCallback(() => {
+        if (readOnly) return false;
+        if (isLocked()) {
+            toast?.info?.("Still saving the previous change…", { id: "write-locked" });
+            return false;
+        }
+        return true;
+    }, [readOnly, isLocked, toast]);
+
     const mutate = useCallback((...args) => rawMutate(...args).catch((err) => {
         const status = err?.status ?? err?.response?.status;
         if (status === 409 || status === 404) setStaleInfo({ message: err?.message });
         throw err;
     }), [rawMutate]);
 
-    const handleRefresh = () => router.reload({ preserveScroll: true, onSuccess: () => setStaleInfo(null) });
+    const [inFlightCount, setInFlightCount] = useState(0);
+    const isUpdating = inFlightCount > 0;
     const writesLocked = isUpdating || !!staleInfo;
 
+    const holdLock = useCallback(() => {
+        inFlightRef.current += 1;
+        setInFlightCount((c) => c + 1);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            inFlightRef.current -= 1;
+            setInFlightCount((c) => c - 1);
+        };
+    }, []);
+
+    const withUpdating = useCallback((maybePromise) => {
+        const release = holdLock();
+        return Promise.resolve(maybePromise).finally(release);
+    }, [holdLock]);
+
+    const handleRefresh = () => {
+        if (isLocked()) return;
+
+        router.reload({ preserveScroll: true, onSuccess: () => setStaleInfo(null) });
+    };
+
     const handleDateChange = (newDate) => {
+        if (isLocked()) return;
+
         setSelectedDate(newDate);
         router.get(route(readOnly ? "loading-plan.readonly" : "loading-plan.index"), {
             date: newDate.toISOString().slice(0, 10),
@@ -486,6 +526,8 @@ export default function Deemo({
     };
 
     const setLocation = (line) => {
+        if (isLocked()) return;
+        
         if (line === selectedLocation) return;
         router.get(
             route(readOnly ? "loading-plan.readonly" : "loading-plan.index"),
@@ -493,12 +535,6 @@ export default function Deemo({
             { preserveScroll: true, replace: true },
         );
     };
-
-    const withUpdating = useCallback((maybePromise) => {
-        const promise = Promise.resolve(maybePromise);
-        setInFlightCount((c) => c + 1);
-        return promise.finally(() => setInFlightCount((c) => c - 1));
-    }, []);
 
     // ── Seed the undo store from the `data` prop on mount ──────────────────
     useEffect(() => {
@@ -616,7 +652,7 @@ export default function Deemo({
 
     const { parkRows, unparkRows, handleBulkPark, handleBulkUnpark, createBucket, renameBucket, deleteBucket } =
         useBucketOperations({
-            store: useLoadingPlanStore, dataRows, selectedRows, update, withUpdating, mutate, toast,
+            store: useLoadingPlanStore, dataRows, selectedRows, update, withUpdating, beginWrite, mutate, toast,
             date, selectedLocation, setIsDirty, clearSelection, setBucketList,
         });
 
@@ -783,6 +819,7 @@ export default function Deemo({
         dataRows,
         selectedRows,
         update,
+        beginWrite,
         withUpdating,
         toast,
         mutate,
@@ -794,6 +831,8 @@ export default function Deemo({
 
     const { handleUndo, handleRedo, dataRowsRef } = useUndoRedoSync({
         store: useLoadingPlanStore,
+        withUpdating,
+        isLocked,
         dataRows,
         baseTimes,
         date,
@@ -933,7 +972,7 @@ export default function Deemo({
         mergeRows,
         splitRow,
         currentLotId: currentLotIdForSplitMergeHistory,
-    } = useSplitMergeOperations({ dataRows, update, withUpdating, mutate, date, toast, setIsDirty, syncServerFields });
+    } = useSplitMergeOperations({ dataRows, update, beginWrite, withUpdating, mutate, date, toast, setIsDirty, syncServerFields });
 
     const handleShowSplitHistory = useCallback(
         (rootLotId, isParent, isChild, lotId) =>
@@ -1524,9 +1563,13 @@ export default function Deemo({
             if (e.ctrlKey || e.metaKey) {
                 const k = e.key.toLowerCase();
                 if (k === "z" && !e.shiftKey) {
+                    if (!beginWrite()) return;
+                    
                     e.preventDefault();
                     handleUndo();
                 } else if (k === "y" || (k === "z" && e.shiftKey)) {
+                    if (!beginWrite()) return;
+
                     e.preventDefault();
                     handleRedo();
                 }
@@ -1534,7 +1577,7 @@ export default function Deemo({
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [readOnly, openSearch, closeSearch, searchOpen, handleUndo, handleRedo, clearSelection]);
+    }, [readOnly, openSearch, closeSearch, searchOpen, beginWrite, handleUndo, handleRedo, clearSelection]);
 
     const handleRowsChange = useCellEditPersistence({
         dataRows,
@@ -1554,9 +1597,15 @@ export default function Deemo({
         const parked = selected.filter((r) => isParked(r));
         const rest = selected.filter((r) => !isParked(r));
 
+        if (parked.length && rest.length) {
+            toast?.error?.("Select either grouped rows or placed rows, not both.");
+            return;
+        }
+
         if (parked.length) {
             unparkRows(parked); // same call the drag path uses (onUnpark)
         }
+        
         if (rest.length) {
             const returned = rest.filter((r) => r.entry_id && !isBlockRow(r) && !r.is_rework && isOtherLoc(r));
             handleBulkDelete();
@@ -1598,7 +1647,9 @@ export default function Deemo({
         collapsedRunsById,
         dataRows,
         update,
+        isLocked,
         withUpdating,
+        beginWrite,
         mutate,
         date,
         onReorder,
@@ -2655,14 +2706,21 @@ export default function Deemo({
                             className="btn btn-sm btn-primary mb-4 self-start"
                             disabled={isRunningScheduler}
                             onClick={() => {
+                                if (!beginWrite()) return;
+                                const release = holdLock();
+
                                 setIsRunningScheduler(true);
+
                                 router.post(
-                                    "/loading-plan/run-scheduler",
-                                    { date, location: selectedLocation },
-                                    {
-                                        preserveScroll: true,
-                                        onFinish: () => setIsRunningScheduler(false),
-                                    },
+                                    "/loading-plan/run-scheduler", 
+                                    { date, location: selectedLocation }, 
+                                    { 
+                                        preserveScroll: true, 
+                                        onFinish: () => { 
+                                            release(); 
+                                            setIsRunningScheduler(false); 
+                                        } 
+                                    }
                                 );
                             }}
                         >
