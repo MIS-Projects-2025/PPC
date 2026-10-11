@@ -19,7 +19,6 @@ class NonMachineController extends Controller
             'key'            => $n->key(),
             'name'           => $n->name,
             'location'       => $n->location,
-            'scheduled_date' => $n->scheduled_date->toDateString(),
         ];
     }
 
@@ -28,7 +27,6 @@ class NonMachineController extends Controller
         $data = $request->validate([
             'name'           => 'required|string|max:64',
             'location'       => 'required|in:PL1,PL6',
-            'scheduled_date' => 'required|date',
         ]);
 
         return response()->json($this->present(NonMachine::create($data)), 201);
@@ -48,11 +46,10 @@ class NonMachineController extends Controller
     {
         try {
             return response()->json($this->service->deleteNonMachine($nonMachine->id));
-        } catch (LoadingPlanDateFinalizedException $e) {
+        } catch (\Throwable $e) {
             return response()->json([
-                'error'          => 'finalized',
-                'message'        => $e->getMessage(),
-                'scheduled_date' => $e->scheduledDate,
+                'error'   => 'bad_request',
+                'message' => $e->getMessage(),
             ], 422);
         }
     }
@@ -66,12 +63,6 @@ class NonMachineController extends Controller
 
         try {
             return response()->json($this->service->setNonMachineStart($nonMachine->id, $data['time_start']));
-        } catch (LoadingPlanDateFinalizedException $e) {
-            return response()->json([
-                'error'          => 'finalized',
-                'message'        => $e->getMessage(),
-                'scheduled_date' => $e->scheduledDate,
-            ], 422);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         }

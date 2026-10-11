@@ -27,7 +27,7 @@ export function useNonMachineOperations({
             try {
                 const created = await withUpdating(
                     mutate(route("loading-plan.non-machines.store"), {
-                        body: { name, location: selectedLocation, scheduled_date: date },
+                        body: { name, location: selectedLocation },
                     }),
                 );
                 setNonMachineList((prev) => [...prev, created]);

@@ -125,7 +125,7 @@ class TransitionGroupController extends Controller
         $data = $request->validate([
             'from_group_id'        => 'required|integer',
             'to_group_id'          => 'required|integer|different:from_group_id',
-            'operation_type'       => 'required|in:setup,conversion',
+            'operation_type'       => 'required|in:setup,conversion,none',
             'est_duration_minutes' => 'required|integer|min:0|max:100000',
             'symmetric'            => 'sometimes|boolean',
             'notes'                => 'nullable|string|max:255',

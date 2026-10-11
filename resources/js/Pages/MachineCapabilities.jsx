@@ -1,4 +1,6 @@
+import BulkGenerator from "@/Components/LoadingPlan/BulkGenerator";
 import MachineGroups from "@/Components/LoadingPlan/MachineGroups";
+import MachinePicker from "@/Components/LoadingPlan/MachinePicker";
 import MachineTransitionRules from "@/Components/LoadingPlan/MachineTransitionRules";
 import RuleForm from "@/Components/LoadingPlan/RuleForm";
 import {
@@ -32,6 +34,7 @@ const PROCESS_FILL = {
 
 const linkBtn = "text-xs text-blue-600 underline hover:text-blue-800";
 const input = "w-full rounded border border-gray-300 px-3 py-2 text-sm";
+const BULK_CHUNK = 200; // server cap per request is 500
 
 function Chip({ children, className = "bg-gray-100 text-gray-700", title }) {
     return (
@@ -48,7 +51,6 @@ function Chip({ children, className = "bg-gray-100 text-gray-700", title }) {
 // Row form: identity fields shared by every state in a row
 // ---------------------------------------------------------------------
 function RowForm({ row, onSubmit, onClose }) {
-    console.log("rowform: row", row);
     const [v, setV] = useState({
         factory: row?.factory ?? "",
         package_name: row?.package_name ?? "",
@@ -62,7 +64,6 @@ function RowForm({ row, onSubmit, onClose }) {
     const set = (k) => (e) => setV((cur) => ({ ...cur, [k]: e.target.value }));
 
     const submit = async (e) => {
-        console.log("test");
         e.preventDefault();
         if (!v.factory) {
             setError("Factory is required.");
@@ -159,11 +160,9 @@ export default function MachineCapabilities({ machine, machines = [] }) {
     const [draftRows, setDraftRows] = useState([]);
     const [draftCols, setDraftCols] = useState([]);
     const [newCol, setNewCol] = useState("");
-    const [drawer, setDrawer] = useState(null); // { kind: 'state' | 'row', ... }
+    const [drawer, setDrawer] = useState(null); // { kind: 'state' | 'row' | 'bulk', ... }
     const [tab, setTab] = useState("capabilities"); // capabilities | groups | rules
     const deleteButtonRef = useRef(null);
-
-    console.log("drawer", drawer);
 
     useEffect(() => {
         if (drawer) {
@@ -179,11 +178,6 @@ export default function MachineCapabilities({ machine, machines = [] }) {
             .then(({ data }) => setStates(data.states))
             .catch((err) => console.error(err))
             .finally(() => setLoading(false));
-
-    useEffect(() => {
-        load();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [machine.id]);
 
     // -----------------------------------------------------------------
     // Model: rows x columns, with part-routed states kept separate
@@ -236,6 +230,39 @@ export default function MachineCapabilities({ machine, machines = [] }) {
         } catch (err) {
             setNote(describeError(err));
         }
+    };
+
+    // Every row x column x process combination, in chunks. Each chunk is its
+    // own server transaction, so a failure part-way keeps the earlier chunks.
+    const bulkGenerate = async ({ rows, cols, processes }) => {
+        const list = [];
+        rows.forEach((r) =>
+            cols.forEach((c) =>
+                processes.forEach((p) => list.push(buildState(r, c, p))),
+            ),
+        );
+
+        let created = 0;
+        let skipped = 0;
+        try {
+            for (let i = 0; i < list.length; i += BULK_CHUNK) {
+                const { data } = await axios.post("/rules/setup-states/bulk", {
+                    machine_id: machine.id,
+                    states: list.slice(i, i + BULK_CHUNK),
+                });
+                created += data.created ?? 0;
+                skipped += data.skipped ?? 0;
+            }
+            setNote(
+                `Generated ${created}${skipped ? `, skipped ${skipped} that already existed` : ""}.`,
+            );
+        } catch (err) {
+            setNote(`Stopped after ${created} created: ${describeError(err)}`);
+            await load();
+            throw new Error(describeError(err));
+        }
+        await load();
+        setDrawer(null);
     };
 
     const confirmDelete = (list, what) => {
@@ -304,7 +331,6 @@ export default function MachineCapabilities({ machine, machines = [] }) {
     };
 
     const saveRow = async (row, fields) => {
-        console.log("row", row);
         if (!row) {
             setDraftRows((d) => [...d, fields]);
             setDrawer(null);
@@ -339,6 +365,13 @@ export default function MachineCapabilities({ machine, machines = [] }) {
     const closeDrawer = () => {
         setDrawer(null);
         load();
+    };
+
+    const deleteCapability = async () => {
+        const s = states.find((x) => x.setup_state_id === drawer?.editId);
+        if (!s) return;
+        await deleteStates([s], "this capability");
+        setDrawer(null);
     };
 
     const goToMachine = (machineNum) => {
@@ -379,6 +412,30 @@ export default function MachineCapabilities({ machine, machines = [] }) {
         });
 
     // -----------------------------------------------------------------
+    // Effects
+    // -----------------------------------------------------------------
+    useEffect(() => {
+        if (!draftRows.length && !draftCols.length) return;
+        const warn = (e) => {
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", warn);
+        return () => window.removeEventListener("beforeunload", warn);
+    }, [draftRows, draftCols]);
+
+    // Runs on mount and whenever the machine changes: reset the page and load its states.
+    useEffect(() => {
+        setLoading(true);
+        setDraftRows([]);
+        setDraftCols([]);
+        setDrawer(null);
+        setNote(null);
+        load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [machine.id]);
+
+    // -----------------------------------------------------------------
     // Render
     // -----------------------------------------------------------------
     const layerBtn = (value, label) => (
@@ -392,24 +449,65 @@ export default function MachineCapabilities({ machine, machines = [] }) {
         </button>
     );
 
-    useEffect(() => {
-        if (!draftRows.length && !draftCols.length) return;
-        const warn = (e) => {
-            e.preventDefault();
-            e.returnValue = "";
-        };
-        window.addEventListener("beforeunload", warn);
-        return () => window.removeEventListener("beforeunload", warn);
-    }, [draftRows, draftCols]);
+    const renderCell = (r, c) => {
+        const here = cellStates(r, c);
 
-    useEffect(() => {
-        setLoading(true);
-        setDraftRows([]);
-        setDraftCols([]);
-        setDrawer(null);
-        setNote(null);
-        load();
-    }, [machine.id]);
+        if (layer === "all") {
+            return (
+                <td key={c.key} className="px-1 py-1.5 align-top">
+                    <div className="flex min-h-[28px] flex-wrap items-center justify-center gap-1">
+                        {here.map((s) => (
+                            <button
+                                key={s.setup_state_id}
+                                type="button"
+                                onClick={() => openEdit(s)}
+                                title={`${s.remarks ?? ""} (state #${s.setup_state_id})`}
+                                className={`rounded px-1.5 py-0.5 text-[11px] ${PROCESS_STYLE[s.process_type]} hover:opacity-80`}
+                            >
+                                {s.process_type}
+                                {dev && (
+                                    <span className="ml-1 opacity-60">
+                                        #{s.setup_state_id}
+                                    </span>
+                                )}
+                            </button>
+                        ))}
+                        <button
+                            type="button"
+                            onClick={() => openAdd(r, c)}
+                            aria-label="Add capability"
+                            className="px-1 text-gray-300 hover:text-gray-700"
+                        >
+                            +
+                        </button>
+                    </div>
+                </td>
+            );
+        }
+
+        const hit = here.filter((s) => s.process_type === layer);
+        const disabled = !hit.length && !canPaint(c);
+        return (
+            <td key={c.key} className="px-1 py-1.5 text-center">
+                <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => toggleCell(r, c)}
+                    className={`h-8 w-full rounded text-xs ${hit.length ? PROCESS_FILL[layer] : disabled ? "cursor-not-allowed bg-gray-50 text-gray-300" : "border border-dashed border-gray-300 text-gray-300 hover:border-gray-500 hover:text-gray-600"}`}
+                >
+                    {hit.length
+                        ? hit.length > 1
+                            ? `✓ ×${hit.length}`
+                            : dev
+                              ? `#${hit[0].setup_state_id}`
+                              : "✓"
+                        : disabled
+                          ? "–"
+                          : "+"}
+                </button>
+            </td>
+        );
+    };
 
     return (
         <>
@@ -435,18 +533,10 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                         >
                             ←
                         </button>
-                        <select
-                            value={machine.machine_num}
-                            onChange={(e) => goToMachine(e.target.value)}
-                            aria-label="Select machine"
-                            className="rounded border border-gray-300 px-3 py-1.5 text-lg font-semibold"
-                        >
-                            {machines.map((m) => (
-                                <option key={m.id} value={m.machine_num}>
-                                    {m.machine_num}
-                                </option>
-                            ))}
-                        </select>
+                        <MachinePicker
+                            current={machine.machine_num}
+                            onSelect={goToMachine}
+                        />
                         <button
                             type="button"
                             disabled={!nextMachine}
@@ -685,104 +775,9 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                                         </button>
                                                     </div>
                                                 </td>
-                                                {model.cols.map((c) => {
-                                                    const here = cellStates(
-                                                        r,
-                                                        c,
-                                                    );
-                                                    if (layer === "all") {
-                                                        return (
-                                                            <td
-                                                                key={c.key}
-                                                                className="px-1 py-1.5 align-top"
-                                                            >
-                                                                <div className="flex min-h-[28px] flex-wrap items-center justify-center gap-1">
-                                                                    {here.map(
-                                                                        (s) => (
-                                                                            <button
-                                                                                key={
-                                                                                    s.setup_state_id
-                                                                                }
-                                                                                type="button"
-                                                                                onClick={() =>
-                                                                                    openEdit(
-                                                                                        s,
-                                                                                    )
-                                                                                }
-                                                                                title={`${s.remarks ?? ""} (state #${s.setup_state_id})`}
-                                                                                className={`rounded px-1.5 py-0.5 text-[11px] ${PROCESS_STYLE[s.process_type]} hover:opacity-80`}
-                                                                            >
-                                                                                {
-                                                                                    s.process_type
-                                                                                }
-                                                                                {dev && (
-                                                                                    <span className="ml-1 opacity-60">
-                                                                                        #
-                                                                                        {
-                                                                                            s.setup_state_id
-                                                                                        }
-                                                                                    </span>
-                                                                                )}
-                                                                            </button>
-                                                                        ),
-                                                                    )}
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() =>
-                                                                            openAdd(
-                                                                                r,
-                                                                                c,
-                                                                            )
-                                                                        }
-                                                                        aria-label="Add capability"
-                                                                        className="px-1 text-gray-300 hover:text-gray-700"
-                                                                    >
-                                                                        +
-                                                                    </button>
-                                                                </div>
-                                                            </td>
-                                                        );
-                                                    }
-                                                    const hit = here.filter(
-                                                        (s) =>
-                                                            s.process_type ===
-                                                            layer,
-                                                    );
-                                                    const disabled =
-                                                        !hit.length &&
-                                                        !canPaint(c);
-                                                    return (
-                                                        <td
-                                                            key={c.key}
-                                                            className="px-1 py-1.5 text-center"
-                                                        >
-                                                            <button
-                                                                type="button"
-                                                                disabled={
-                                                                    disabled
-                                                                }
-                                                                onClick={() =>
-                                                                    toggleCell(
-                                                                        r,
-                                                                        c,
-                                                                    )
-                                                                }
-                                                                className={`h-8 w-full rounded text-xs ${hit.length ? PROCESS_FILL[layer] : disabled ? "cursor-not-allowed bg-gray-50 text-gray-300" : "border border-dashed border-gray-300 text-gray-300 hover:border-gray-500 hover:text-gray-600"}`}
-                                                            >
-                                                                {hit.length
-                                                                    ? hit.length >
-                                                                      1
-                                                                        ? `✓ ×${hit.length}`
-                                                                        : dev
-                                                                          ? `#${hit[0].setup_state_id}`
-                                                                          : "✓"
-                                                                    : disabled
-                                                                      ? "–"
-                                                                      : "+"}
-                                                            </button>
-                                                        </td>
-                                                    );
-                                                })}
+                                                {model.cols.map((c) =>
+                                                    renderCell(r, c),
+                                                )}
                                             </tr>
                                         ))}
                                     </tbody>
@@ -820,9 +815,16 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                     + Add column
                                 </button>
                             </div>
+                            <button
+                                type="button"
+                                onClick={() => setDrawer({ kind: "bulk" })}
+                                className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+                            >
+                                Bulk generate
+                            </button>
                             <span className="text-xs text-gray-500">
                                 New rows and columns appear empty until you
-                                paint a cell.
+                                paint a cell. Bulk generate saves immediately.
                             </span>
                         </div>
 
@@ -937,13 +939,29 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                     <div
                         className="absolute inset-0 bg-black/40"
                         onMouseDown={
-                            drawer.kind === "state"
-                                ? closeDrawer
-                                : () => setDrawer(null)
+                            drawer.kind === "bulk"
+                                ? undefined // don't lose a half-typed form to a stray click
+                                : drawer.kind === "state"
+                                  ? closeDrawer
+                                  : () => setDrawer(null)
                         }
                     />
                     <aside className="absolute right-0 top-0 h-full w-[480px] max-w-full overflow-y-auto bg-white p-6 shadow-xl">
-                        {drawer.kind === "row" ? (
+                        {drawer.kind === "bulk" ? (
+                            <>
+                                <h3 className="mb-1 text-lg font-semibold">
+                                    Bulk generate
+                                </h3>
+                                <p className="mb-4 text-xs text-gray-500">
+                                    Creates every combination of what you enter.
+                                    Saved immediately, not as drafts.
+                                </p>
+                                <BulkGenerator
+                                    onGenerate={bulkGenerate}
+                                    onClose={() => setDrawer(null)}
+                                />
+                            </>
+                        ) : drawer.kind === "row" ? (
                             <>
                                 <h3 className="mb-1 text-lg font-semibold">
                                     {drawer.row ? "Edit row" : "Add row"}
@@ -983,35 +1001,11 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                             ref={deleteButtonRef}
                                             type="button"
                                             className="text-sm text-red-600 hover:text-red-800"
-                                            onClick={async () => {
-                                                const s = states.find(
-                                                    (x) =>
-                                                        x.setup_state_id ===
-                                                        drawer.editId,
-                                                );
-                                                if (s) {
-                                                    await deleteStates(
-                                                        [s],
-                                                        "this capability",
-                                                    );
-                                                    setDrawer(null);
-                                                }
-                                            }}
-                                            onKeyDown={async (e) => {
+                                            onClick={deleteCapability}
+                                            onKeyDown={(e) => {
                                                 if (e.key === "Delete") {
                                                     e.preventDefault();
-                                                    const s = states.find(
-                                                        (x) =>
-                                                            x.setup_state_id ===
-                                                            drawer.editId,
-                                                    );
-                                                    if (s) {
-                                                        await deleteStates(
-                                                            [s],
-                                                            "this capability",
-                                                        );
-                                                        setDrawer(null);
-                                                    }
+                                                    deleteCapability();
                                                 }
                                             }}
                                         >

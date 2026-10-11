@@ -17,6 +17,7 @@ use App\Models\LoadingPlanEntryHistory;
 use App\Models\PartName;
 use App\Models\LotQuantityHistory;
 use App\Models\CustomerDataWip;
+use App\Models\LotSplit;
 use App\Traits\ValidatesLoadingPlanEntries;
 use Exception;
 use Illuminate\Support\Collection;
@@ -58,15 +59,10 @@ class LoadingPlanEntryService
             : [$this->resolveMachineId($target), null];
     }
 
-    private function assertNonMachineForDate(int $nonMachineId, string $date): void
+    private function assertNonMachineExists(int $nonMachineId): void
     {
-        $nm = NonMachine::find($nonMachineId);
-
-        if (!$nm) {
+        if (!NonMachine::whereKey($nonMachineId)->exists()) {
             throw new \InvalidArgumentException('That non-machine no longer exists.');
-        }
-        if ($nm->scheduled_date->toDateString() !== $date) {
-            throw new \InvalidArgumentException('That non-machine belongs to a different date.');
         }
     }
 
@@ -113,12 +109,8 @@ class LoadingPlanEntryService
     {
         return DB::transaction(function () use ($id, $start) {
             $nm = NonMachine::lockForUpdate()->findOrFail($id);
-            $date = $nm->scheduled_date->toDateString();
             $anchor = Carbon::parse($start);
-
-            if ($anchor->toDateString() !== $date) {
-                throw new \InvalidArgumentException('The start must be on the scheduled date.');
-            }
+            $date = $anchor->toDateString();
 
             foreach ($this->lockNonMachineRows([$id], $date) as $entry) {
                 $this->assertNotFinalized($entry);
@@ -213,7 +205,7 @@ class LoadingPlanEntryService
             }
 
             if ($targetNonMachineId !== null) {
-                $this->assertNonMachineForDate($targetNonMachineId, $date);
+                $this->assertNonMachineExists($targetNonMachineId);
             }
 
             $this->releaseFromBuckets(
@@ -378,15 +370,35 @@ class LoadingPlanEntryService
 
             $lotEntries = $this->lockMachineRows([$targetMachineId], $date);
             $dayStart = Carbon::parse($date)->startOfDay();
-
             $lap('lockMachineRows (rows=' . $lotEntries->count() . ')');
+
+            $entryLotIds = $lotEntries->pluck('lot_id')->filter()->unique()->values();
+
+            $activeSplits = LotSplit::query()
+                ->active()
+                ->whereIn('child_lot_id', $entryLotIds)
+                ->get()
+                ->keyBy(fn($s) => $s->child_lot_id . '|' . $s->scheduled_date->toDateString());
+
+            $lotEntries->each(function ($e) use ($activeSplits) {
+                $e->setRelation(
+                    'activeLotSplit',
+                    $activeSplits->get($e->lot_id . '|' . $e->scheduled_date->toDateString())
+                );
+            });
+
+            // entry id => root lot id (null for blocks, which have no lot_id)
+            $rootLotIdByEntry = $lotEntries->mapWithKeys(
+                fn($e) => [$e->id => $e->lot_id ? $e->resolveRootLotId() : null]
+            );
+            $lap('resolve root lot ids');
 
             $wip = CustomerDataWip::query()
                 ->where('import_date', '>=', $dayStart)
                 ->where('import_date', '<', $dayStart->copy()->addDay())
-                ->whereIn('Lot_Id', $lotEntries->pluck('lot_id')->unique()->values())
+                ->whereIn('Lot_Id', $rootLotIdByEntry->filter()->unique()->values())
                 ->get()
-                ->unique('Lot_Id')   // same date window, so Lot_Id alone is the key
+                ->unique('Lot_Id')
                 ->keyBy('Lot_Id');
             $lap('wip load + unique (rows=' . $wip->count() . ')');
 
@@ -414,6 +426,8 @@ class LoadingPlanEntryService
                         'ct'                         => data_get($wipDerivatives, 'ct'),
                         'entry_days'                 => data_get($wipEntry, 'Lot_Entry_Time_Days'),
                         'seq'                        => $entry->sequence_order,
+                        'is_running_gtreel'          => strtoupper(trim((string) data_get($wipEntry, 'Station'))) === 'GTREEL_T'
+                            && strtoupper(trim((string) data_get($wipEntry, 'Lot_Status'))) === 'RUN',
                     ],
                 ];
             });
@@ -742,7 +756,7 @@ class LoadingPlanEntryService
             [$targetMachineId, $targetNonMachineId] = $this->resolveTarget($targetMachine);
 
             if ($targetNonMachineId !== null) {
-                $this->assertNonMachineForDate($targetNonMachineId, $resolvedDate);
+                $this->assertNonMachineExists($targetNonMachineId);
             }
 
             $rows = $this->lockLaneRows(
@@ -836,7 +850,7 @@ class LoadingPlanEntryService
             [$machineId, $nonMachineId] = $this->resolveTarget($machine);
 
             if ($nonMachineId !== null) {
-                $this->assertNonMachineForDate($nonMachineId, $date);
+                $this->assertNonMachineExists($nonMachineId);
             }
 
             $rows = $nonMachineId !== null
@@ -973,7 +987,7 @@ class LoadingPlanEntryService
             }
 
             if ($targetNonMachineId !== null) {
-                $this->assertNonMachineForDate($targetNonMachineId, $date);
+                $this->assertNonMachineExists($targetNonMachineId);
             }
 
             $movers = $allEntries->filter(
@@ -1366,9 +1380,11 @@ class LoadingPlanEntryService
     {
         return DB::transaction(function () use ($id) {
             $nm = NonMachine::lockForUpdate()->findOrFail($id);
-            $date = $nm->scheduled_date->toDateString();
 
-            $entries = $this->lockNonMachineRows([$id], $date);
+            $entries = LoadingPlanEntry::where('non_machine_id', $id)
+                ->orderBy('sequence_order')
+                ->lockForUpdate()
+                ->get();
 
             foreach ($entries as $entry) {
                 $this->assertNotFinalized($entry);
@@ -1419,7 +1435,7 @@ class LoadingPlanEntryService
                 [$machineId, $nonMachineId] = $this->resolveTarget($machine);
 
                 if ($nonMachineId !== null) {
-                    $this->assertNonMachineForDate($nonMachineId, $date);
+                    $this->assertNonMachineExists($nonMachineId);
                     $rows = $this->lockNonMachineRows([$nonMachineId], $date);
                     $anchor = $this->laneAnchor($rows, $date);
                 } else {

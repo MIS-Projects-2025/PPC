@@ -6,7 +6,6 @@ export default function NonMachinesModal({
     nonMachines,
     rowCounts,
     location,
-    date,
     disabled,
     onCreate,
     onRename,
@@ -25,7 +24,7 @@ export default function NonMachinesModal({
             <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
                 <h3 className="font-bold text-lg">Non-machines</h3>
                 <p className="text-xs text-base-content/50 mb-3">
-                    {location} · {date}. Names don't have to be unique. Empty ones are not shown in
+                    {location}. Names don't have to be unique. Empty ones are not shown in
                     the table; pick them as a target in the transfer list.
                 </p>
 

@@ -5,22 +5,24 @@
 | Scheduler dry-run tester (no DB writes) — WIP edition
 |--------------------------------------------------------------------------
 | Each CSV row is treated as a real WIP lot (CustomerDataWip). It is run
-| through the SAME hydrateLotFromEntry() the production rebuild uses, so:
-|   - Lead_Count / Body_Size / Ramp_Time / Focus_Group / Lot_Type / CR3 /
-|     Auto_Part come from the WIP columns (not PartName)
-|   - CT, aboveCT, cycleTimeExceedResidual come from LoadingPlanFormulas
+| through the SAME hydrateLotFromEntry() the production rebuild uses.
 |
 | Then it mirrors rebuildForPickupArrival(): tier 1/2 fixed CT order,
 | tier 3 greedy-cheapest-next, LotPrioritySorter per machine. Stops BEFORE
 | bulkPlacePlan. Whole run is wrapped in a transaction that is rolled back.
 |
-| PINNED lots = the current planned lot on a machine (max one per machine).
-| They are looked up by lot_id in the SAME csv, are never moved/removed,
-| and their setup state is the anchor the other lots are costed against.
+| PINS (max one per machine) are plain entries in $pinnedByNum:
 |
-| Timing: per-step laps are collected during simulate() and printed at the
-| END of the output (and saved in the text file) so they never get buried
-| under the long list of planned lots.
+|   'MACHINE_NUM' => 'LOT_ID'
+|       Lot is looked up in the csv. State is inferred from that lot
+|       (same inferStateFromLot() production uses). Pinned lot eats capacity.
+|
+|   'MACHINE_NUM' => [package_name, lead_count, factory, body_size, process_type]
+|       Positional, every slot nullable (null = don't filter on it).
+|       Picks the first best machine_setup_state of THAT machine that matches
+|       (most constrained state wins, same rule as inferStateFromLot()).
+|       No lot, so it eats no capacity. process_type: taping | tubing | tray
+|       (a raw Ramp_Time like 'REEL13' also works).
 |
 | Run:  php artisan tinker tests/testScheduler.php
 */
@@ -29,97 +31,103 @@
 // CONFIG
 // ---------------------------------------------------------------------
 
-$targetDate = \Carbon\Carbon::parse('2026-09-09');
+$targetDate = \Carbon\Carbon::parse('2026-09-01');
 $csvPath    = storage_path('app/ftproot/2026-10-07_08-30-01/daily_backend_wip.csv');
 
-$limit = 300;   // max lots to schedule from the csv. null = all (slow!)
 $limit = null;   // max lots to schedule from the csv. null = all (slow!)
 
 // Only keep these packages. Empty array = no package filter.
 $allowedPackages = [
     // 'SOIC_N',
-    // 'QSOP',
-    // 'SOIC_N_EP',
-    // 'MINI_SO',
-    // 'MINI_SO_EP'
 ];
 
-// Pinned lot per machine: machine_id => [lot_id (must exist in the csv), optional setup_state_id]
 $pinnedByNum = [
-    '02AT468' => ['lot_id' => 'G166101.5'],
-    '01SRM' => ['lot_id' => 'BD29570.4'],
-    '21AT128' => ['lot_id' => 'BB53407.5'],
-    '25AT128' => ['lot_id' => 'BD28898.2'],
-    '42G6L' => ['lot_id' => 'BB53275.8'],
-    '33G6L' => ['lot_id' => 'BD29507.2'],
-    '47G6L' => ['lot_id' => 'BD29011.3'],
-    '51AT28' => ['lot_id' => 'G165619.17'],
-    '45AT28' => ['lot_id' => 'G165887.11'],
-    '48AT28' => ['lot_id' => 'BD29158.3'],
-    '05MV853A' => ['lot_id' => 'BD27879.2'],
-    '04MV853A' => ['lot_id' => 'BB53610.5'],
-    '29G6L' => ['lot_id' => 'BD29198.3'],
-    '41G6L' => ['lot_id' => 'BD29189.2'],
-    '07HSI' => ['lot_id' => 'BD29592.3'],
-    '33HSI250' => ['lot_id' => 'BD29581.3'],
-    '58AT28' => ['lot_id' => 'BD29445.2'],
-    '14HSI' => ['lot_id' => 'BD29665.3'],
-    '12HSI' => ['lot_id' => 'BB53424.4'],
-    '20G6L' => ['lot_id' => 'BD28580.3'],
-    '24G6L' => ['lot_id' => 'BD27972.5'],
-    '26G6L' => ['lot_id' => 'BD27972.3'],
-    '27G6L' => ['lot_id' => 'BD28209.3'],
-    '28G6L' => ['lot_id' => 'BD27679.2'],
-    '40G6L' => ['lot_id' => 'BD28935.2'],
-    '43G6L' => ['lot_id' => 'BD29404.3'],
-    '45G6L' => ['lot_id' => 'BD28471.2'],
-    '62G6L' => ['lot_id' => 'BD29491.4'],
-    '58G6L' => ['lot_id' => 'BD28716.2'],
-    '04G6L' => ['lot_id' => 'BD29302.1'],
-    '05G6L' => ['lot_id' => 'BC46812.8'],
-    '07G6L' => ['lot_id' => 'BD28475.1'],
-    '12G6L' => ['lot_id' => 'BD29408.3'],
-    '21G6L' => ['lot_id' => 'BD29257.7'],
-    '22G6L' => ['lot_id' => 'BB53507.3'],
-    '38G6L' => ['lot_id' => 'BD28354.1'],
-    '39G6L' => ['lot_id' => 'BD29498.2'],
-    '57G6L' => ['lot_id' => 'BD24497.2'],
-    '06G6L' => ['lot_id' => 'SM55522.1'],
-    '02G6L' => ['lot_id' => 'BD29509.3'],
-    '34G6L' => ['lot_id' => 'BD29643.2'],
-    '29AT128' => ['lot_id' => 'BD29460.3'],
-    '04STI' => ['lot_id' => 'BD28688.1'],
-    '27AT28' => ['lot_id' => 'G165886.6'],
-    '29AT28' => ['lot_id' => 'BD29409.2'],
-    '44AT28' => ['lot_id' => 'BD29371.2'],
-    '34AT28' => ['lot_id' => 'BD29244.2'],
-    '52AT28' => ['lot_id' => 'BB53668.4'],
-    '30G6L' => ['lot_id' => 'BD29448.2'],
-    '51G6L' => ['lot_id' => 'BD28915.2'],
-    'AT128040' => ['lot_id' => 'BD18764.3'],
-    '08G6L' => ['lot_id' => 'BB50148.5'],
-    '09G6L' => ['lot_id' => 'BD29040.3'],
-    '36G6L' => ['lot_id' => 'BD29040.2'],
-    '15AT128' => ['lot_id' => 'BD29341.2'],
-    '10AT128' => ['lot_id' => 'BD29341.4'],
-    '53G6L' => ['lot_id' => 'BD29236.2'],
-    '32G6L' => ['lot_id' => 'BB50710.5'],
-    '31G6L' => ['lot_id' => 'BD29365.4'],
-    '50G6L' => ['lot_id' => 'BD29577.3'],
-    '01MV853A' => ['lot_id' => 'BD28708.2'],
-    '11AT128' => ['lot_id' => 'BC94240.2'],
-    '49G6L' => ['lot_id' => 'BD28916.2'],
-    '44G6L' => ['lot_id' => 'BD29100.2'],
+    // --- by lot id ---
+    // '02AT468'  => 'G166101.5',
+    // '01SRM'    => 'BD29570.4',
+    // '21AT128'  => 'BB53407.5',
+    // '25AT128'  => 'BD28898.2',
+    // '42G6L'    => 'BB53275.8',
+    // '33G6L'    => 'BD29507.2',
+    // '47G6L'    => 'BD29011.3',
+    // '51AT28'   => 'G165619.17',
+    // '45AT28'   => 'G165887.11',
+    // '48AT28'   => 'BD29158.3',
+    // '05MV853A' => 'BD27879.2',
+    // '04MV853A' => 'BB53610.5',
+    // '29G6L'    => 'BD29198.3',
+    // '41G6L'    => 'BD29189.2',
+    // '07HSI'    => 'BD29592.3',
+    // '33HSI250' => 'BD29581.3',
+    // '58AT28'   => 'BD29445.2',
+    // '14HSI'    => 'BD29665.3',
+    // '12HSI'    => 'BB53424.4',
+    // '20G6L'    => 'BD28580.3',
+    // '24G6L'    => 'BD27972.5',
+    // '26G6L'    => 'BD27972.3',
+    // '27G6L'    => 'BD28209.3',
+    // '28G6L'    => 'BD27679.2',
+    // '40G6L'    => 'BD28935.2',
+    // '43G6L'    => 'BD29404.3',
+    // '45G6L'    => 'BD28471.2',
+    // '62G6L'    => 'BD29491.4',
+    // '58G6L'    => 'BD28716.2',
+    // '04G6L'    => 'BD29302.1',
+    // '05G6L'    => 'BC46812.8',
+    // '07G6L'    => 'BD28475.1',
+    // '12G6L'    => 'BD29408.3',
+    // '21G6L'    => 'BD29257.7',
+    // '22G6L'    => 'BB53507.3',
+    // '38G6L'    => 'BD28354.1',
+    // '39G6L'    => 'BD29498.2',
+    // '57G6L'    => 'BD24497.2',
+    // '06G6L'    => 'SM55522.1',
+    // '02G6L'    => 'BD29509.3',
+    // '34G6L'    => 'BD29643.2',
+    // '29AT128'  => 'BD29460.3',
+    // '04STI'    => 'BD28688.1',
+    // '01VITROX' => 'BD28052.2',
+    // '07HSI400T' => 'BD28165.1',
+    // '27AT28'   => 'G165886.6',
+    // '29AT28'   => 'BD29409.2',
+    // '44AT28'   => 'BD29371.2',
+    // '34AT28'   => 'BD29244.2',
+    // '52AT28'   => 'BB53668.4',
+    // '30G6L'    => 'BD29448.2',
+    // '51G6L'    => 'BD28915.2',
+    // 'AT128040' => 'BD18764.3',
+    // '08G6L'    => 'BB50148.5',
+    // '09G6L'    => 'BD29040.3',
+    // '36G6L'    => 'BD29040.2',
+    // '15AT128'  => 'BD29341.2',
+    // '10AT128'  => 'BD29341.4',
+    // '53G6L'    => 'BD29236.2',
+    // '32G6L'    => 'BB50710.5',
+    // '31G6L'    => 'BD29365.4',
+    // '50G6L'    => 'BD29577.3',
+    // '01MV853A' => 'BD28708.2',
+    // '11AT128'  => 'BC94240.2',
+    // '49G6L'    => 'BD28916.2',
+    // '44G6L'    => 'BD29100.2',
+    // '48G6L'    => 'G160102.27',
+    // '24HEXA'   => 'BD28880.1',
+    // '66VITROX' => ["LFCSP_SS", 32, 'F1', null, 'taping'],
+
+
+    // --- by state spec: [package_name, lead_count, factory, body_size, process_type] ---
+    // 'XXXXX' => ['SOIC_N', 8, null, '5X4', 'taping'],
+    // 'YYYYY' => [null, null, 'FACTORY_NAME', null, null],
 ];
 
 // Same station rules as scopeLoadingPlanStations + scopeExcludingPostTnr
-$allowedStations   = array_map('strtoupper', config('wip.tape_reel_stations'));
-$postTnrStations   = ['GTTFVI_T', 'GTTOQA_T', 'GTTBOX_T'];
+$allowedStations = array_map('strtoupper', config('wip.tape_reel_stations'));
+$postTnrStations = ['GTTFVI_T', 'GTTOQA_T', 'GTTBOX_T'];
 
-$machineIdColumn = 'id';   // adjust if the PK column is named differently (e.g. 'id')
+$machineIdColumn = 'id';   // PK column of qdn_db.machine_list
 
-// machine_num -> machine_id, from qdn_db.machine_list
-$pinned = [];
+// machine_num -> machine_id, normalised into $pins:
+//   machine_id => ['lot_id' => string|null, 'spec' => array|null]
+$pins = [];
 if (!empty($pinnedByNum)) {
     $idByNum = [];
     $found = \DB::connection('qdn_db')->table('machine_list')
@@ -129,14 +137,18 @@ if (!empty($pinnedByNum)) {
         $idByNum[strtoupper(trim($num))] = $id;
     }
 
-    foreach ($pinnedByNum as $num => $cfg) {
+    foreach ($pinnedByNum as $num => $def) {
         $key = strtoupper(trim($num));
         if (!isset($idByNum[$key])) {
             throw new \RuntimeException("Pinned machine_num '{$num}' not found in qdn_db.machine_list");
         }
-        $pinned[$idByNum[$key]] = $cfg;
+
+        $pins[$idByNum[$key]] = is_array($def)
+            ? ['lot_id' => null, 'spec' => array_pad(array_slice(array_values($def), 0, 5), 5, null)]
+            : ['lot_id' => trim((string) $def), 'spec' => null];
     }
 }
+$pinnedLotIds = array_values(array_filter(array_column($pins, 'lot_id')));
 
 // ---------------------------------------------------------------------
 // CSV READER  (keeps the ORIGINAL column names — they match the WIP table)
@@ -250,6 +262,12 @@ $sim = new class(
         $entry = (new \App\Models\LoadingPlanEntry())->forceFill([
             'lot_id'             => $wip->Lot_Id,
             'package_name'       => $wip->Package_Name,
+            'Lot_Status'         => $wip->Lot_Status,
+            'Stage'              => $wip->Stage,
+            'Stage_Start_Time'   => $wip->Stage_Start_Time,
+            'Auto_Part'          => $wip->Auto_Part,
+            'Bake'               => $wip->Bake,
+            'Bake_Count'         => $wip->Bake_Count,
             'is_pickup'          => false,
             'is_manual_expedite' => false,
         ]);
@@ -258,7 +276,153 @@ $sim = new class(
         return $this->hydrateLotFromEntry($entry, $wip);
     }
 
-    public function simulate(array $wipRows, array $pinnedByMachine, array $pinnedWipRows, \Carbon\Carbon $targetDate): array
+    /**
+     * Spec pin -> first best machine_setup_state of $machineId.
+     * $spec = [package_name, lead_count, factory, body_size, process_type], all nullable
+     * (null = no filter on that slot). Matching mirrors matchesLotCapability();
+     * "best" = most constrained state, same as inferStateFromLot().
+     * Override-only states (machine_capability_part_rules targets) are excluded,
+     * same as the production general pool.
+     */
+    protected function resolveSpecState(int $machineId, array $spec, ?string &$why = null): ?\App\Models\MachineSetupState
+    {
+        [$pkg, $lead, $factory, $body, $proc] = $spec;
+
+        $n = fn($v) => $v === null ? null : mb_strtolower(trim((string) $v));
+        $nb = function ($v) use ($n) {
+            if ($v === null) return null;
+            $parts = explode('X', mb_strtoupper(trim((string) $v)));
+            if (count($parts) !== 2 || !is_numeric($parts[0]) || !is_numeric($parts[1])) {
+                return $n($v);
+            }
+            usort($parts, fn($a, $b) => (float) $a <=> (float) $b);
+            return implode('X', $parts);
+        };
+
+        $lead = ($lead === null || $lead === '') ? null : (int) $lead;
+
+        $procNorm = null;
+        if ($proc !== null) {
+            $procNorm = in_array($n($proc), ['taping', 'tubing', 'tray', 'both'], true)
+                ? $n($proc)
+                : $this->resolveRampProcessType((string) $proc);
+            if ($procNorm === null) {
+                $why = "unrecognised process_type '{$proc}'";
+                return null;
+            }
+        }
+
+        [$body2d, $thk] = $this->parseBodySize($body);
+        $normPkg  = $n($pkg);
+        $pkgGroup = $normPkg === null ? null : \App\Models\PackageGroupLoadingPlan::query()
+            ->get()
+            ->mapWithKeys(fn($r) => [$n($r->package_name) => $n($r->group_name)])
+            ->get($normPkg);
+
+        $overrideOnly = \App\Models\MachineCapabilityPartRule::query()->pluck('setup_state_id')->all();
+
+        $states = \App\Models\MachineSetupState::query()
+            ->where('machine_id', $machineId)
+            ->whereNotIn('setup_state_id', $overrideOnly)
+            ->get();
+
+        if ($states->isEmpty()) {
+            $why = 'machine has no (non override-only) setup states';
+            return null;
+        }
+
+        $matches = $states->filter(function ($s) use ($n, $nb, $factory, $pkg, $normPkg, $pkgGroup, $body2d, $thk, $lead, $procNorm) {
+            if ($factory !== null && $n($s->factory) !== $n($factory)) {
+                return false;
+            }
+            if ($pkg !== null && $s->package_name !== null) {
+                $sp = $n($s->package_name);
+                if ($sp !== $normPkg && $sp !== $pkgGroup) {
+                    return false;
+                }
+            }
+            if ($body2d !== null) {
+                if ($s->body_size !== null && $nb($s->body_size) !== $nb($body2d)) {
+                    return false;
+                }
+                if ($s->thickness !== null && ($thk === null || round((float) $s->thickness, 2) !== round($thk, 2))) {
+                    return false;
+                }
+            }
+            if ($lead !== null) {
+                if (
+                    $s->leadcount_include !== null
+                    && !in_array((string) $lead, array_map('trim', explode(',', $s->leadcount_include)), true)
+                ) {
+                    return false;
+                }
+                if ($s->leadcount_min !== null && $lead < $s->leadcount_min) {
+                    return false;
+                }
+                if ($s->leadcount_max !== null && $lead > $s->leadcount_max) {
+                    return false;
+                }
+                if (
+                    $s->leadcount_exclude !== null
+                    && in_array((string) $lead, array_map('trim', explode(',', $s->leadcount_exclude)), true)
+                ) {
+                    return false;
+                }
+            }
+            if ($procNorm !== null && $n($s->process_type) !== 'both' && $n($s->process_type) !== $procNorm) {
+                return false;
+            }
+            return true;
+        });
+
+        if ($matches->isEmpty()) {
+            $why = 'no state on this machine matches the spec';
+            return null;
+        }
+
+        $cols = [
+            'focus_group',
+            'package_name',
+            'body_size',
+            'thickness',
+            'leadcount_include',
+            'leadcount_min',
+            'leadcount_max',
+            'leadcount_exclude',
+            'lot_type',
+        ];
+
+        return $matches
+            ->sortBy([
+                fn($a, $b) => collect($cols)->filter(fn($c) => $b->$c !== null)->count()
+                    <=> collect($cols)->filter(fn($c) => $a->$c !== null)->count(), // most constrained first
+                fn($a, $b) => $a->setup_state_id <=> $b->setup_state_id,                // deterministic tie-break
+            ])
+            ->first();
+    }
+
+    /** Display-only stand-in so spec pins print through the same code path as lot pins. */
+    protected function standInForState(\App\Models\MachineSetupState $state, array $spec): object
+    {
+        return (object) [
+            'Lot_Id'              => "STATE#{$state->setup_state_id}",
+            'Part_Name'           => '(state pin)',
+            'Lead_Count'          => $spec[1],
+            'Package_Name'        => $state->package_name ?? $spec[0],
+            'Qty'                 => null,
+            'Lot_Type'            => $state->lot_type,
+            'Focus_Group'         => $state->focus_group,
+            'Lot_Entry_Time_Days' => null,
+            'CT'                  => null,
+            'Ramp_Time'           => $state->process_type,
+            'Body_Size'           => $state->body_size ?? $spec[3],
+        ];
+    }
+
+    /**
+     * @param array $pins machine_id => ['lot_id' => string|null, 'spec' => array|null]
+     */
+    public function simulate(array $wipRows, array $pins, array $pinnedWipRows, \Carbon\Carbon $targetDate): array
     {
         // Laps are collected (not echoed) so they can be shown at the very end.
         $timings = [];
@@ -278,18 +442,12 @@ $sim = new class(
 
         $scope = \App\Services\SchedulerService::class;
 
-        // $plan / $fakeEntryId are private on the parent -> scope-bound closures.
-        $resetState = \Closure::bind(function () {
-            $this->plan = [];
-            $this->fakeEntryId = -1;
-        }, $this, $scope);
         $readPlan = \Closure::bind(fn() => $this->plan, $this, $scope);
-
-        $resetState();
 
         $dateString = $targetDate->toDateString();
         $warnings   = [];
         $stationByLot = [];
+        $attrsByLot = [];
 
         // --- hydrate WIP lots ----------------------------------------------
         $lots = collect();
@@ -300,24 +458,29 @@ $sim = new class(
                 continue;
             }
             $stationByLot[$lot->Lot_Id] = $attrs['Station'] ?? null;
+            $attrsByLot[$lot->Lot_Id] = $attrs;
             $lots->push($lot);
         }
         $lap('hydrate');
 
-        // --- hydrate pinned lots -------------------------------------------
+        // --- hydrate lot-id pins -------------------------------------------
         $pinnedLots = collect();
-        foreach ($pinnedByMachine as $machineId => $cfg) {
-            $attrs = $pinnedWipRows[$cfg['lot_id']] ?? null;
+        foreach ($pins as $machineId => $pin) {
+            if ($pin['lot_id'] === null) {
+                continue;
+            }
+            $attrs = $pinnedWipRows[$pin['lot_id']] ?? null;
             if ($attrs === null) {
-                $warnings[] = "Pinned lot '{$cfg['lot_id']}' (machine {$machineId}) not found in the csv — skipped.";
+                $warnings[] = "Pinned lot '{$pin['lot_id']}' (machine {$machineId}) not found in the csv — skipped.";
                 continue;
             }
             $lot = $this->hydrateWipRow($attrs);
             if ($lot === null) {
-                $warnings[] = "Pinned lot '{$cfg['lot_id']}' could not be hydrated — skipped.";
+                $warnings[] = "Pinned lot '{$pin['lot_id']}' could not be hydrated — skipped.";
                 continue;
             }
             $stationByLot[$lot->Lot_Id] = $attrs['Station'] ?? null;
+            $attrsByLot[$lot->Lot_Id] = $attrs;
             $pinnedLots->put($machineId, $lot);
         }
 
@@ -329,10 +492,12 @@ $sim = new class(
                 'warnings' => $warnings,
                 'plan' => [],
                 'pinned' => [],
+                'capacity' => [],
                 'doableByLot' => [],
                 'unassigned' => collect(),
                 'machineIds' => collect(),
                 'stationByLot' => $stationByLot,
+                'attrsByLot' => $attrsByLot,
                 'timings' => $finishTimings(),
             ];
         }
@@ -342,20 +507,20 @@ $sim = new class(
         $this->preloadPackageList($all);
         $lap('preload');
 
-        // Doable (= commit = intdiv(qty, recipe)) per lot. Same value that
-        // estimateCommit() subtracts from remaining capacity.
         $doableByLot = [];
         foreach ($all as $lot) {
             $doableByLot[$lot->Lot_Id] = $this->estimateCommit($lot);
         }
         $lap('doable');
 
+        // --- resolve every pin's setup state --------------------------------
         $inferred = $this->inferAnchorStates($pinnedLots);
-        // --- resolve each pinned lot's setup state --------------------------
+
         $pinned = [];
+        $specStates = [];
+
         foreach ($pinnedLots as $machineId => $lot) {
-            // optional explicit override, otherwise let the scheduler decide
-            $stateId = $pinnedByMachine[$machineId]['setup_state_id'] ?? $inferred[$machineId] ?? null;
+            $stateId = $inferred[$machineId] ?? null;
 
             if ($stateId === null) {
                 $warnings[] = "Pinned lot {$lot->Lot_Id} ({$lot->Part_Name}) on machine {$machineId}: "
@@ -365,8 +530,31 @@ $sim = new class(
 
             $pinned[$machineId] = [
                 'lot'      => $lot,
+                'stand_in' => null,
                 'state_id' => (int) $stateId,
                 'commit'   => $this->estimateCommit($lot) ?? 0,
+                'via'      => "lot {$lot->Lot_Id}",
+            ];
+        }
+
+        foreach ($pins as $machineId => $pin) {
+            if ($pin['spec'] === null) {
+                continue;
+            }
+            $why = null;
+            $state = $this->resolveSpecState((int) $machineId, $pin['spec'], $why);
+            if ($state === null) {
+                $warnings[] = "Spec pin on machine {$machineId} [" . json_encode($pin['spec']) . "]: {$why} — skipped.";
+                continue;
+            }
+
+            $specStates[$machineId] = $state;
+            $pinned[$machineId] = [
+                'lot'      => null,
+                'stand_in' => $this->standInForState($state, $pin['spec']),
+                'state_id' => (int) $state->setup_state_id,
+                'commit'   => 0, // no lot -> no capacity used
+                'via'      => 'spec ' . json_encode($pin['spec']),
             ];
         }
         $lap('pinned');
@@ -383,20 +571,27 @@ $sim = new class(
         $openEntriesByMachine       = collect();
         $lap('anchor+capacity');
 
+        // Spec-pinned states may not be in the batch-scoped setup_states_by_id
+        // (scoped by the lots' factories/packages). Add them AFTER getAnchorStates,
+        // which can re-run preloadReferenceData() and reset $this->ref.
+        if (!empty($specStates)) {
+            $patchRef = \Closure::bind(function (array $states) {
+                foreach ($states as $s) {
+                    if (!$this->ref['setup_states_by_id']->has($s->setup_state_id)) {
+                        $this->ref['setup_states_by_id']->put($s->setup_state_id, $s);
+                    }
+                }
+            }, $this, $scope);
+            $patchRef($specStates);
+        }
+
         $capacityByMachine = $machineIds->mapWithKeys(
             fn($id) => [$id => \App\Models\MachineCapacity::effectiveFor($id, $targetDate)?->capacity]
         )->all();
         $initialRemaining = $remainingCapacityByMachine->all();
         $pinnedCommit = [];
 
-
-        $capacityByMachine = $machineIds->mapWithKeys(
-            fn($id) => [$id => \App\Models\MachineCapacity::effectiveFor($id, $targetDate)?->capacity]
-        )->all();
-        $initialRemaining = $remainingCapacityByMachine->all();
-        $pinnedCommit = [];
-
-        // Pinned lot = the machine's current state, and it eats capacity.
+        // Pinned = the machine's current state; lot pins also eat capacity.
         foreach ($pinned as $machineId => $p) {
             $pinnedCommit[$machineId] = $p['commit'];
             $anchorStateByMachine[$machineId] = $p['state_id'];
@@ -415,38 +610,15 @@ $sim = new class(
 
         // --- same tier flow as rebuildForPickupArrival ----------------------
         $results = ['placed' => [], 'unassigned' => collect()];
-        $tiers = $lots->groupBy(fn($lot) => $this->priorityTier($lot));
-        $lap('tier grouping');
-
-        $this->placeTierByPriority(
-            $tiers->get(1, collect()),
+        $tierCounts = $this->placePool(
+            $lots,
             $openEntriesByMachine,
             $anchorStateByMachine,
             $remainingCapacityByMachine,
             $dateString,
             $results
         );
-        $lap('tier1');
-
-        $this->placeTierByPriority(
-            $tiers->get(2, collect()),
-            $openEntriesByMachine,
-            $anchorStateByMachine,
-            $remainingCapacityByMachine,
-            $dateString,
-            $results
-        );
-        $lap('tier2');
-
-        $this->greedyPlaceTier(
-            $tiers->get(3, collect()),
-            $openEntriesByMachine,
-            $anchorStateByMachine,
-            $remainingCapacityByMachine,
-            $dateString,
-            $results
-        );
-        $lap('tier3');
+        $lap('placement');
 
         $capacityReport = [];
         foreach ($machineIds as $id) {
@@ -461,49 +633,16 @@ $sim = new class(
 
             $capacityReport[$id] = [
                 'capacity'     => $cap,
-                'db_committed' => $cap - $initial,            // already on the machine today (DB)
+                'db_committed' => $cap - $initial,
                 'pinned'       => $pinnedC,
-                'planned'      => ($initial - $pinnedC) - $final,  // newly placed by this run
+                'planned'      => ($initial - $pinnedC) - $final,
                 'remaining'    => $final,
             ];
         }
         $lap('capacity report');
 
-        $capacityReport = [];
-        foreach ($machineIds as $id) {
-            $cap = $capacityByMachine[$id] ?? null;
-            if ($cap === null) {
-                $capacityReport[$id] = null;
-                continue;
-            }
-            $initial = $initialRemaining[$id];
-            $pinnedC = $pinnedCommit[$id] ?? 0;
-            $final   = $remainingCapacityByMachine[$id];
-
-            $capacityReport[$id] = [
-                'capacity'     => $cap,
-                'db_committed' => $cap - $initial,            // already on the machine today (DB)
-                'pinned'       => $pinnedC,
-                'planned'      => ($initial - $pinnedC) - $final,  // newly placed by this run
-                'remaining'    => $final,
-            ];
-        }
-
-        // --- same final sort as production (pinned lots aren't in the plan) --
+        $this->sortPlan();
         $plan = $readPlan();
-        foreach ($plan as $machineId => $rows) {
-            foreach ($rows as $i => &$row) {
-                if ($row['type'] === 'lot') {
-                    $row['sort']['seq'] = $i;
-                }
-            }
-            unset($row);
-
-            $plan[$machineId] = \App\Services\LotPrioritySorter::sortSegments(
-                collect($rows),
-                fn($r) => $r['type'] === 'block'
-            )->all();
-        }
         $lap('final sort');
 
         return [
@@ -516,8 +655,9 @@ $sim = new class(
             'doableByLot'  => $doableByLot,
             'machineIds'   => $machineIds,
             'stationByLot' => $stationByLot,
-            'tierCounts'   => [1 => $tiers->get(1, collect())->count(), 2 => $tiers->get(2, collect())->count(), 3 => $tiers->get(3, collect())->count()],
+            'tierCounts'   => $tierCounts,
             'timings'      => $finishTimings(),
+            'attrsByLot'   => $attrsByLot,
         ];
     }
 };
@@ -533,20 +673,21 @@ $log = function (string $line = '') use (&$output) {
 };
 
 $csvReadStart = microtime(true);
-$csv = $readWipCsv($csvPath, array_values(array_filter(array_map(fn($p) => $p['lot_id'] ?? null, $pinned))));
+$csv = $readWipCsv($csvPath, $pinnedLotIds);
 $csvReadSeconds = microtime(true) - $csvReadStart;
 
 $log("CSV: {$csvPath}");
 $log("Read " . count($csv['rows']) . " WIP lot(s) to schedule"
     . " (skipped by station: {$csv['skipped_station']}, by package: {$csv['skipped_package']})");
-$log("Pinned machines: " . (empty($pinned) ? '(none)' : implode(', ', array_keys($pinned))));
+$log("Pins requested: " . count($pins)
+    . " (by lot " . count($pinnedLotIds) . ", by spec " . (count($pins) - count($pinnedLotIds)) . ")");
 $log("Target date: " . $targetDate->toDateString());
 $log();
 
 // Hard no-write guarantee: roll back whatever happens
 \DB::beginTransaction();
 try {
-    $r = $sim->simulate($csv['rows'], $pinned, $csv['pinned_rows'], $targetDate);
+    $r = $sim->simulate($csv['rows'], $pins, $csv['pinned_rows'], $targetDate);
 } finally {
     \DB::rollBack();
 }
@@ -577,6 +718,15 @@ try {
 }
 $machineLabel = fn($id) => isset($machineNames[$id]) ? "{$machineNames[$id]} (id {$id})" : "id {$id}";
 
+// Which state each pin resolved to (inference is otherwise silent)
+if (!empty($r['pinned'])) {
+    $log('PIN RESOLUTION');
+    foreach ($r['pinned'] as $machineId => $p) {
+        $log("  " . $machineLabel($machineId) . " -> state #{$p['state_id']}  via {$p['via']}");
+    }
+    $log();
+}
+
 // ---------------------------------------------------------------------
 // SEQUENCE BY MACHINE
 // ---------------------------------------------------------------------
@@ -587,7 +737,9 @@ $log(str_repeat('=', 60));
 
 $lotsById = $r['lots']->keyBy('Lot_Id');
 foreach ($r['pinned'] as $p) {
-    $lotsById[$p['lot']->Lot_Id] = $p['lot'];
+    if ($p['lot'] !== null) {
+        $lotsById[$p['lot']->Lot_Id] = $p['lot'];
+    }
 }
 
 $cols = [
@@ -602,10 +754,19 @@ $cols = [
     'Lot_Type',
     'Focus_Group',
     'Entry_Days',
+    'Lot_Status',
+    'Stage',
+    'Stage_Start_Time',
+    'Auto_Part',
+    'Bake',
+    'Bake_Count',
     'CT',
     'Ramp_Time',
     'Body_Size'
 ];
+
+$raw = fn($lotId, $k) => $r['attrsByLot'][$lotId][$k] ?? null;
+
 $rightAligned = ['Lead_Count', 'Qty', 'Doable', 'Entry_Days', 'CT'];
 $cell = fn($v) => ($v === null || $v === '') ? '-' : (is_float($v) ? (string) round($v, 2) : (string) $v);
 
@@ -627,7 +788,8 @@ foreach ($machinesToShow as $machineId) {
     $doableTotals[$machineId] = ['pinned' => 0, 'planned' => 0];
 
     if (isset($r['pinned'][$machineId])) {
-        $lot = $r['pinned'][$machineId]['lot'];
+        $p = $r['pinned'][$machineId];
+        $lot = $p['lot'] ?? $p['stand_in']; // spec pins print via the stand-in object
         $cells = [
             'PIN',
             $lot->Part_Name,
@@ -640,6 +802,12 @@ foreach ($machinesToShow as $machineId) {
             $lot->Lot_Type,
             $lot->Focus_Group,
             $lot->Lot_Entry_Time_Days ?? null,
+            $raw($lot->Lot_Id, 'Lot_Status'),
+            $raw($lot->Lot_Id, 'Stage'),
+            $raw($lot->Lot_Id, 'Stage_Start_Time'),
+            $raw($lot->Lot_Id, 'Auto_Part'),
+            $raw($lot->Lot_Id, 'Bake'),
+            $raw($lot->Lot_Id, 'Bake_Count'),
             $lot->CT ?? null,
             $lot->Ramp_Time,
             $lot->Body_Size
@@ -672,6 +840,12 @@ foreach ($machinesToShow as $machineId) {
             $lot->Lot_Type ?? null,
             $lot->Focus_Group ?? null,
             $row['sort']['entry_days'] ?? null,
+            $raw($row['lot_id'], 'Lot_Status'),
+            $raw($row['lot_id'], 'Stage'),
+            $raw($row['lot_id'], 'Stage_Start_Time'),
+            $raw($row['lot_id'], 'Auto_Part'),
+            $raw($row['lot_id'], 'Bake'),
+            $raw($row['lot_id'], 'Bake_Count'),
             $row['sort']['ct'] ?? null,
             $lot->Ramp_Time ?? null,
             $lot->Body_Size ?? null,
@@ -690,6 +864,64 @@ foreach ($machinesToShow as $machineId) {
 
     $blocks[$machineId] = $items;
 }
+
+$reasonLabels = [
+    'bake_highlight'                => 'BAKE HIGHLIGHT (held on purpose, not scheduled)',
+    'no_factory'                    => 'NO FACTORY (focus group does not resolve to a factory)',
+    'no_candidate_state'            => 'NO CANDIDATE STATE (no capable machine / setup state)',
+    'not_enough_remaining_capacity' => 'NOT ENOUGH REMAINING CAPACITY (capable machines are full)',
+    'unknown'                       => 'UNKNOWN REASON (push site not tagged)',
+];
+
+$unassignedByReason = [];
+$u = 0;
+foreach ($r['unassigned'] as $lot) {
+    $u++;
+    $id = $lot->Lot_Id;
+    $cells = [
+        $u . '.',
+        $lot->Part_Name ?? null,
+        $lot->Lead_Count ?? null,
+        $lot->Package_Name ?? null,
+        $id,
+        $r['stationByLot'][$id] ?? null,
+        $lot->Qty ?? null,
+        $r['doableByLot'][$id] ?? null,
+        $lot->Lot_Type ?? null,
+        $lot->Focus_Group ?? null,
+        $lot->Lot_Entry_Time_Days ?? null,
+        $raw($id, 'Lot_Status'),
+        $raw($id, 'Stage'),
+        $raw($id, 'Stage_Start_Time'),
+        $raw($id, 'Auto_Part'),
+        $raw($id, 'Bake'),
+        $raw($id, 'Bake_Count'),
+        $lot->CT ?? null,
+        $lot->Ramp_Time ?? null,
+        $lot->Body_Size ?? null,
+    ];
+    $track($cells); // widths shared across all sections
+
+    $reason = $lot->unassigned_reason ?? 'unknown';
+    if (!isset($reasonLabels[$reason])) {
+        $reasonLabels[$reason] = strtoupper($reason); // future reasons still print
+    }
+    $unassignedByReason[$reason][] = $cells;
+}
+
+foreach ($unassignedByReason as &$rows) {
+    usort(
+        $rows,
+        fn($a, $b) =>
+        [strtoupper((string) $a[3]), (string) $a[1], (string) $a[4]]
+            <=> [strtoupper((string) $b[3]), (string) $b[1], (string) $b[4]]
+    );
+    foreach ($rows as $i => &$cells) {
+        $cells[0] = ($i + 1) . '.';
+    }
+    unset($cells);
+}
+unset($rows);
 
 $pad = function (array $cells) use ($cols, $rightAligned, &$widths, $cell) {
     $out = [];
@@ -757,8 +989,13 @@ foreach ($blocks as $machineId => $items) {
 // ---------------------------------------------------------------------
 
 $log(str_repeat('=', 60));
+$reasonCounts = collect($unassignedByReason)
+    ->map(fn($rows, $reason) => "{$reason} " . count($rows))
+    ->implode(', ');
+
 $log("SUMMARY: placed {$placedTotal} / " . $r['lots']->count()
-    . " WIP lot(s); unassigned " . $r['unassigned']->count());
+    . " WIP lot(s); unassigned " . $r['unassigned']->count()
+    . " ({$reasonCounts})");
 
 $log(str_repeat('=', 60));
 $log('CAPACITY BY MACHINE (commit units)');
@@ -787,13 +1024,15 @@ foreach ($r['machineIds']->sort()->values() as $id) {
 }
 $log();
 
-if ($r['unassigned']->isNotEmpty()) {
+foreach ($reasonLabels as $reason => $label) {
+    if (empty($unassignedByReason[$reason])) {
+        continue;
+    }
     $log();
-    $log("UNASSIGNED (no factory / no capable machine / no capacity):");
-    foreach ($r['unassigned'] as $lot) {
-        $log("  {$lot->Lot_Id}  {$lot->Part_Name}  pkg=" . ($lot->Package_Name ?? '-')
-            . "  qty=" . ($lot->Qty ?? '-') . "  fg=" . ($lot->Focus_Group ?? '-')
-            . "  ramp=" . ($lot->Ramp_Time ?? '-'));
+    $log("UNASSIGNED - {$label}: " . count($unassignedByReason[$reason]));
+    $log($pad($cols));
+    foreach ($unassignedByReason[$reason] as $cells) {
+        $log($pad($cells));
     }
     $log();
 }
@@ -831,6 +1070,8 @@ $csvName  = preg_replace(
 $filename = "scheduler_test_{$csvName}_" . now()->format('Y-m-d_His') . '.txt';
 $path = storage_path('app/' . $filename);
 file_put_contents($path, $output);
+
+$log('Machines with planned lots: ' . collect($r['plan'])->filter(fn($rows) => collect($rows)->contains('type', 'lot'))->count());
 
 echo "Test completed in " . number_format($totalElapsed, 4) . " seconds\n";
 echo "Full output written to: {$path}\n";

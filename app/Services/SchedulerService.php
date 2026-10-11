@@ -15,37 +15,33 @@ use App\Models\MachineFocusGroupRule;
 use App\Models\PackageGroupLoadingPlan;
 use App\Models\MachineTransitionAxisRule;
 use App\Models\MachinePartExclusion;
-use App\Services\LoadingPlanFormulas;
-use App\Services\FocusGroupFactoryService;
-use App\Services\LoadingPlanEntryService;
 use App\Models\PartName;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
-use Exception;
-use Illuminate\Support\Str;
-use Illuminate\Support\Facades\Log;
 use App\Models\MachineTransitionGroup;
 use App\Models\MachineTransitionGroupMember;
 use App\Models\MachineGroupTransitionRule;
-use App\Services\TransitionGroupResolver; // same namespace, import not needed there
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Carbon\Carbon;
+use Exception;
 
 /**
- * NOTE ON $this->ref: reference data is now an instance property, set
+ * NOTE ON $this->ref: reference data is an instance property, set
  * fresh at the top of every public entry point (handlePickup,
  * rebuildForPickupArrival). This is only safe if this service is
  * resolved FRESH per request/job — if it's ever bound as a singleton
  * in a long-running worker, $this->ref could leak stale data across
  * unrelated batches processed by the same instance. Confirm the
  * container binding is not singleton before relying on this.
+ *
+ * NOTE ON SHARED PLACEMENT FLOW: bake hold -> tiering -> tier placement
+ * lives in placePool(), and the final per-machine ordering lives in
+ * sortPlan(). rebuildForPickupArrival() and any dry-run/tester subclass
+ * must call those instead of re-implementing the flow, so they can't drift.
  */
 class SchedulerService
 {
-    /**
-     * Focus_Group -> Factory. NULL means non-TSPI (excluded from scheduling).
-     * NOTE: DLT here maps to 'F1' — every prior confirmation had it as
-     * null ("Removed, not TSPI"). Flagging in case this is a typo.
-     */
     public function __construct(
         protected FocusGroupFactoryService $focusGroupFactoryService,
         protected LoadingPlanEntryService $loadingPlanEntryService
@@ -53,7 +49,13 @@ class SchedulerService
 
     /** Preloaded reference data for the batch currently being processed. */
     private array $ref = [];
-    private array $plan = [];
+
+    /**
+     * Planned rows per machine, filled by placeTierByPriority/greedyPlaceTier.
+     * Protected (not private) so a dry-run subclass can read it directly.
+     */
+    protected array $plan = [];
+
     private $fakeEntryId = -1;
     private Collection $partInfo;
     private array $candidateCache = [];
@@ -100,7 +102,20 @@ class SchedulerService
         $this->partInfo = collect();
         $this->calc = null;
         $this->candidateCache = [];
+        $this->restrictionCache = [];
         $this->transitionCostCache = [];
+    }
+
+    /** "5X4" and "4X5" -> same key. Only touches plain 2-part sizes. */
+    private function normBody(?string $v): ?string
+    {
+        if ($v === null) return null;
+        $parts = explode('X', mb_strtoupper(trim($v)));
+        if (count($parts) !== 2 || !is_numeric($parts[0]) || !is_numeric($parts[1])) {
+            return $this->norm($v);
+        }
+        usort($parts, fn($a, $b) => (float) $a <=> (float) $b);
+        return implode('X', $parts);
     }
 
     protected function partInfoFor(?string $name): ?PartName
@@ -232,28 +247,27 @@ class SchedulerService
             })
             ->get();
 
-        $relevantStateIds = $setupStates->pluck('setup_state_id');
         $relevantMachineIds = $setupStates->pluck('machine_id')->unique();
 
         /*
-        * States that are the DESTINATION of a machine_capability_part_rules
-        * override must not also sit in the general structural-matching pool.
-        * Design intent: such a state is meant to be reachable ONLY via the
-        * override branch in resolveCandidateStates(), for parts whose name
-        * matches the linked rule. Many of these rows have NULL structural
-        * columns (package_name/body_size/leadcount/etc.) by design, since
-        * the rule -- not the structural fields -- is what's supposed to
-        * restrict them. Left in the general pool, an all-NULL row with
-        * process_type='both' matches almost any lot on that factory,
-        * silently becoming a wildcard for every OTHER part too.
-        *
-        * Excluding them here does not affect the override branch itself --
-        * resolvePartNameOverrideStates() below re-fetches override states
-        * via its own independent query, so ADG884-family parts (etc.)
-        * still resolve to these states through the override path. This
-        * exclusion only removes them from the fallback every non-matching
-        * part uses.
-        */
+         * States that are the DESTINATION of a machine_capability_part_rules
+         * override must not also sit in the general structural-matching pool.
+         * Design intent: such a state is meant to be reachable ONLY via the
+         * override branch in resolveCandidateStates(), for parts whose name
+         * matches the linked rule. Many of these rows have NULL structural
+         * columns (package_name/body_size/leadcount/etc.) by design, since
+         * the rule -- not the structural fields -- is what's supposed to
+         * restrict them. Left in the general pool, an all-NULL row with
+         * process_type='both' matches almost any lot on that factory,
+         * silently becoming a wildcard for every OTHER part too.
+         *
+         * Excluding them here does not affect the override branch itself --
+         * resolvePartNameOverrideStates() below re-fetches override states
+         * via its own independent query, so ADG884-family parts (etc.)
+         * still resolve to these states through the override path. This
+         * exclusion only removes them from the fallback every non-matching
+         * part uses.
+         */
         $overrideOnlyStateIds = MachineCapabilityPartRule::query()
             ->pluck('setup_state_id')
             ->unique();
@@ -268,7 +282,6 @@ class SchedulerService
                 ->whereIn('part_name', $partNames)
                 ->get()
                 ->groupBy(fn($e) => "{$e->machine_id}|" . $this->norm($e->part_name)),
-
             'part_exclusions_by_part' => MachinePartExclusion::query()
                 ->whereIn('part_name', $partNames)
                 ->get()
@@ -276,7 +289,6 @@ class SchedulerService
             'setup_states_by_id' => $setupStates->keyBy('setup_state_id'),
             'transition_axis_rules_by_machine' => MachineTransitionAxisRule::query()
                 ->whereIn('machine_id', $relevantMachineIds)->get()->groupBy('machine_id'),
-            // 'setup_states' => $setupStates,
             'setup_states' => $generalSetupStates,
             'setup_states_by_factory' => $generalSetupStates->groupBy(fn($s) => $this->norm($s->factory)),
             'part_name_override_states' => $this->resolvePartNameOverrideStates($partNames),
@@ -288,7 +300,6 @@ class SchedulerService
                 ->whereIn('machine_id', $relevantMachineIds)
                 ->get()
                 ->groupBy('machine_id'),
-
             'focus_group_rules_by_machine' => MachineFocusGroupRule::query()
                 ->whereIn('machine_id', $relevantMachineIds)
                 ->get()
@@ -300,9 +311,6 @@ class SchedulerService
         return $this->ref;
     }
 
-    /*
-    * New method in SchedulerService:
-    */
     protected function loadGroupReferenceData(Collection $machineIds): array
     {
         $groups = MachineTransitionGroup::query()->whereIn('machine_id', $machineIds)->get();
@@ -354,10 +362,7 @@ class SchedulerService
         $lotPackageGroup,
         $normFocus
     ): bool {
-        // setup states now is grouped by factory, who calls this is alrady filtered by factory
-        // if (!$this->eq($state->factory, $factory)) {
-        //     return false;
-        // }
+        // Setup states are grouped by factory; callers are already filtered by factory.
         if ($state->focus_group !== null && $this->norm($state->focus_group) !== $normFocus) {
             return false;
         }
@@ -367,7 +372,7 @@ class SchedulerService
                 return false;
             }
         }
-        if ($state->body_size !== null && !$this->eq($state->body_size, $bodySize2d)) {
+        if ($state->body_size !== null && $this->normBody($state->body_size) !== $this->normBody($bodySize2d)) {
             return false;
         }
         if ($state->thickness !== null) {
@@ -479,8 +484,6 @@ class SchedulerService
         $unmatched = collect();
 
         foreach ($pickup as $item) {
-            // Log::info("item");
-            // Log::info($item);
             $item = (array) $item;
             $partName = $item['part_name'] ?? null;
 
@@ -502,8 +505,7 @@ class SchedulerService
                 'Qty'          => $item['qty'] ?? null,
                 'Lead_Count'   => $packageInfo->lead_count,
                 'Body_Size'    => $packageInfo->dimensions,
-                // real PartName columns are devicename/focus_grp/allocation —
-                // fixed from focus_group/ramp_time, which don't exist on that model
+                // real PartName columns are devicename/focus_grp/allocation
                 'Focus_Group'  => $packageInfo->focus_grp,
                 'Ramp_Time'    => $packageInfo->allocation,
                 'is_auto_part' => (bool) $packageInfo->is_auto_part,
@@ -528,6 +530,7 @@ class SchedulerService
     {
         $factory = $this->resolveFactory($lot->Focus_Group);
         if ($factory === null) {
+            $lot->unassigned_reason = 'no_factory';
             return null;
         }
 
@@ -546,60 +549,6 @@ class SchedulerService
             $rampProcessType,
             $lot->Lot_Type
         );
-
-        // if ($lot->Lot_Id === 'BD20338.13') {
-        // $why = $this->ref['setup_states']->where('machine_id', 330)->map(function ($s) use (
-        //     $factory,
-        //     $lot,
-        //     $bodySize2d,
-        //     $thickness,
-        //     $rampProcessType
-        // ) {
-        //     $reasons = [];
-        //     if (!$this->eq($s->factory, $factory)) $reasons[] = "factory {$s->factory} vs {$factory}";
-        //     if ($s->focus_group !== null && !$this->eq($s->focus_group, $lot->Focus_Group)) $reasons[] = "focus_group {$s->focus_group}";
-        //     if (
-        //         $s->package_name !== null
-        //         && !$this->eq($s->package_name, $lot->Package_Name)
-        //         && $this->ref['package_group_by_name']->get($this->norm($lot->Package_Name)) !== $this->norm($s->package_name)
-        //     ) {
-        //         $reasons[] = "package {$s->package_name} vs {$lot->Package_Name}";
-        //     }
-        //     if ($s->body_size !== null && !$this->eq($s->body_size, $bodySize2d)) $reasons[] = "body {$s->body_size} vs {$bodySize2d}";
-        //     if ($s->thickness !== null) $reasons[] = "thickness {$s->thickness} vs " . var_export($thickness, true);
-        //     foreach (['leadcount_include', 'leadcount_min', 'leadcount_max', 'leadcount_exclude'] as $c) {
-        //         if ($s->$c !== null) $reasons[] = "$c={$s->$c} (lead {$lot->Lead_Count})";
-        //     }
-        //     if ($s->process_type !== 'both' && !$this->eq($s->process_type, $rampProcessType)) $reasons[] = "process {$s->process_type} vs {$rampProcessType}";
-        //     if ($s->lot_type !== null && !$this->eq($s->lot_type, $lot->Lot_Type)) $reasons[] = "lot_type {$s->lot_type}";
-        //     return [
-        //         'state' => $s->setup_state_id,
-        //         'lot_type' => $s->lot_type,
-        //         'reasons' => $reasons,
-        //         'passes_restrictions' => $this->passesNewRestrictions(330, $factory, $lot->Package_Name, $lot->Focus_Group, $lot->is_auto_part, $lot->Part_Name),
-        //     ];
-        // })->values();
-
-        // Log::info('why not 330', [
-        //     'factory' => $factory,
-        //     'rampProcessType' => $rampProcessType,
-        //     'is_auto_part' => $lot->is_auto_part,
-        //     'has_override' => $this->ref['part_name_override_states']->get($lot->Part_Name, collect())->isNotEmpty(),
-        //     'states' => $why,
-        // ]);
-        // }
-
-        // $m = 330;
-        // Log::info('restriction breakdown 330', [
-        //     'part_excluded' => $this->ref['part_exclusions_by_part']->get($this->norm($lot->Part_Name), collect())->contains(fn($e) => $e->machine_id === $m),
-        //     'fg_excluded' => $this->ref['focus_group_rules_by_machine']->get($m, collect())
-        //         ->contains(fn($r) => $this->eq($r->focus_group, $lot->Focus_Group) && $r->rule_type === 'exclude'),
-        //     'auto_rules_330' => $this->ref['auto_part_rules_by_machine']->get($m, collect())->toArray(),
-        //     'include_only_machines' => $this->ref['auto_part_rules_by_machine']->flatten(1)
-        //         ->filter(fn($r) => $r->rule_type === 'include_only'
-        //             && ($r->package_name === null || $this->eq($r->package_name, $lot->Package_Name)))
-        //         ->pluck('machine_id')->unique()->values(),
-        // ]);
 
         return (object) [
             'candidateStates' => $candidateStates,
@@ -708,15 +657,12 @@ class SchedulerService
 
         return $machineIds->mapWithKeys(function ($machineId) use ($committedByMachine, $targetDate) {
             $capacityRow = MachineCapacity::effectiveFor($machineId, $targetDate);
+
+            // NOTE: Can't decide if non-TNR machine is literally unlimited capacity.
+            // for now, they ARE.
             return $capacityRow
                 ? [$machineId => $capacityRow->capacity - $committedByMachine[$machineId]]
                 : [$machineId => PHP_INT_MAX];
-
-            // NOTE: Can't decide if non-TNR machine is literally unlimited capacity.
-            // for now, they ARE!!!
-            // return $capacityRow
-            //     ? [$machineId => $capacityRow->capacity - $committedByMachine[$machineId]]
-            //     : [$machineId => null];
         });
     }
 
@@ -749,7 +695,7 @@ class SchedulerService
         return [$bodySize, null];
     }
 
-    /** Any value containing "TAPE" -> taping. "TUBE" -> tubing. REEL/other -> 'both' (unmodeled, no setup list yet). */
+    /** Any value containing "TAPE" -> taping. "TUBE" -> tubing. REEL/other -> mapped below; unmapped fails safe. */
     protected function resolveRampProcessType(?string $rampTime): ?string
     {
         if (!$rampTime) {
@@ -846,27 +792,17 @@ class SchedulerService
 
         // machine_auto_part_rules — only relevant when the lot IS auto
         if ($isAutoPart) {
-            // deprecated the flatten is in the preload now. In auto_part_rules_by_machine.
-            // $includeOnlyMachineIds = $allAutoRulesForPackage
-            //     ->where('rule_type', 'include_only')
-            //     ->pluck('machine_id');
-
-            // IMPORTANT NOTES:::::::
-            // THIS IS TEMPORARY REMOVAL. FOR THIS TO WORK AS INTENDED, I NEED TO COMPLETE SEEDING MACHINES THAT IS ABLE TO DO AUTO PARTS
-            // IMPORTANT NOTES:::::::
-
-            // GLOBAL check: if ANY include_only rule exists for this
-            // package (on any machine, not just this one), this machine
-            // is only valid if it's IN that set
+            // TEMPORARY: the global "include_only" check is disabled until every
+            // machine able to run auto parts is seeded. When re-enabling, the
+            // include_only rules are available via $this->ref['auto_part_rules_by_machine']
+            // (flatten(1) across machines, filtered by package_name null/match):
+            //
+            // $includeOnlyMachineIds = <include_only rules for this package>->pluck('machine_id');
             // if ($includeOnlyMachineIds->isNotEmpty() && !$includeOnlyMachineIds->contains($machineId)) {
             //     return false;
             // }
 
-            // if ($includeOnlyMachineIds->isNotEmpty() && !$includeOnlyMachineIds->contains($machineId)) {
-            //     return false;
-            // }
-
-            // exclude check unchanged, still per-machine
+            // exclude check, per-machine
             $excludedHere = $this->ref['auto_part_rules_by_machine']
                 ->get($machineId, collect())
                 ->contains(fn($r) => $r->rule_type === 'exclude'
@@ -1082,8 +1018,11 @@ class SchedulerService
 
             if ($fromState && $toState) {
                 $groupOf = fn($pkg) => $this->norm($this->ref['package_group_by_name']->get($this->norm($pkg), $pkg));
+                $fromThickness = $fromState->thickness !== null ? round((float) $fromState->thickness, 2) : null;
+                $toThickness = $toState->thickness !== null ? round((float) $toState->thickness, 2) : null;
 
                 $applicable = collect();
+
                 if (!$this->eq($fromState->factory, $toState->factory)) {
                     $applicable->push($axisRules->firstWhere('axis', 'factory'));
                 }
@@ -1096,8 +1035,11 @@ class SchedulerService
                 ) {
                     $applicable->push($axisRules->firstWhere('axis', 'leadcount'));
                 }
-                if (!$this->eq($fromState->body_size, $toState->body_size)) {
+                if ($this->normBody($fromState->body_size) !== $this->normBody($toState->body_size)) {
                     $applicable->push($axisRules->firstWhere('axis', 'body_size'));
+                }
+                if ($fromThickness !== $toThickness) {
+                    $applicable->push($axisRules->firstWhere('axis', 'thickness'));
                 }
                 if (!$this->eq($fromState->process_type, $toState->process_type)) {
                     $applicable->push($axisRules->firstWhere('axis', 'process_type'));
@@ -1135,9 +1077,9 @@ class SchedulerService
      * precomputed $ctx (skips resolveCandidateStates entirely) and,
      * when $appendOnly is true, only evaluates inserting at the end of
      * each machine's open-lot queue — no mid-queue positions, no
-     * exit/bridge transitionCost calls. Used by greedyPlaceTier, where
-     * mid-queue insertion isn't required and the position sweep was the
-     * other half of the per-call cost.
+     * exit/bridge transitionCost calls. Used by greedyPlaceTier and
+     * placeTierByPriority, where mid-queue insertion isn't required and
+     * the position sweep was the other half of the per-call cost.
      */
     protected function rankWithContext(
         object $lot,
@@ -1162,6 +1104,8 @@ class SchedulerService
             $isCr3Dedicated = $ctx->isCr3Dedicated
                 && $this->isDedicatedListMatch($lot->Part_Name, $state->setup_state_id);
 
+            $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
+
             if ($appendOnly) {
                 // no queue scan: the predecessor state is always the anchor
                 $predStateId = $anchorStateByMachine[$state->machine_id] ?? null;
@@ -1171,8 +1115,6 @@ class SchedulerService
                     $state->setup_state_id,
                     $lot->Part_Name
                 );
-
-                $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
 
                 $candidate = [
                     'machine_id' => $state->machine_id,
@@ -1194,122 +1136,6 @@ class SchedulerService
                 }
                 continue;
             }
-
-            $openLots = ($openEntriesByMachine[$state->machine_id] ?? collect())
-                ->where('entry_type', 'lot')
-                ->values();
-
-            $anchorState = $anchorStateByMachine[$state->machine_id] ?? null;
-
-            $positions = $appendOnly
-                ? [[$openLots->last(), null]]           // only "append at end"
-                : ($openLots->isEmpty()
-                    ? [[null, null]]
-                    : collect(range(0, $openLots->count()))->map(function ($i) use ($openLots) {
-                        $pred = $i === 0 ? null : $openLots[$i - 1];
-                        $succ = $i === $openLots->count() ? null : $openLots[$i];
-                        return [$pred, $succ];
-                    })->all());
-
-            foreach ($positions as [$predEntry, $succEntry]) {
-                $predStateId = $predEntry->resulting_setup_state_id ?? $anchorState;
-                $succStateId = $succEntry->resulting_setup_state_id ?? null;
-
-                $entryCost = $this->transitionCost($state->machine_id, $predStateId, $state->setup_state_id, $lot->Part_Name);
-
-                if ($succStateId !== null) {
-                    $exitCost = $this->transitionCost($state->machine_id, $state->setup_state_id, $succStateId, $lot->Part_Name);
-                    $bridgeCost = $this->transitionCost($state->machine_id, $predStateId, $succStateId, $lot->Part_Name);
-                    $marginalDuration = $entryCost['duration'] + $exitCost['duration'] - $bridgeCost['duration'];
-                } else {
-                    $marginalDuration = $entryCost['duration'];
-                }
-
-                $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
-
-                $candidate = [
-                    'machine_id' => $state->machine_id,
-                    'resulting_setup_state_id' => $state->setup_state_id,
-                    'operation_type' => $entryCost['operation_type'],
-                    'est_duration_minutes' => $entryCost['duration'],
-                    'matched_rule_id' => $entryCost['rule_id'],
-                    'insert_after_entry_id' => $predEntry->id ?? null,
-                    'insert_before_entry_id' => $succEntry->id ?? null,
-                    '_marginal_duration' => $marginalDuration,
-                    '_is_free' => $marginalDuration === 0,
-                    '_is_lot_type_dedicated' => $isLotTypeDedicated,
-                    '_is_cr3_dedicated' => $isCr3Dedicated,
-                    '_remaining_capacity' => $remainingCapacity,
-                ];
-
-                if ($best === null || $this->isBetterCandidate($candidate, $best)) {
-                    $best = $candidate;
-                }
-            }
-        }
-
-        if ($best === null) {
-            return null;
-        }
-
-        unset($best['_is_lot_type_dedicated'], $best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
-        return $best;
-    }
-
-    /**
-     * Rank every viable (machine, setup_state, insertion position) for
-     * ONE lot. Pure decision logic, no DB writes.
-     *
-     * @return array{
-     *     machine_id: int, resulting_setup_state_id: int, operation_type: string,
-     *     est_duration_minutes: int, matched_rule_id: int|null,
-     *     insert_after_entry_id: int|null, insert_before_entry_id: int|null,
-     * }|null
-     */
-    public function rankCandidatesForLot(
-        object $lot,
-        Collection $openEntriesByMachine,
-        Collection $anchorStateByMachine,
-        Collection $remainingCapacityByMachine
-    ): ?array {
-        $factory = $this->resolveFactory($lot->Focus_Group);
-
-        if ($factory === null) {
-            return null;
-        }
-
-        $estimatedCommit = $this->estimateCommit($lot);
-
-        [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
-        $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
-
-        $candidateStates = $this->resolveCandidateStates(
-            $lot->Part_Name,
-            $factory,
-            $lot->Focus_Group,
-            $lot->Package_Name,
-            $bodySize2d,
-            $thickness,
-            $lot->is_auto_part,
-            $lot->Lead_Count,
-            $rampProcessType,
-            $lot->Lot_Type,
-        );
-
-        $best = null;
-
-        foreach ($candidateStates as $state) {
-            $remainingCapacity = $remainingCapacityByMachine[$state->machine_id] ?? null;
-
-            if ($remainingCapacity === null) {
-                continue;
-            }
-            if ($estimatedCommit !== null && $remainingCapacity < $estimatedCommit) {
-                continue;
-            }
-
-            $isCr3Dedicated = ($this->eq($lot->CR3, 'RES'))
-                && $this->isDedicatedListMatch($lot->Part_Name, $state->setup_state_id);
 
             $openLots = ($openEntriesByMachine[$state->machine_id] ?? collect())
                 ->where('entry_type', 'lot')
@@ -1339,8 +1165,6 @@ class SchedulerService
                     $marginalDuration = $entryCost['duration'];
                 }
 
-                $isLotTypeDedicated = $lot->Lot_Type !== null && $this->eq($state->lot_type, $lot->Lot_Type);
-
                 $candidate = [
                     'machine_id' => $state->machine_id,
                     'resulting_setup_state_id' => $state->setup_state_id,
@@ -1363,12 +1187,48 @@ class SchedulerService
         }
 
         if ($best === null) {
+            $lot->unassigned_reason = 'not_enough_remaining_capacity';
+            if ($ctx->candidateStates->isEmpty()) {
+            } else {
+                $lot->unassigned_reason = 'no_candidate_state';
+            }
             return null;
         }
 
         unset($best['_is_lot_type_dedicated'], $best['_marginal_duration'], $best['_is_free'], $best['_is_cr3_dedicated'], $best['_remaining_capacity']);
-
         return $best;
+    }
+
+    /**
+     * Rank every viable (machine, setup_state, insertion position) for
+     * ONE lot. Pure decision logic, no DB writes.
+     *
+     * @return array{
+     *     machine_id: int, resulting_setup_state_id: int, operation_type: string,
+     *     est_duration_minutes: int, matched_rule_id: int|null,
+     *     insert_after_entry_id: int|null, insert_before_entry_id: int|null,
+     * }|null
+     */
+    public function rankCandidatesForLot(
+        object $lot,
+        Collection $openEntriesByMachine,
+        Collection $anchorStateByMachine,
+        Collection $remainingCapacityByMachine
+    ): ?array {
+        $ctx = $this->buildLotContext($lot);
+
+        if ($ctx === null) {
+            return null;
+        }
+
+        return $this->rankWithContext(
+            $lot,
+            $ctx,
+            $openEntriesByMachine,
+            $anchorStateByMachine,
+            $remainingCapacityByMachine,
+            appendOnly: false
+        );
     }
 
     protected function isBetterCandidate(array $candidate, array $incumbent): bool
@@ -1468,7 +1328,7 @@ class SchedulerService
         }
 
         $generatedLotId = $lot->Lot_Id
-            ?? ('PICKUP-' . now()->format('YmdHis') . '-' . strtoupper(\Illuminate\Support\Str::random(4)));
+            ?? ('PICKUP-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4)));
 
         $lotResult = $this->loadingPlanEntryService->createManualLot(
             $machineId,
@@ -1604,12 +1464,11 @@ class SchedulerService
             return $this->hydrateLotFromEntry($entry, $wip);
         }
 
-        // $partInfo = PartName::findByPartName($entry->part_name);
         $partInfo = $this->partInfoFor($entry->part_name);
 
         if (!$partInfo) {
-            // will not sched
-            return null; // genuinely unresolvable — no WIP, no PartName match
+            // genuinely unresolvable — no WIP, no PartName match; will not sched
+            return null;
         }
 
         $lotQty = $entry->lotQuantity;
@@ -1697,8 +1556,6 @@ class SchedulerService
 
         $this->loadPartInfo($entries->pluck('part_name'));
 
-        Log::info($entries);
-
         $rootLotIdByEntry = $entries->mapWithKeys(fn($e) => [$e->id => $e->resolveRootLotId()]);
         $rootLotIds = $rootLotIdByEntry->values()->unique();
 
@@ -1734,7 +1591,6 @@ class SchedulerService
                 return null;
             }
 
-            // $partInfo = PartName::findByPartName($lotQty->part_name);
             $partInfo = $this->partInfoFor($lotQty->part_name);
 
             if (!$partInfo) {
@@ -1742,7 +1598,16 @@ class SchedulerService
             }
 
             return (object) [
+                'aboveCT' => $wip ? $formulas->cycleTimeExceedOverall : false,
+                'cycleTimeExceed' => $wip ? $formulas->cycleTimeExceed : false,
+                'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
+                'CT' => $wip ? $formulas->ct : null,
+                'CR3' => $wip?->CR3,
                 'Lot_Id' => $entry->lot_id,
+                // 'aboveCT' => false,
+                // 'CR3' => null,
+                // 'CT' => null,
+                // 'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
                 'Part_Name' => $lotQty->part_name,
                 'Package_Name' => $entry->package_name,
                 'Qty' => $lotQty->effectiveQty() ?? $lotQty->qty_base,
@@ -1751,16 +1616,12 @@ class SchedulerService
                 'Focus_Group' => $partInfo->focus_grp,
                 'is_auto_part' => (bool) $partInfo->is_auto_part,
                 'Ramp_Time' => $partInfo->allocation,
-                'CR3' => null,
                 'Station'    => $wip?->Station,
                 'Lot_Status' => $wip?->Lot_Status,
                 'Lot_Type' => null,
                 'isExpedite' => (bool) $entry->is_manual_expedite,
-                'aboveCT' => false,
-                'CT' => null,
                 'is_pickup' => true,
                 'isBakeHighlight' => (bool) ($formulas->isBakeHighlight ?? false), // DO NOT SCHEDULE BAKE
-                'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
                 'Lot_Entry_Time_Days'     => $wip?->Lot_Entry_Time_Days,
             ];
         }
@@ -1782,7 +1643,8 @@ class SchedulerService
             'CR3' => $wip->CR3,
             'Lot_Type' => $wip->Lot_Type,
             'isExpedite' => (bool) $entry->is_manual_expedite,
-            'aboveCT' => $formulas->cycleTimeExceedOverall,
+            'aboveCT' => $formulas->cycleTimeExceedOverall,   // unchanged, tiering only
+            'cycleTimeExceed' => $formulas->cycleTimeExceed,  // NEW, sort key only
             'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
             'Lot_Entry_Time_Days'     => $wip?->Lot_Entry_Time_Days,
             'CT' => $formulas->ct ?? null,
@@ -1801,6 +1663,7 @@ class SchedulerService
             'qty' => $lot->Qty,
             'is_pickup' => $lot->is_pickup ?? false,
             'is_manual_expedite' => (bool) ($lot->isExpedite ?? false),
+            'cycle_time_exceed' => (bool) ($lot->cycleTimeExceed ?? false),
             'sort' => [
                 // TODO: GTREEL_T is a business logic, might refactor
                 'is_running_gtreel'          => strtoupper(trim((string) ($lot->Station ?? ''))) === 'GTREEL_T' && strtoupper(trim((string) ($lot->Lot_Status ?? ''))) === 'RUN',
@@ -1810,7 +1673,7 @@ class SchedulerService
                 'is_res'                     => $this->eq($lot->CR3, 'RES'),
                 'ct'                         => $lot->CT ?? null,
                 'entry_days'                 => $lot->Lot_Entry_Time_Days ?? null,
-                'seq'                        => 0, // overwritten below
+                'seq'                        => 0, // overwritten in sortPlan()
             ],
         ];
     }
@@ -1856,7 +1719,6 @@ class SchedulerService
 
             $machineId = $choice['machine_id'];
 
-            // $results['placed'][] = $this->applyPlacement($lot, $choice, $dateString);
             if ($choice['operation_type'] !== 'none') {
                 $this->plan[$machineId][] = [
                     'type' => 'block',
@@ -2001,7 +1863,7 @@ class SchedulerService
             $bestChoice = $cacheByIdx[$bestIdx];
             $machineId = $bestChoice['machine_id'];
 
-            // --- commit placement (unchanged) ---
+            // --- commit placement ---
             if ($bestChoice['operation_type'] !== 'none') {
                 $this->plan[$machineId][] = [
                     'type' => 'block',
@@ -2011,7 +1873,7 @@ class SchedulerService
             }
 
             $this->plan[$machineId][] = $this->planLotRow($lot);
-            $anchorBefore  = $anchorStateByMachine[$machineId] ?? null;
+            $anchorBefore = $anchorStateByMachine[$machineId] ?? null;
 
             $anchorStateByMachine[$machineId] = $bestChoice['resulting_setup_state_id'];
             $remainingCapacityByMachine[$machineId] =
@@ -2026,7 +1888,6 @@ class SchedulerService
             unset($cacheByIdx[$bestIdx], $candidateMachinesByIdx[$bestIdx], $contextByIdx[$bestIdx]);
             $placedCount++;
 
-            // ... commit placement, update anchor/capacity ...
             $anchorChanged = $anchorBefore !== $bestChoice['resulting_setup_state_id'];
 
             // --- invalidate only lots whose candidate set includes $machineId ---
@@ -2059,7 +1920,7 @@ class SchedulerService
 
             $roundDuration = microtime(true) - $roundStartedAt;
             if ($round % 25 === 0 || $roundDuration > 1.0) {
-                \Log::info('greedyPlaceTier progress', [
+                Log::info('greedyPlaceTier progress', [
                     'round' => $round,
                     'placed' => $placedCount,
                     'remaining' => count($cacheByIdx),
@@ -2072,7 +1933,7 @@ class SchedulerService
             }
         }
 
-        \Log::info('END: greedyPlaceTier', [
+        Log::info('END: greedyPlaceTier', [
             'date' => $dateString,
             'rounds' => $round,
             'placed' => $placedCount,
@@ -2081,12 +1942,143 @@ class SchedulerService
         ]);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | SHARED PLACEMENT FLOW
+    |--------------------------------------------------------------------------
+    | Used by rebuildForPickupArrival() AND by any dry-run/tester subclass.
+    | Anything that changes how a pool of lots is filtered, tiered, placed or
+    | ordered belongs here so both paths pick it up automatically.
+    */
+
+    /**
+     * Bake-highlight lots are never scheduled; they go straight to unassigned.
+     *
+     * @return array{0: Collection, 1: Collection} [held, schedulable]
+     */
+    protected function splitBakeHeld(Collection $pool): array
+    {
+        [$held, $rest] = $pool->partition(fn($lot) => (bool) ($lot->isBakeHighlight ?? false));
+
+        return [$held->values(), $rest->values()];
+    }
+
+    /**
+     * Bake hold -> priority tiering -> tier placement. Fills $this->plan and
+     * pushes held/unplaceable lots onto $results['unassigned'].
+     * Caller must already have called preloadReferenceData() and
+     * preloadPackageList() for this pool.
+     *
+     * Tier 1/2: fixed CT-descending order. Tier 3: greedy-cheapest-next.
+     *
+     * @return array{1: int, 2: int, 3: int} lot count per tier (bake-held lots excluded)
+     */
+    protected function placePool(
+        Collection $pool,
+        Collection &$openEntriesByMachine,
+        Collection &$anchorStateByMachine,
+        Collection &$remainingCapacityByMachine,
+        string $dateString,
+        array &$results
+    ): array {
+        [$bakeHeld, $pool] = $this->splitBakeHeld($pool);
+
+        foreach ($bakeHeld as $lot) {
+            $lot->unassigned_reason = 'bake_highlight';
+            $results['unassigned']->push($lot);
+        }
+
+        $tiers = $pool->groupBy(fn($lot) => $this->priorityTier($lot));
+
+        foreach ([1, 2] as $tier) {
+            $this->placeTierByPriority(
+                $tiers->get($tier, collect()),
+                $openEntriesByMachine,
+                $anchorStateByMachine,
+                $remainingCapacityByMachine,
+                $dateString,
+                $results
+            );
+        }
+
+        $this->greedyPlaceTier(
+            $tiers->get(3, collect()),
+            $openEntriesByMachine,
+            $anchorStateByMachine,
+            $remainingCapacityByMachine,
+            $dateString,
+            $results
+        );
+
+        return [
+            1 => $tiers->get(1, collect())->count(),
+            2 => $tiers->get(2, collect())->count(),
+            3 => $tiers->get(3, collect())->count(),
+        ];
+    }
+
+    /**
+     * Final per-machine ordering of $this->plan (placement order is the
+     * last tie-break). Call after placePool() and before bulkPlacePlan().
+     */
+    protected function sortPlan(): void
+    {
+        foreach ($this->plan as $machineId => $rows) {
+            foreach ($rows as $i => &$row) {
+                if ($row['type'] === 'lot') {
+                    $row['sort']['seq'] = $i; // placement order as the final tie-break
+                }
+            }
+            unset($row);
+
+            $this->plan[$machineId] = LotPrioritySorter::sortSegments(
+                collect($rows),
+                fn($r) => $r['type'] === 'block'
+            )->all();
+        }
+    }
+
+    /**
+     * Pickup payloads are rebuilt from PartName and carry no WIP-derived fields.
+     * When a WIP row exists for the lot, fill in the same fields
+     * hydrateLotFromEntry() uses on its WIP branch.
+     */
+    protected function enrichWithWip(Collection $lots, Carbon $date): Collection
+    {
+        $wips = CustomerDataWip::query()
+            ->forDate($date->toDateString())
+            ->whereIn('Lot_Id', $lots->pluck('Lot_Id')->filter()->all())
+            ->get()
+            ->keyBy('Lot_Id');
+
+        return $lots->map(function ($lot) use ($wips) {
+            $wip = $wips->get($lot->Lot_Id);
+            if (!$wip) {
+                return $lot; // genuine pickup with no WIP: unchanged
+            }
+
+            $f = LoadingPlanFormulas::make($wip);
+
+            $lot->CR3                     = $wip->CR3;
+            $lot->Lot_Type                = $wip->Lot_Type;
+            $lot->Station                 = $wip->Station;
+            $lot->Lot_Status              = $wip->Lot_Status;
+            $lot->Lot_Entry_Time_Days     = $wip->Lot_Entry_Time_Days;
+            $lot->CT                      = $f->ct;
+            $lot->aboveCT                 = $f->cycleTimeExceedOverall;  // tiering
+            $lot->cycleTimeExceed         = $f->cycleTimeExceed;         // sort key
+            $lot->cycleTimeExceedResidual = $f->cycleTimeExceedResidual;
+            $lot->isBakeHighlight         = $f->isBakeHighlight;
+
+            return $lot;
+        });
+    }
+
     /**
      * Full rebuild triggered by a pickup arrival: pools every OPEN
      * entry on candidate machines with new pickup lots, wipes the open
      * window, replans from scratch. Frozen entries never touched.
-     * Tier 1/2 placed by fixed CT-descending order; tier 3 by
-     * greedy-cheapest-next.
+     * Placement itself is placePool(); final ordering is sortPlan().
      *
      * NOTE: no reoptimization_runs/audit trail — accepted as-is per
      * current instructions, open entries are deleted outright.
@@ -2098,6 +2090,7 @@ class SchedulerService
         $this->resetBatchState();
 
         [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
+        $pickupLots = $this->enrichWithWip($pickupLots, $targetDate);
         log_entities($pickupLots);
         $results = ['placed' => [], 'unassigned' => collect(), 'unmatched_part_names' => $unmatchedPartNames];
 
@@ -2125,6 +2118,7 @@ class SchedulerService
             $pickupLots,
             $dateString,
             $targetDate,
+            $pickup,
             &$results
         ) {
             $transactionStart = microtime(true);
@@ -2146,14 +2140,8 @@ class SchedulerService
                     $context,
                     [
                         'seconds' => $seconds,
-                        'memory_mb' => round(
-                            memory_get_usage(true) / 1024 / 1024,
-                            2
-                        ),
-                        'peak_memory_mb' => round(
-                            memory_get_peak_usage(true) / 1024 / 1024,
-                            2
-                        ),
+                        'memory_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+                        'peak_memory_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
                     ]
                 ));
 
@@ -2168,12 +2156,7 @@ class SchedulerService
                 'target_date' => $targetDate,
             ]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 1. Load open LoadingPlanEntry records
-    |--------------------------------------------------------------------------
-    */
-
+            // 1. Load open LoadingPlanEntry records
             $start = $logTimer('LoadingPlanEntry::get');
             log_entities($candidateMachineIds);
             $entries = LoadingPlanEntry::query()
@@ -2187,22 +2170,9 @@ class SchedulerService
 
             $this->loadPartInfo($entries->map(fn($e) => $e->lotQuantity?->part_name ?? $e->part_name));
 
-            // dump($entries);
+            $logTimer('LoadingPlanEntry::get', $start, ['entry_count' => $entries->count()]);
 
-            $logTimer(
-                'LoadingPlanEntry::get',
-                $start,
-                [
-                    'entry_count' => $entries->count(),
-                ]
-            );
-
-            /*
-    |--------------------------------------------------------------------------
-    | 2. Get unique child lot IDs
-    |--------------------------------------------------------------------------
-    */
-
+            // 2. Unique child lot IDs
             $start = $logTimer('Build entryLotIds');
 
             $entryLotIds = $entries
@@ -2211,20 +2181,9 @@ class SchedulerService
                 ->unique()
                 ->values();
 
-            $logTimer(
-                'Build entryLotIds',
-                $start,
-                [
-                    'lot_id_count' => $entryLotIds->count(),
-                ]
-            );
+            $logTimer('Build entryLotIds', $start, ['lot_id_count' => $entryLotIds->count()]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 3. Load active LotSplits
-    |--------------------------------------------------------------------------
-    */
-
+            // 3. Load active LotSplits
             $start = $logTimer('LotSplit::get');
 
             $activeLotSplits = LotSplit::query()
@@ -2232,193 +2191,92 @@ class SchedulerService
                 ->whereIn('child_lot_id', $entryLotIds)
                 ->get();
 
-            $logTimer(
-                'LotSplit::get',
-                $start,
-                [
-                    'active_split_count' => $activeLotSplits->count(),
-                ]
-            );
+            $logTimer('LotSplit::get', $start, ['active_split_count' => $activeLotSplits->count()]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 4. Key active LotSplits
-    |--------------------------------------------------------------------------
-    */
-
+            // 4. Key active LotSplits
             $start = $logTimer('Key activeLotSplits');
 
             $activeLotSplits = $activeLotSplits->keyBy(function ($split) {
-                return $split->child_lot_id
-                    . '|'
-                    . $split->scheduled_date->toDateString();
+                return $split->child_lot_id . '|' . $split->scheduled_date->toDateString();
             });
 
-            $logTimer(
-                'Key activeLotSplits',
-                $start,
-                [
-                    'keyed_split_count' => $activeLotSplits->count(),
-                ]
-            );
+            $logTimer('Key activeLotSplits', $start, ['keyed_split_count' => $activeLotSplits->count()]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 5. Attach activeLotSplit to each entry
-    |--------------------------------------------------------------------------
-    */
-
+            // 5. Attach activeLotSplit to each entry
             $start = $logTimer('Attach activeLotSplit relations');
 
             $entries->each(function ($entry) use ($activeLotSplits) {
-                $key = $entry->lot_id
-                    . '|'
-                    . $entry->scheduled_date->toDateString();
+                $key = $entry->lot_id . '|' . $entry->scheduled_date->toDateString();
 
-                $entry->setRelation(
-                    'activeLotSplit',
-                    $activeLotSplits->get($key)
-                );
+                $entry->setRelation('activeLotSplit', $activeLotSplits->get($key));
             });
 
-            $logTimer(
-                'Attach activeLotSplit relations',
-                $start,
-                [
-                    'entry_count' => $entries->count(),
-                ]
-            );
+            $logTimer('Attach activeLotSplit relations', $start, ['entry_count' => $entries->count()]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 6. Resolve root lot IDs
-    |--------------------------------------------------------------------------
-    */
-
+            // 6. Resolve root lot IDs
             $start = $logTimer('Resolve rootLotIdByEntry');
 
-            $rootLotIdByEntry = $entries->mapWithKeys(function ($e) {
-                return [
-                    $e->id => $e->resolveRootLotId(),
-                ];
-            });
+            $rootLotIdByEntry = $entries->mapWithKeys(fn($e) => [$e->id => $e->resolveRootLotId()]);
 
-            $logTimer(
-                'Resolve rootLotIdByEntry',
-                $start,
-                [
-                    'resolved_count' => $rootLotIdByEntry->count(),
-                ]
-            );
+            $logTimer('Resolve rootLotIdByEntry', $start, ['resolved_count' => $rootLotIdByEntry->count()]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 7. Group entries by scheduled date
-    |--------------------------------------------------------------------------
-    */
-
+            // 7. Group entries by scheduled date
             $start = $logTimer('Group entries by date');
-            // dump($entries);
 
-            $entriesByDate = $entries->groupBy(
-                fn($e) => $e->scheduled_date->toDateString()
-            );
-            // dump($entriesByDate);
+            $entriesByDate = $entries->groupBy(fn($e) => $e->scheduled_date->toDateString());
 
-            $logTimer(
-                'Group entries by date',
-                $start,
-                [
-                    'date_group_count' => $entriesByDate->count(),
-                    'dates' => $entriesByDate->keys()->values()->all(),
-                ]
-            );
+            $logTimer('Group entries by date', $start, [
+                'date_group_count' => $entriesByDate->count(),
+                'dates' => $entriesByDate->keys()->values()->all(),
+            ]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 8. Load WIP records
-    |--------------------------------------------------------------------------
-    */
-
+            // 8. Load WIP records
             $start = $logTimer('CustomerDataWip::get');
 
-            // 1. Return/Short-circuit early if there are no date entries
-            if (empty($entriesByDate) || $entriesByDate->isEmpty()) {
-                $wips = collect();
-            } else {
-                // 2. Flatten and collect root lot IDs cleanly before querying
-                $rootLotIdsByDate = [];
-                foreach ($entriesByDate as $date => $dateEntries) {
-                    $ids = $dateEntries
-                        ->map(fn($e) => $rootLotIdByEntry[$e->id] ?? null)
-                        ->filter()
-                        ->unique()
-                        ->values()
-                        ->toArray();
+            $wips = collect();
+            $rootLotIdsByDate = [];
+            foreach ($entriesByDate as $date => $dateEntries) {
+                $ids = $dateEntries
+                    ->map(fn($e) => $rootLotIdByEntry[$e->id] ?? null)
+                    ->filter()
+                    ->unique()
+                    ->values()
+                    ->toArray();
 
-                    if (!empty($ids)) {
-                        $rootLotIdsByDate[$date] = $ids;
-                    }
-                }
-
-                // 3. Only execute query if valid date-to-lot mappings exist
-                if (empty($rootLotIdsByDate)) {
-                    $wips = collect();
-                } else {
-                    $wips = CustomerDataWip::query()
-                        ->where(function ($query) use ($rootLotIdsByDate) {
-                            foreach ($rootLotIdsByDate as $date => $rootLotIds) {
-                                $query->orWhere(function ($subQuery) use ($date, $rootLotIds) {
-                                    $subQuery->forDate($date)
-                                        ->whereIn('Lot_Id', $rootLotIds);
-                                });
-                            }
-                        })
-                        ->get();
+                if (!empty($ids)) {
+                    $rootLotIdsByDate[$date] = $ids;
                 }
             }
 
-            $logTimer(
-                'CustomerDataWip::get',
-                $start,
-                [
-                    // 'wip_count' => $wips->count(),
-                    'test' => 'test',
-                ]
-            );
+            if (!empty($rootLotIdsByDate)) {
+                $wips = CustomerDataWip::query()
+                    ->where(function ($query) use ($rootLotIdsByDate) {
+                        foreach ($rootLotIdsByDate as $date => $rootLotIds) {
+                            $query->orWhere(function ($subQuery) use ($date, $rootLotIds) {
+                                $subQuery->forDate($date)
+                                    ->whereIn('Lot_Id', $rootLotIds);
+                            });
+                        }
+                    })
+                    ->get();
+            }
 
-            /*
-    |--------------------------------------------------------------------------
-    | 9. Build WIP lookup
-    |--------------------------------------------------------------------------
-    */
+            $logTimer('CustomerDataWip::get', $start, ['wip_count' => $wips->count()]);
 
+            // 9. Build WIP lookup
             $start = $logTimer('Build wipLookup');
 
             $wipLookup = [];
 
             foreach ($wips as $wip) {
-                $dateStr = Carbon::parse(
-                    $wip->import_date
-                )->toDateString();
+                $dateStr = Carbon::parse($wip->import_date)->toDateString();
 
                 $wipLookup["{$dateStr}:{$wip->Lot_Id}"] = $wip;
             }
 
-            $logTimer(
-                'Build wipLookup',
-                $start,
-                [
-                    'lookup_count' => count($wipLookup),
-                ]
-            );
+            $logTimer('Build wipLookup', $start, ['lookup_count' => count($wipLookup)]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 10. Hydrate existing lots
-    |--------------------------------------------------------------------------
-    */
-
+            // 10. Hydrate existing lots
             $start = $logTimer('Hydrate existing lots');
 
             $hydrated = $entries->map(function ($entry) use ($wipLookup, $rootLotIdByEntry) {
@@ -2442,29 +2300,15 @@ class SchedulerService
                 ]);
             }
 
-            $logTimer(
-                'Hydrate existing lots',
-                $start,
-                [
-                    'existing_lot_count' => $existingLots->count(),
-                    'skipped_count'      => count($skippedEntryIds),
-                ]
-            );
+            $logTimer('Hydrate existing lots', $start, [
+                'existing_lot_count' => $existingLots->count(),
+                'skipped_count'      => count($skippedEntryIds),
+            ]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 11. Delete existing open entries
-    |--------------------------------------------------------------------------
-    */
+            // 11. Delete existing open entries
+            LoadingPlanEntry::whereIn('id', $hydratedEntryIds)->delete();
 
-            $deletedCount = LoadingPlanEntry::whereIn('id', $hydratedEntryIds)->delete();
-
-            /*
-    |--------------------------------------------------------------------------
-    | 12. Get anchor states
-    |--------------------------------------------------------------------------
-    */
-
+            // 12. Anchor states
             $start = $logTimer('getAnchorStates');
 
             $anchorStateByMachine = $this->getAnchorStates(
@@ -2472,57 +2316,22 @@ class SchedulerService
                 $pickupLots->concat($existingLots)
             );
 
-            $logTimer(
-                'getAnchorStates',
-                $start,
-                [
-                    'machine_count' => count($anchorStateByMachine),
-                ]
-            );
+            $logTimer('getAnchorStates', $start, ['machine_count' => count($anchorStateByMachine)]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 13. Get remaining capacity
-    |--------------------------------------------------------------------------
-    */
-
+            // 13. Remaining capacity
             $start = $logTimer('getRemainingCapacityByMachine');
 
-            $remainingCapacityByMachine =
-                $this->getRemainingCapacityByMachine(
-                    $candidateMachineIds,
-                    $targetDate
-                );
-
-            $logTimer(
-                'getRemainingCapacityByMachine',
-                $start,
-                [
-                    'machine_count' => count($remainingCapacityByMachine),
-                ]
+            $remainingCapacityByMachine = $this->getRemainingCapacityByMachine(
+                $candidateMachineIds,
+                $targetDate
             );
 
-            /*
-    |--------------------------------------------------------------------------
-    | 14. Prepare open entries collection
-    |--------------------------------------------------------------------------
-    */
+            $logTimer('getRemainingCapacityByMachine', $start, ['machine_count' => count($remainingCapacityByMachine)]);
 
-            $start = $logTimer('Initialize openEntriesByMachine');
-
+            // 14. Open entries (everything open was just deleted; placement builds fake entries)
             $openEntriesByMachine = collect();
 
-            $logTimer(
-                'Initialize openEntriesByMachine',
-                $start
-            );
-
-            /*
-    |--------------------------------------------------------------------------
-    | 15. Merge existing lots + pickup lots
-    |--------------------------------------------------------------------------
-    */
-
+            // 15. Merge existing lots + pickup lots (dedupe by Lot_Id)
             $dupes = $entries->groupBy('lot_id')->filter(fn($g) => $g->count() > 1);
             Log::info('dup entries', $dupes->take(5)->map(fn($g) => $g->map(fn($e) => [
                 'id' => $e->id,
@@ -2536,18 +2345,11 @@ class SchedulerService
 
             $start = $logTimer('Merge existingLots + pickupLots');
 
-            // $pool = $existingLots->merge($pickupLots);
-            // Log::info("existingLots");
-            // Log::info($existingLots);
-
-            // Log::info("pickupLots");
-            // Log::info($pickupLots);
-
             $pool = $existingLots->concat($pickupLots)
                 ->groupBy(fn($lot) => is_array($lot) ? $lot['Lot_Id'] : $lot->Lot_Id)
                 ->map(function ($group, $lotId) {
                     if ($group->count() > 1) {
-                        \Log::warning('Duplicate lot_id in rebuild pool — dropping extras', [
+                        Log::warning('Duplicate lot_id in rebuild pool — dropping extras', [
                             'lot_id' => $lotId,
                             'count'  => $group->count(),
                         ]);
@@ -2556,73 +2358,19 @@ class SchedulerService
                 })
                 ->values();
 
-            [$bakeHeld, $pool] = $pool->partition(
-                fn($lot) => (bool) ($lot->isBakeHighlight ?? false)
-            );
-            $pool = $pool->values();
-
-            if ($bakeHeld->isNotEmpty()) {
-                // Log::info('Rebuild: bake-highlight lots held back as unassigned', [
-                //     'lot_ids' => $bakeHeld->pluck('Lot_Id')->values()->all(),
-                // ]);
-                foreach ($bakeHeld as $lot) {
-                    $results['unassigned']->push($lot);
-                }
-            }
-
             $this->preloadPackageList($pool);
 
-            $logTimer(
-                'Merge existingLots + pickupLots',
-                $start,
-                [
-                    'existing_lots' => $existingLots->count(),
-                    'pickup_lots' => $pickupLots->count(),
-                    'pool_count' => $pool->count(),
-                ]
-            );
+            $logTimer('Merge existingLots + pickupLots', $start, [
+                'existing_lots' => $existingLots->count(),
+                'pickup_lots' => $pickupLots->count(),
+                'pool_count' => $pool->count(),
+            ]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 16. Group by priority tier
-    |--------------------------------------------------------------------------
-    */
+            // 16. Bake hold + tiering + placement (shared with the tester)
+            $start = $logTimer('placePool', null, ['lot_count' => $pool->count()]);
 
-            $start = $logTimer('Group pool by priority tier');
-
-            $tiers = $pool->groupBy(
-                fn($lot) => $this->priorityTier($lot)
-            );
-
-            $logTimer(
-                'Group pool by priority tier',
-                $start,
-                [
-                    'tier_1_count' => $tiers->get(1, collect())->count(),
-                    'tier_2_count' => $tiers->get(2, collect())->count(),
-                    'tier_3_count' => $tiers->get(3, collect())->count(),
-                    'tier_count' => $tiers->count(),
-                ]
-            );
-
-            /*
-    |--------------------------------------------------------------------------
-    | 17. Place Tier 1
-    |--------------------------------------------------------------------------
-    */
-
-            $tier1 = $tiers->get(1, collect());
-
-            $start = $logTimer(
-                'placeTierByPriority - Tier 1',
-                null,
-                [
-                    'lot_count' => $tier1->count(),
-                ]
-            );
-
-            $this->placeTierByPriority(
-                $tier1,
+            $tierCounts = $this->placePool(
+                $pool,
                 $openEntriesByMachine,
                 $anchorStateByMachine,
                 $remainingCapacityByMachine,
@@ -2630,86 +2378,28 @@ class SchedulerService
                 $results
             );
 
-            $logTimer(
-                'placeTierByPriority - Tier 1',
-                $start,
-                [
-                    'lot_count' => $tier1->count(),
-                ]
-            );
+            $planned = collect($this->plan)->filter(fn($r) => collect($r)->contains('type', 'lot'))->keys();
+            $missing = $candidateMachineIds->diff($planned)->values();
 
-            /*
-    |--------------------------------------------------------------------------
-    | 18. Place Tier 2
-    |--------------------------------------------------------------------------
-    */
+            Log::info('[machines with no lots]', [
+                'candidates' => $candidateMachineIds->count(),
+                'planned'    => $planned->count(),
+                'missing'    => $missing->mapWithKeys(fn($id) => [
+                    $id => [
+                        'remaining'  => $remainingCapacityByMachine[$id] ?? null,
+                        'initial'    => $initialRemaining[$id] ?? null,
+                    ],
+                ])->all(),
+            ]);
 
-            $tier2 = $tiers->get(2, collect());
+            $logTimer('placePool', $start, [
+                'tier_1_count' => $tierCounts[1],
+                'tier_2_count' => $tierCounts[2],
+                'tier_3_count' => $tierCounts[3],
+                'unassigned_count' => $results['unassigned']->count(),
+            ]);
 
-            $start = $logTimer(
-                'placeTierByPriority - Tier 2',
-                null,
-                [
-                    'lot_count' => $tier2->count(),
-                ]
-            );
-
-            $this->placeTierByPriority(
-                $tier2,
-                $openEntriesByMachine,
-                $anchorStateByMachine,
-                $remainingCapacityByMachine,
-                $dateString,
-                $results
-            );
-
-            $logTimer(
-                'placeTierByPriority - Tier 2',
-                $start,
-                [
-                    'lot_count' => $tier2->count(),
-                ]
-            );
-
-            /*
-    |--------------------------------------------------------------------------
-    | 19. Greedy Tier 3
-    |--------------------------------------------------------------------------
-    */
-
-            $tier3 = $tiers->get(3, collect());
-
-            $start = $logTimer(
-                'greedyPlaceTier - Tier 3',
-                null,
-                [
-                    'lot_count' => $tier3->count(),
-                ]
-            );
-
-            $this->greedyPlaceTier(
-                $tier3,
-                $openEntriesByMachine,
-                $anchorStateByMachine,
-                $remainingCapacityByMachine,
-                $dateString,
-                $results
-            );
-
-            $logTimer(
-                'greedyPlaceTier - Tier 3',
-                $start,
-                [
-                    'lot_count' => $tier3->count(),
-                ]
-            );
-
-            /*
-    |--------------------------------------------------------------------------
-    | 20. Create LotScheduleCalculator
-    |--------------------------------------------------------------------------
-    */
-
+            // 17. Create LotScheduleCalculator
             $start = $logTimer('Create LotScheduleCalculator');
 
             $calc = app(
@@ -2720,40 +2410,23 @@ class SchedulerService
                 ]
             );
 
-            $logTimer(
-                'Create LotScheduleCalculator',
-                $start
-            );
+            $logTimer('Create LotScheduleCalculator', $start);
 
+            // 18. Final per-machine sort (shared with the tester)
+            $this->sortPlan();
 
-            /*
-    |--------------------------------------------------------------------------
-    | then apply sort before applying bulk place plan
-    |--------------------------------------------------------------------------
-    */
-            foreach ($this->plan as $machineId => $rows) {
-                foreach ($rows as $i => &$row) {
-                    if ($row['type'] === 'lot') {
-                        $row['sort']['seq'] = $i; // placement order as the final tie-break
-                    }
-                }
-                unset($row);
-
-                $this->plan[$machineId] = LotPrioritySorter::sortSegments(
-                    collect($rows),
-                    fn($r) => $r['type'] === 'block'
-                )->all();
+            foreach ($this->plan as $mid => $rows) {
+                Log::debug("[plan after sort] machine {$mid}", collect($rows)->map(
+                    fn($r) =>
+                    $r['type'] === 'block'
+                        ? "BLOCK {$r['label']} ({$r['duration']}min)"
+                        : [$r['lot_id'], $r['sort']['cycle_time_exceed'], $r['sort']['is_res'], $r['sort']['ct'], $r['sort']['seq']]
+                )->all());
             }
 
-            /*
-    |--------------------------------------------------------------------------
-    | 21. Bulk place plan
-    |--------------------------------------------------------------------------
-    */
-
+            // 19. Bulk place plan
             $start = $logTimer('bulkPlacePlan');
-            // Log::info("the plan");
-            // log_entities($this->plan);
+
             $freshEntries = $this
                 ->loadingPlanEntryService
                 ->bulkPlacePlan(
@@ -2762,39 +2435,25 @@ class SchedulerService
                     $calc
                 );
 
-            $logTimer(
-                'bulkPlacePlan',
-                $start,
-                [
-                    'fresh_entry_count' => $freshEntries->count(),
-                ]
-            );
+            $logTimer('bulkPlacePlan', $start, ['fresh_entry_count' => $freshEntries->count()]);
 
-            /*
-    |--------------------------------------------------------------------------
-    | 22. Final result
-    |--------------------------------------------------------------------------
-    */
-
+            // 20. Final result
             $results['placed'] = $freshEntries->all();
 
             Log::info('[LoadingPlanTimer] TRANSACTION END', [
-                'total_seconds' => round(
-                    microtime(true) - $transactionStart,
-                    4
-                ),
-                'memory_mb' => round(
-                    memory_get_usage(true) / 1024 / 1024,
-                    2
-                ),
-                'peak_memory_mb' => round(
-                    memory_get_peak_usage(true) / 1024 / 1024,
-                    2
-                ),
+                'total_seconds' => round(microtime(true) - $transactionStart, 4),
+                'memory_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+                'peak_memory_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
                 'result_count' => count($results['placed']),
             ]);
 
-            // return $results;
+            Log::info('[rebuild summary]', [
+                'pickup_in'        => count($pickup),
+                'pool'             => $pool->count(),
+                'machines_planned' => collect($this->plan)->filter(fn($r) => collect($r)->contains('type', 'lot'))->count(),
+                'unassigned_by_reason' => $results['unassigned']->groupBy(fn($l) => $l->unassigned_reason ?? 'unknown')->map->count(),
+                'tiers'            => $tierCounts,
+            ]);
 
             return [
                 'placed_count' => count($results['placed']),

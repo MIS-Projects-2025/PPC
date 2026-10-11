@@ -343,8 +343,10 @@ function RowHistoryButton({ isHidden, anchorElement, onViewHistory, buttonsRef }
 
 const ALL_PACKAGES_TAB = "ALL PACKAGE";
 const RES_TAB = "RES";
+const FOR_BAKE_TAB = "FOR BAKE";
 const RES_STATION = "GTTRES_T";
 const isResRow = (r) => r.station === RES_STATION;
+const isForBakeRow = (r) => !!r.is_for_bake;
 // ---------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------
@@ -603,7 +605,8 @@ export default function Deemo({
         if (
             activePackage === "Unassigned" ||
             activePackage === ALL_PACKAGES_TAB ||
-            activePackage === RES_TAB
+            activePackage === RES_TAB || 
+            activePackage === FOR_BAKE_TAB
         ) return null;
 
         const group = packageGroups?.[activePackage];
@@ -872,7 +875,8 @@ export default function Deemo({
 
             const groupPkgs = packagesInGroup(activePackage, packageGroups);
             const resolvedPackage = packageName || groupPkgs[0] || activePackage;
-            if (activePackage === ALL_PACKAGES_TAB && !packageName) {
+
+            if ((activePackage === ALL_PACKAGES_TAB || activePackage === FOR_BAKE_TAB) && !packageName) {
                 return Promise.reject(new Error("Pick a package for the new lot"));
             }
 
@@ -1200,8 +1204,9 @@ export default function Deemo({
         [selectedLocation],
     );
 
-    const rowInActiveTabOwn = useCallback((r) => {          // your current rowInActiveTab body
+    const rowInActiveTabOwn = useCallback((r) => {
         if (activePackage === RES_TAB) return isResRow(r);
+        if (activePackage === FOR_BAKE_TAB) return isForBakeRow(r);
         if (isResRow(r)) return false;
         if (activePackage === ALL_PACKAGES_TAB) return true;
         return (activePackageGroup ?? []).includes(r.package_name);
@@ -2153,8 +2158,9 @@ export default function Deemo({
                                 "Unassigned",
                                 ALL_PACKAGES_TAB,
                                 RES_TAB,
+                                FOR_BAKE_TAB,
                                 ...packageGroupNames,
-                                { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> },
+                                // { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> }, // might be deprecated
                             ]}
                             active={activePackage}
                             onChange={(pkg) => goToTab(pkg)}
@@ -2853,7 +2859,7 @@ export default function Deemo({
                                                 : "failed"}
                                         </span>
                                         <span className="text-base-content/40 text-xs">
-                                            at
+                                            at{" "}
                                             {new Date(run.created_at).toLocaleTimeString([], {
                                                 hour: "2-digit",
                                                 minute: "2-digit",
@@ -2881,7 +2887,6 @@ export default function Deemo({
                     nonMachines={nonMachineList}
                     rowCounts={nonMachineRowCounts}
                     location={selectedLocation}
-                    date={date}
                     disabled={writesLocked}
                     onCreate={createNonMachine}
                     onRename={renameNonMachine}

@@ -7,11 +7,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class NonMachine extends Model
 {
-    protected $fillable = ['name', 'location', 'scheduled_date'];
-
-    protected $casts = [
-        'scheduled_date' => 'date',
-    ];
+    protected $fillable = ['name', 'location'];
 
     public function entries(): HasMany
     {

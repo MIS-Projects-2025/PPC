@@ -201,15 +201,16 @@ export function MachineHeaderBar({
 						)}
 						{isNonMachine && onDeleteNonMachine && (
 							<li>
-								<button type="button" className="btn btn-sm btn-error btn-outline"
+                                {/* too dangerous */}
+								{/* <button type="button" className="btn btn-sm btn-error btn-outline"
 									onClick={(e) => {
 										e.stopPropagation();
-										if (window.confirm(`Delete "${machineLabel}"? Its lots go back to Unassigned and its time blocks are deleted.`)) {
+										if (window.confirm(`Delete "${machineLabel}"? Its lots on ALL dates go back to Unassigned and its time blocks are deleted.`)) {
 											onDeleteNonMachine(row.nonMachineId);
 										}
 									}}>
 									Delete
-								</button>
+								</button> */}
 							</li>
 						)}
                     </ul>

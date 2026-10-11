@@ -242,7 +242,6 @@ class LoadingPlanController extends Controller
                 ])
                 ->values(),
             'nonMachines' => NonMachine::where('location', $selectedLocation)
-                ->where('scheduled_date', $date)
                 ->orderBy('id')
                 ->get()
                 ->map(fn($n) => [

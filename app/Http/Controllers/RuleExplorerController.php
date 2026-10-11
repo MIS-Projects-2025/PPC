@@ -198,8 +198,8 @@ class RuleExplorerController extends Controller
     {
         $data = $request->validate([
             'machine_id' => 'required|integer',
-            'axis' => 'required|in:factory,package_group,leadcount',
-            'operation_type' => 'required|in:setup,conversion',
+            'axis' => 'required|in:factory,package_group,leadcount,body_size,thickness',
+            'operation_type' => 'required|in:setup,conversion,none',
             'est_duration_minutes' => 'required|integer',
             'combination_rule' => 'required|in:max,sum',
         ]);

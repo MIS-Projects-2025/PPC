@@ -41,8 +41,8 @@ const FIELD_DEFS = {
     ],
     axis_rule: [
         { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
-        { name: 'axis', label: 'Axis', type: 'select', options: ['factory', 'package_group', 'leadcount'], required: true },
-        { name: 'operation_type', label: 'Operation Type', type: 'select', options: ['setup', 'conversion'], required: true },
+        { name: 'axis', label: 'Axis', type: 'select', options: ['factory', 'package_group', 'leadcount', 'body_size', 'thickness'], required: true },
+        { name: 'operation_type', label: 'Operation Type', type: 'select', options: ['none', 'setup', 'conversion'], required: true },
         { name: 'est_duration_minutes', label: 'Duration (minutes)', type: 'number', required: true },
         { name: 'combination_rule', label: 'Combination Rule', type: 'select', options: ['max', 'sum'], required: true },
     ],

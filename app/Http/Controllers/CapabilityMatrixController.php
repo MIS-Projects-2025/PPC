@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ResolvesMachine;
 use App\Models\MachineSetupState;
+use App\Models\QdnMachine;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
@@ -23,6 +24,9 @@ class CapabilityMatrixController extends Controller
 {
     use ResolvesMachine;
 
+    /** Platforms shown in the machine picker, in display order. GRANITE is intentionally left out. */
+    private const PICKER_PLATFORMS = ['TRAY', 'GRAVITY', 'TURRET'];
+
     /** GET /rules/machines/{machine}  ({machine} = id or machine_num) */
     public function page(string $machine)
     {
@@ -33,6 +37,47 @@ class CapabilityMatrixController extends Controller
             'machines' => DB::connection('qdn_db')->table('machine_list')
                 ->select('id', 'machine_num')->orderBy('machine_num')->get(),
         ]);
+    }
+
+    /**
+     * GET /rules/machine-picker
+     * Machines grouped by platform, each with a summary of its states
+     * (factory / package / process + how many rows) for the picker's details and filters.
+     */
+    public function machinePicker()
+    {
+        $machines = QdnMachine::query()
+            ->whereIn(DB::raw('UPPER(machine_platform)'), self::PICKER_PLATFORMS)
+            ->orderBy('machine_num')
+            ->get(['id', 'machine_num', 'machine_platform']);
+
+        $summary = MachineSetupState::query()
+            ->whereIn('machine_id', $machines->pluck('id'))
+            ->select('machine_id', 'factory', 'package_name', 'process_type', DB::raw('count(*) as c'))
+            ->groupBy('machine_id', 'factory', 'package_name', 'process_type')
+            ->orderBy('factory')->orderBy('package_name')->orderBy('process_type')
+            ->get()
+            ->groupBy('machine_id');
+
+        $byPlatform = $machines->groupBy(fn($m) => strtoupper($m->machine_platform));
+
+        $platforms = collect(self::PICKER_PLATFORMS)
+            ->filter(fn($p) => $byPlatform->has($p))
+            ->map(fn($p) => [
+                'platform' => $p,
+                'machines' => $byPlatform[$p]->map(fn($m) => [
+                    'id'          => $m->id,
+                    'machine_num' => $m->machine_num,
+                    'states'      => ($summary[$m->id] ?? collect())->map(fn($s) => [
+                        'factory'      => $s->factory,
+                        'package_name' => $s->package_name,
+                        'process_type' => $s->process_type,
+                        'count'        => (int) $s->c,
+                    ])->values(),
+                ])->values(),
+            ])->values();
+
+        return response()->json(['platforms' => $platforms]);
     }
 
     /** GET /rules/machines/{machine}/capabilities */
