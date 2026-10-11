@@ -55,8 +55,58 @@ class SchedulerService
     private array $ref = [];
     private array $plan = [];
     private $fakeEntryId = -1;
+    private Collection $partInfo;
+    private array $candidateCache = [];
+    private array $restrictionCache = [];
+    protected array $transitionCostCache = [];
 
     protected ?LotScheduleCalculator $calc = null;
+
+    protected function loadPartInfo(iterable $names): void
+    {
+        $this->partInfo ??= collect();
+
+        $missing = collect($names)->filter()
+            ->reject(fn($n) => $this->partInfo->has($this->norm($n)))
+            ->unique()->values();
+
+        if ($missing->isEmpty()) return;
+
+        $this->partInfo = $this->partInfo->union(
+            PartName::query()
+                ->select(
+                    'id',
+                    'devicename',
+                    'recipe',
+                    'allocation',
+                    'lead_count',
+                    'dimensions',
+                    'focus_grp',
+                    'is_auto_part',
+                    'package_type'
+                )
+                ->whereIn('devicename', $missing)
+                ->get()
+                ->keyBy(fn($p) => $this->norm($p->devicename))
+        );
+
+        Log::info('PartInfo count: ' . count($this->partInfo));
+    }
+
+    protected function resetBatchState(): void
+    {
+        $this->plan = [];
+        $this->fakeEntryId = -1;
+        $this->partInfo = collect();
+        $this->calc = null;
+        $this->candidateCache = [];
+        $this->transitionCostCache = [];
+    }
+
+    protected function partInfoFor(?string $name): ?PartName
+    {
+        return $name === null ? null : $this->partInfo->get($this->norm($name));
+    }
 
     private function norm(?string $v): ?string
     {
@@ -82,6 +132,8 @@ class SchedulerService
             ->unique()
             ->values()
             ->all();
+
+        $this->loadPartInfo($partNames);
 
         $this->calc = app(LotScheduleCalculator::class);
         $this->calc->loadPackageList($partNames);
@@ -115,6 +167,7 @@ class SchedulerService
      */
     public function evaluateTransferCompatibility(Collection $lots): Collection
     {
+        $this->resetBatchState();
         $this->preloadReferenceData($lots);
         $this->preloadPackageList($lots);
 
@@ -144,6 +197,10 @@ class SchedulerService
      */
     protected function preloadReferenceData(Collection $pickupLots): array
     {
+        $this->candidateCache = [];
+        $this->restrictionCache = [];
+        $this->transitionCostCache = [];
+
         $factories = $pickupLots
             ->map(fn($lot) => $this->resolveFactory($lot->Focus_Group))
             ->filter()
@@ -221,6 +278,7 @@ class SchedulerService
                 ->whereIn('machine_id', $relevantMachineIds)->get()->groupBy('machine_id'),
             // 'setup_states' => $setupStates,
             'setup_states' => $generalSetupStates,
+            'setup_states_by_factory' => $generalSetupStates->groupBy(fn($s) => $this->norm($s->factory)),
             'part_name_override_states' => $this->resolvePartNameOverrideStates($partNames),
             'transition_rules_by_machine' => MachineTransitionRule::query()
                 ->whereIn('machine_id', $relevantMachineIds)
@@ -260,6 +318,27 @@ class SchedulerService
         ];
     }
 
+    /**
+     * machine_id => hydrated anchor lot  ->  machine_id => setup_state_id|null
+     * Shared by production (anchor = last frozen entry) and the tester (anchor = pinned lot).
+     */
+    public function inferAnchorStates(Collection $lotsByMachine): Collection
+    {
+        return $lotsByMachine->map(function ($lot, $machineId) {
+            $stateId = $this->inferStateFromLot((int) $machineId, $lot);
+
+            if ($stateId === null) {
+                Log::warning('Anchor state could not be inferred', [
+                    'machine_id' => $machineId,
+                    'lot_id'     => $lot->Lot_Id,
+                    'part_name'  => $lot->Part_Name,
+                ]);
+            }
+
+            return $stateId;
+        });
+    }
+
     /** In-memory equivalent of the old SQL WHERE chain against machine_setup_states. */
     protected function matchesLotCapability(
         MachineSetupState $state,
@@ -270,19 +349,21 @@ class SchedulerService
         ?float $thickness,
         ?int $leadCount,
         ?string $rampProcessType,
-        ?string $lotType
+        ?string $lotType,
+        $normPackage,
+        $lotPackageGroup,
+        $normFocus
     ): bool {
-        if (!$this->eq($state->factory, $factory)) {
-            return false;
-        }
-        if ($state->focus_group !== null && !$this->eq($state->focus_group, $focusGroup)) {
+        // setup states now is grouped by factory, who calls this is alrady filtered by factory
+        // if (!$this->eq($state->factory, $factory)) {
+        //     return false;
+        // }
+        if ($state->focus_group !== null && $this->norm($state->focus_group) !== $normFocus) {
             return false;
         }
         if ($state->package_name !== null) {
-            $isLiteralMatch = $this->eq($state->package_name, $packageName);
-            $isGroupMatch = $this->ref['package_group_by_name']->get($this->norm($packageName)) === $this->norm($state->package_name);
-
-            if (!$isLiteralMatch && !$isGroupMatch) {
+            $statePkg = $this->norm($state->package_name);
+            if ($statePkg !== $normPackage && $statePkg !== $lotPackageGroup) {
                 return false;
             }
         }
@@ -344,6 +425,7 @@ class SchedulerService
      */
     public function handlePickup($pickup, Carbon $targetDate): array
     {
+        $this->resetBatchState();
         [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
 
         if ($pickupLots->isEmpty()) {
@@ -361,7 +443,7 @@ class SchedulerService
         $ref = $this->preloadReferenceData($pickupLots);
         $candidateMachineIds = $this->getCandidateMachineIds($pickupLots);
         $openEntriesByMachine = $this->getUnprocessedPlannedEntries($candidateMachineIds);
-        $anchorStateByMachine = $this->getAnchorStates($candidateMachineIds);
+        $anchorStateByMachine = $this->getAnchorStates($candidateMachineIds, $pickupLots);
         $remainingCapacityByMachine = $this->getRemainingCapacityByMachine($candidateMachineIds, $targetDate);
 
         return [
@@ -385,6 +467,8 @@ class SchedulerService
      */
     protected function resolvePickupLots($pickup): array
     {
+        $this->loadPartInfo(collect($pickup)->pluck('part_name'));
+
         $pickup = $pickup instanceof Collection ? $pickup : collect($pickup);
 
         if ($pickup->isEmpty()) {
@@ -400,7 +484,7 @@ class SchedulerService
             $item = (array) $item;
             $partName = $item['part_name'] ?? null;
 
-            $packageInfo = PartName::findByPartName($partName);
+            $packageInfo = $this->partInfoFor($partName);
 
             if (!$packageInfo) {
                 $unmatched->push($partName ?? '(missing part_name)');
@@ -463,59 +547,59 @@ class SchedulerService
             $lot->Lot_Type
         );
 
-        if ($lot->Lot_Id === 'BD20338.13') {
-            $why = $this->ref['setup_states']->where('machine_id', 330)->map(function ($s) use (
-                $factory,
-                $lot,
-                $bodySize2d,
-                $thickness,
-                $rampProcessType
-            ) {
-                $reasons = [];
-                if (!$this->eq($s->factory, $factory)) $reasons[] = "factory {$s->factory} vs {$factory}";
-                if ($s->focus_group !== null && !$this->eq($s->focus_group, $lot->Focus_Group)) $reasons[] = "focus_group {$s->focus_group}";
-                if (
-                    $s->package_name !== null
-                    && !$this->eq($s->package_name, $lot->Package_Name)
-                    && $this->ref['package_group_by_name']->get($this->norm($lot->Package_Name)) !== $this->norm($s->package_name)
-                ) {
-                    $reasons[] = "package {$s->package_name} vs {$lot->Package_Name}";
-                }
-                if ($s->body_size !== null && !$this->eq($s->body_size, $bodySize2d)) $reasons[] = "body {$s->body_size} vs {$bodySize2d}";
-                if ($s->thickness !== null) $reasons[] = "thickness {$s->thickness} vs " . var_export($thickness, true);
-                foreach (['leadcount_include', 'leadcount_min', 'leadcount_max', 'leadcount_exclude'] as $c) {
-                    if ($s->$c !== null) $reasons[] = "$c={$s->$c} (lead {$lot->Lead_Count})";
-                }
-                if ($s->process_type !== 'both' && !$this->eq($s->process_type, $rampProcessType)) $reasons[] = "process {$s->process_type} vs {$rampProcessType}";
-                if ($s->lot_type !== null && !$this->eq($s->lot_type, $lot->Lot_Type)) $reasons[] = "lot_type {$s->lot_type}";
-                return [
-                    'state' => $s->setup_state_id,
-                    'lot_type' => $s->lot_type,
-                    'reasons' => $reasons,
-                    'passes_restrictions' => $this->passesNewRestrictions(330, $factory, $lot->Package_Name, $lot->Focus_Group, $lot->is_auto_part, $lot->Part_Name),
-                ];
-            })->values();
+        // if ($lot->Lot_Id === 'BD20338.13') {
+        // $why = $this->ref['setup_states']->where('machine_id', 330)->map(function ($s) use (
+        //     $factory,
+        //     $lot,
+        //     $bodySize2d,
+        //     $thickness,
+        //     $rampProcessType
+        // ) {
+        //     $reasons = [];
+        //     if (!$this->eq($s->factory, $factory)) $reasons[] = "factory {$s->factory} vs {$factory}";
+        //     if ($s->focus_group !== null && !$this->eq($s->focus_group, $lot->Focus_Group)) $reasons[] = "focus_group {$s->focus_group}";
+        //     if (
+        //         $s->package_name !== null
+        //         && !$this->eq($s->package_name, $lot->Package_Name)
+        //         && $this->ref['package_group_by_name']->get($this->norm($lot->Package_Name)) !== $this->norm($s->package_name)
+        //     ) {
+        //         $reasons[] = "package {$s->package_name} vs {$lot->Package_Name}";
+        //     }
+        //     if ($s->body_size !== null && !$this->eq($s->body_size, $bodySize2d)) $reasons[] = "body {$s->body_size} vs {$bodySize2d}";
+        //     if ($s->thickness !== null) $reasons[] = "thickness {$s->thickness} vs " . var_export($thickness, true);
+        //     foreach (['leadcount_include', 'leadcount_min', 'leadcount_max', 'leadcount_exclude'] as $c) {
+        //         if ($s->$c !== null) $reasons[] = "$c={$s->$c} (lead {$lot->Lead_Count})";
+        //     }
+        //     if ($s->process_type !== 'both' && !$this->eq($s->process_type, $rampProcessType)) $reasons[] = "process {$s->process_type} vs {$rampProcessType}";
+        //     if ($s->lot_type !== null && !$this->eq($s->lot_type, $lot->Lot_Type)) $reasons[] = "lot_type {$s->lot_type}";
+        //     return [
+        //         'state' => $s->setup_state_id,
+        //         'lot_type' => $s->lot_type,
+        //         'reasons' => $reasons,
+        //         'passes_restrictions' => $this->passesNewRestrictions(330, $factory, $lot->Package_Name, $lot->Focus_Group, $lot->is_auto_part, $lot->Part_Name),
+        //     ];
+        // })->values();
 
-            Log::info('why not 330', [
-                'factory' => $factory,
-                'rampProcessType' => $rampProcessType,
-                'is_auto_part' => $lot->is_auto_part,
-                'has_override' => $this->ref['part_name_override_states']->get($lot->Part_Name, collect())->isNotEmpty(),
-                'states' => $why,
-            ]);
-        }
+        // Log::info('why not 330', [
+        //     'factory' => $factory,
+        //     'rampProcessType' => $rampProcessType,
+        //     'is_auto_part' => $lot->is_auto_part,
+        //     'has_override' => $this->ref['part_name_override_states']->get($lot->Part_Name, collect())->isNotEmpty(),
+        //     'states' => $why,
+        // ]);
+        // }
 
-        $m = 330;
-        Log::info('restriction breakdown 330', [
-            'part_excluded' => $this->ref['part_exclusions_by_part']->get($this->norm($lot->Part_Name), collect())->contains(fn($e) => $e->machine_id === $m),
-            'fg_excluded' => $this->ref['focus_group_rules_by_machine']->get($m, collect())
-                ->contains(fn($r) => $this->eq($r->focus_group, $lot->Focus_Group) && $r->rule_type === 'exclude'),
-            'auto_rules_330' => $this->ref['auto_part_rules_by_machine']->get($m, collect())->toArray(),
-            'include_only_machines' => $this->ref['auto_part_rules_by_machine']->flatten(1)
-                ->filter(fn($r) => $r->rule_type === 'include_only'
-                    && ($r->package_name === null || $this->eq($r->package_name, $lot->Package_Name)))
-                ->pluck('machine_id')->unique()->values(),
-        ]);
+        // $m = 330;
+        // Log::info('restriction breakdown 330', [
+        //     'part_excluded' => $this->ref['part_exclusions_by_part']->get($this->norm($lot->Part_Name), collect())->contains(fn($e) => $e->machine_id === $m),
+        //     'fg_excluded' => $this->ref['focus_group_rules_by_machine']->get($m, collect())
+        //         ->contains(fn($r) => $this->eq($r->focus_group, $lot->Focus_Group) && $r->rule_type === 'exclude'),
+        //     'auto_rules_330' => $this->ref['auto_part_rules_by_machine']->get($m, collect())->toArray(),
+        //     'include_only_machines' => $this->ref['auto_part_rules_by_machine']->flatten(1)
+        //         ->filter(fn($r) => $r->rule_type === 'include_only'
+        //             && ($r->package_name === null || $this->eq($r->package_name, $lot->Package_Name)))
+        //         ->pluck('machine_id')->unique()->values(),
+        // ]);
 
         return (object) [
             'candidateStates' => $candidateStates,
@@ -524,41 +608,6 @@ class SchedulerService
             'isCr3Dedicated' => $this->eq($lot->CR3, 'RES'), // resolved per-state below
         ];
     }
-
-    // /**
-    //  * @return Collection<int>  distinct machine_ids
-    //  */
-    // public function getCandidateMachineIds(Collection $lots): Collection
-    // {
-    //     $machineIds = collect();
-
-    //     foreach ($lots as $lot) {
-    //         $factory = $this->resolveFactory($lot->Focus_Group);
-
-    //         if ($factory === null) {
-    //             continue;
-    //         }
-
-    //         [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
-    //         $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
-
-    //         $eligible = $this->resolveCandidateStates(
-    //             $lot->Part_Name,
-    //             $factory,
-    //             $lot->Focus_Group,
-    //             $lot->Package_Name,
-    //             $bodySize2d,
-    //             $thickness,
-    //             $lot->is_auto_part,
-    //             $lot->Lead_Count,
-    //             $rampProcessType
-    //         );
-
-    //         $machineIds = $machineIds->merge($eligible->pluck('machine_id'));
-    //     }
-
-    //     return $machineIds->unique()->values();
-    // }
 
     public function getUnprocessedPlannedEntries(Collection $machineIds): Collection
     {
@@ -575,22 +624,68 @@ class SchedulerService
             ->groupBy('machine_id');
     }
 
-    public function getAnchorStates(Collection $machineIds): Collection
+    public function getAnchorStates(Collection $machineIds, ?Collection $batchLots = null): Collection
     {
         if ($machineIds->isEmpty()) {
             return collect();
         }
 
-        $latestStarted = LoadingPlanEntry::query()
+        // Latest frozen LOT entry per machine. Keep the whole entry, not just the state id.
+        $latestEntries = LoadingPlanEntry::query()
             ->whereIn('machine_id', $machineIds)
             ->frozen()
+            ->where('entry_type', 'lot')
             ->orderBy('machine_id')
             ->orderByDesc('time_start')
-            ->get(['machine_id', 'resulting_setup_state_id'])
+            ->get()
             ->groupBy('machine_id')
-            ->map(fn($rows) => $rows->first()->resulting_setup_state_id);
+            ->map->first();
 
-        return $machineIds->mapWithKeys(fn($id) => [$id => $latestStarted->get($id)]);
+        // Normal path: the state id is already stored.
+        $anchors = $machineIds->mapWithKeys(
+            fn($id) => [$id => $latestEntries->get($id)?->resulting_setup_state_id]
+        );
+
+        // Fallback path: entry exists but its state id is null.
+        $stateless = $latestEntries->filter(fn($e) => $e->resulting_setup_state_id === null);
+        if ($stateless->isEmpty()) {
+            return $anchors;
+        }
+
+        // Hydrate the anchor lots (WIP first, PartName fallback for pickups).
+        $this->loadPartInfo($stateless->map(fn($e) => $e->part_name));
+
+        $wips = collect();
+        foreach ($stateless->groupBy(fn($e) => $e->scheduled_date->toDateString()) as $date => $entries) {
+            $wips = $wips->merge(
+                CustomerDataWip::query()
+                    ->forDate($date)
+                    ->whereIn('Lot_Id', $entries->map->resolveRootLotId()->unique()->values())
+                    ->get()
+                    ->keyBy(fn($w) => "{$date}:{$w->Lot_Id}")
+            );
+        }
+
+        $anchorLots = $stateless->map(function ($entry) use ($wips) {
+            $key = $entry->scheduled_date->toDateString() . ':' . $entry->resolveRootLotId();
+            return $this->hydrateLotForTransfer($entry, $wips->get($key));
+        })->filter();
+
+        if ($anchorLots->isEmpty()) {
+            return $anchors;
+        }
+
+        // Reference data was scoped to the batch's packages. Reload it so it
+        // also covers the anchor lots' packages/factories.
+        $this->preloadReferenceData(($batchLots ?? collect())->concat($anchorLots)->values());
+
+        foreach ($this->inferAnchorStates($anchorLots) as $machineId => $stateId) {
+            if ($stateId !== null) {
+                $anchors[$machineId] = $stateId;
+            }
+        }
+
+        return $anchors;
     }
 
     protected function resolveFactory(?string $focusGroup): ?string
@@ -728,6 +823,12 @@ class SchedulerService
 
     protected function passesNewRestrictions(int $machineId, string $factory, ?string $packageName, ?string $focusGroup, ?bool $isAutoPart, ?string $partName): bool
     {
+        $key = $machineId . '|' . $this->norm($partName) . '|' . $this->norm($focusGroup) . '|' . $this->norm($packageName) . '|' . (int) $isAutoPart;
+        return $this->restrictionCache[$key] ??= $this->computePassesRestrictions(...func_get_args());
+    }
+
+    protected function computePassesRestrictions(int $machineId, string $factory, ?string $packageName, ?string $focusGroup, ?bool $isAutoPart, ?string $partName): bool
+    {
         // machine_part_exclusions — pure negative, checked first
         if (
             $partName && $this->ref['part_exclusions_by_part']->get($this->norm($partName), collect())
@@ -745,13 +846,10 @@ class SchedulerService
 
         // machine_auto_part_rules — only relevant when the lot IS auto
         if ($isAutoPart) {
-            $allAutoRulesForPackage = $this->ref['auto_part_rules_by_machine']
-                ->flatten(1)
-                ->filter(fn($r) => $r->package_name === null || $this->eq($r->package_name, $packageName));
-
-            $includeOnlyMachineIds = $allAutoRulesForPackage
-                ->where('rule_type', 'include_only')
-                ->pluck('machine_id');
+            // deprecated the flatten is in the preload now. In auto_part_rules_by_machine.
+            // $includeOnlyMachineIds = $allAutoRulesForPackage
+            //     ->where('rule_type', 'include_only')
+            //     ->pluck('machine_id');
 
             // IMPORTANT NOTES:::::::
             // THIS IS TEMPORARY REMOVAL. FOR THIS TO WORK AS INTENDED, I NEED TO COMPLETE SEEDING MACHINES THAT IS ABLE TO DO AUTO PARTS
@@ -768,12 +866,11 @@ class SchedulerService
             //     return false;
             // }
 
-
             // exclude check unchanged, still per-machine
-            $excludedHere = $allAutoRulesForPackage
-                ->where('machine_id', $machineId)
-                ->where('rule_type', 'exclude')
-                ->isNotEmpty();
+            $excludedHere = $this->ref['auto_part_rules_by_machine']
+                ->get($machineId, collect())
+                ->contains(fn($r) => $r->rule_type === 'exclude'
+                    && ($r->package_name === null || $this->eq($r->package_name, $packageName)));
             if ($excludedHere) {
                 return false;
             }
@@ -782,8 +879,51 @@ class SchedulerService
         return true;
     }
 
-    /** Candidate states for a lot: override states if the part has any rule, else normal structural match. */
     protected function resolveCandidateStates(
+        string $partName,
+        string $factory,
+        string $focusGroup,
+        ?string $packageName,
+        ?string $bodySize2d,
+        ?float $thickness,
+        ?bool $isAutoPart,
+        ?int $leadCount,
+        ?string $rampProcessType,
+        ?string $lotType
+    ): Collection {
+        $partKey = ($this->ref['part_name_override_states']->get($partName, collect())->isNotEmpty()
+            || $this->ref['part_exclusions_by_part']->has($this->norm($partName)))
+            ? $partName : '*';
+
+        $key = implode('|', [
+            $partKey,
+            $factory,
+            $focusGroup,
+            $packageName,
+            $bodySize2d,
+            $thickness,
+            (int) $isAutoPart,
+            $leadCount,
+            $rampProcessType,
+            $lotType,
+        ]);
+
+        return $this->candidateCache[$key] ??= $this->computeCandidateStates(
+            $partName,
+            $factory,
+            $focusGroup,
+            $packageName,
+            $bodySize2d,
+            $thickness,
+            $isAutoPart,
+            $leadCount,
+            $rampProcessType,
+            $lotType
+        );
+    }
+
+    /** Candidate states for a lot: override states if the part has any rule, else normal structural match. */
+    protected function computeCandidateStates(
         string $partName,
         string $factory,
         string $focusGroup,
@@ -797,6 +937,10 @@ class SchedulerService
     ): Collection {
         $overrides = $this->ref['part_name_override_states']->get($partName, collect());
 
+        $normPackage     = $this->norm($packageName);
+        $lotPackageGroup = $this->ref['package_group_by_name']->get($normPackage);
+        $normFocus       = $this->norm($focusGroup);
+
         if ($overrides->isNotEmpty()) {
             return $overrides->pluck('state')
                 ->filter(fn($state) => $state->factory === $factory)
@@ -804,7 +948,7 @@ class SchedulerService
                 ->values();
         }
 
-        $matched = $this->ref['setup_states']
+        $matched = $this->ref['setup_states_by_factory']->get($this->norm($factory), collect())
             ->filter(fn($state) => $this->matchesLotCapability(
                 $state,
                 $factory,
@@ -814,7 +958,10 @@ class SchedulerService
                 $thickness,
                 $leadCount,
                 $rampProcessType,
-                $lotType
+                $lotType,
+                $normPackage,
+                $lotPackageGroup,
+                $normFocus
             ))
             ->filter(fn($state) => $this->passesNewRestrictions(
                 $state->machine_id,
@@ -844,6 +991,21 @@ class SchedulerService
             ->contains(fn($o) => $o->is_dedicated && $o->state->setup_state_id === $setupStateId);
     }
 
+    protected function transitionCost(int $machineId, ?int $fromStateId, int $toStateId, ?string $partName = null): array
+    {
+        if ($fromStateId === $toStateId) {
+            return ['operation_type' => 'none', 'duration' => 0, 'rule_id' => null];
+        }
+
+        $normPart = $this->norm($partName);
+        $hasException = $normPart !== null
+            && isset($this->ref['transition_exceptions_by_machine_part']["{$machineId}|{$normPart}"]);
+
+        $key = "{$machineId}:" . ($fromStateId ?? 'n') . ":{$toStateId}" . ($hasException ? ":{$normPart}" : '');
+
+        return $this->transitionCostCache[$key] ??= $this->computeTransitionCost($machineId, $fromStateId, $toStateId, $partName);
+    }
+
     /**
      * Cost/rule to move from $fromStateId to $toStateId on a machine,
      * for a specific part_name. Exceptions (machine_transition_rule_
@@ -858,7 +1020,7 @@ class SchedulerService
      * axes differ. Machines with no axis rules fall through unchanged to
      * the existing pairwise/wildcard machine_transition_rules lookup.
      */
-    protected function transitionCost(int $machineId, ?int $fromStateId, int $toStateId, ?string $partName = null): array
+    protected function computeTransitionCost(int $machineId, ?int $fromStateId, int $toStateId, ?string $partName = null): array
     {
         if ($fromStateId === $toStateId) {
             return ['operation_type' => 'none', 'duration' => 0, 'rule_id' => null];
@@ -1343,6 +1505,8 @@ class SchedulerService
      */
     public function commitPickupBatch($pickup, Carbon $targetDate): array
     {
+        $this->resetBatchState();
+
         $gathered = $this->handlePickup($pickup, $targetDate);
         $this->preloadPackageList($gathered['pickup_lots']);
 
@@ -1440,7 +1604,8 @@ class SchedulerService
             return $this->hydrateLotFromEntry($entry, $wip);
         }
 
-        $partInfo = PartName::findByPartName($entry->part_name);
+        // $partInfo = PartName::findByPartName($entry->part_name);
+        $partInfo = $this->partInfoFor($entry->part_name);
 
         if (!$partInfo) {
             // will not sched
@@ -1520,6 +1685,8 @@ class SchedulerService
 
     public function hydrateLotsForTransfer(Collection $lotIds, string $date): Collection
     {
+        $this->resetBatchState();
+
         $entries = LoadingPlanEntry::query()
             ->with('lotQuantity')
             ->whereIn('lot_id', $lotIds)
@@ -1527,6 +1694,8 @@ class SchedulerService
             ->where('rework_seq', 0)
             ->where('entry_type', 'lot')
             ->get();
+
+        $this->loadPartInfo($entries->pluck('part_name'));
 
         Log::info($entries);
 
@@ -1565,7 +1734,8 @@ class SchedulerService
                 return null;
             }
 
-            $partInfo = PartName::findByPartName($lotQty->part_name);
+            // $partInfo = PartName::findByPartName($lotQty->part_name);
+            $partInfo = $this->partInfoFor($lotQty->part_name);
 
             if (!$partInfo) {
                 return null;
@@ -1582,13 +1752,14 @@ class SchedulerService
                 'is_auto_part' => (bool) $partInfo->is_auto_part,
                 'Ramp_Time' => $partInfo->allocation,
                 'CR3' => null,
-                'Station'    => $wip->Station,
-                'Lot_Status' => $wip->Lot_Status,
+                'Station'    => $wip?->Station,
+                'Lot_Status' => $wip?->Lot_Status,
                 'Lot_Type' => null,
                 'isExpedite' => (bool) $entry->is_manual_expedite,
                 'aboveCT' => false,
                 'CT' => null,
                 'is_pickup' => true,
+                'isBakeHighlight' => (bool) ($formulas->isBakeHighlight ?? false), // DO NOT SCHEDULE BAKE
                 'cycleTimeExceedResidual' => $formulas->cycleTimeExceedResidual,
                 'Lot_Entry_Time_Days'     => $wip?->Lot_Entry_Time_Days,
             ];
@@ -1616,6 +1787,7 @@ class SchedulerService
             'Lot_Entry_Time_Days'     => $wip?->Lot_Entry_Time_Days,
             'CT' => $formulas->ct ?? null,
             'is_pickup' => false,
+            'isBakeHighlight' => (bool) ($formulas->isBakeHighlight ?? false), // DO NOT SCHEDULE BAKE
         ];
     }
 
@@ -1702,7 +1874,7 @@ class SchedulerService
         }
     }
 
-    public function candidateMachineIdsForLot(object $lot): Collection
+    protected function candidateStatesForLot(object $lot): Collection
     {
         $factory = $this->resolveFactory($lot->Focus_Group);
         if ($factory === null) {
@@ -1710,7 +1882,6 @@ class SchedulerService
         }
 
         [$bodySize2d, $thickness] = $this->parseBodySize($lot->Body_Size);
-        $rampProcessType = $this->resolveRampProcessType($lot->Ramp_Time);
 
         return $this->resolveCandidateStates(
             $lot->Part_Name,
@@ -1721,9 +1892,41 @@ class SchedulerService
             $thickness,
             $lot->is_auto_part,
             $lot->Lead_Count,
-            $rampProcessType,
+            $this->resolveRampProcessType($lot->Ramp_Time),
             $lot->Lot_Type
-        )->pluck('machine_id')->unique()->values();
+        );
+    }
+
+    public function candidateMachineIdsForLot(object $lot): Collection
+    {
+        return $this->candidateStatesForLot($lot)->pluck('machine_id')->unique()->values();
+    }
+
+    /** Best-guess setup state a machine is in, given the lot that ran on it. */
+    protected function inferStateFromLot(int $machineId, object $lot): ?int
+    {
+        $states = $this->candidateStatesForLot($lot)->where('machine_id', $machineId);
+        if ($states->isEmpty()) {
+            return null;
+        }
+
+        $cols = [
+            'focus_group',
+            'package_name',
+            'body_size',
+            'thickness',
+            'leadcount_include',
+            'leadcount_min',
+            'leadcount_max',
+            'leadcount_exclude',
+            'lot_type'
+        ];
+
+        // Several states can match; the most constrained one best describes
+        // what is physically loaded on the machine.
+        return $states
+            ->sortByDesc(fn($s) => collect($cols)->filter(fn($c) => $s->$c !== null)->count())
+            ->first()->setup_state_id;
     }
 
     public function getCandidateMachineIds(Collection $lots): Collection
@@ -1892,6 +2095,8 @@ class SchedulerService
      */
     public function rebuildForPickupArrival($pickup, Carbon $targetDate): array
     {
+        $this->resetBatchState();
+
         [$pickupLots, $unmatchedPartNames] = $this->resolvePickupLots($pickup);
         log_entities($pickupLots);
         $results = ['placed' => [], 'unassigned' => collect(), 'unmatched_part_names' => $unmatchedPartNames];
@@ -1979,6 +2184,8 @@ class SchedulerService
                 ->open()
                 ->where('entry_type', 'lot')
                 ->get();
+
+            $this->loadPartInfo($entries->map(fn($e) => $e->lotQuantity?->part_name ?? $e->part_name));
 
             // dump($entries);
 
@@ -2261,7 +2468,8 @@ class SchedulerService
             $start = $logTimer('getAnchorStates');
 
             $anchorStateByMachine = $this->getAnchorStates(
-                $candidateMachineIds
+                $candidateMachineIds,
+                $pickupLots->concat($existingLots)
             );
 
             $logTimer(
@@ -2347,6 +2555,20 @@ class SchedulerService
                     return $group->first();
                 })
                 ->values();
+
+            [$bakeHeld, $pool] = $pool->partition(
+                fn($lot) => (bool) ($lot->isBakeHighlight ?? false)
+            );
+            $pool = $pool->values();
+
+            if ($bakeHeld->isNotEmpty()) {
+                // Log::info('Rebuild: bake-highlight lots held back as unassigned', [
+                //     'lot_ids' => $bakeHeld->pluck('Lot_Id')->values()->all(),
+                // ]);
+                foreach ($bakeHeld as $lot) {
+                    $results['unassigned']->push($lot);
+                }
+            }
 
             $this->preloadPackageList($pool);
 
@@ -2530,8 +2752,8 @@ class SchedulerService
     */
 
             $start = $logTimer('bulkPlacePlan');
-            Log::info("the plan");
-            log_entities($this->plan);
+            // Log::info("the plan");
+            // log_entities($this->plan);
             $freshEntries = $this
                 ->loadingPlanEntryService
                 ->bulkPlacePlan(

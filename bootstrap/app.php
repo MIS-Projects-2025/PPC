@@ -61,7 +61,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web([
             \App\Http\Middleware\HandleInertiaRequests::class,
             \Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets::class,
-            \App\Http\Middleware\SessionMiddleware::class,
-            \App\Http\Middleware\AuthMiddleware::class,
+            // \App\Http\Middleware\SessionMiddleware::class,
+            // \App\Http\Middleware\AuthMiddleware::class,
         ]);
     })->create();

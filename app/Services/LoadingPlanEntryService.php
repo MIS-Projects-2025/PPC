@@ -3127,16 +3127,6 @@ class LoadingPlanEntryService
             }
         }
 
-        Log::info("entryInsertRows");
-        Log::info($entryInsertRows);
-
-        $entries = LoadingPlanEntry::where('scheduled_date', $date)
-            ->orderBy('machine_id')
-            ->orderBy('sequence_order')
-            ->get();
-
-        log_entities($entries, "Loading Plan Entries for {$date}");
-
         // --- pass 3: bulk write ---
         LoadingPlanEntry::insert($entryInsertRows);
 

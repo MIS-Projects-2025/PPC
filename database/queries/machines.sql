@@ -11,6 +11,11 @@ select distinct `Focus_Group` from ppc.customer_data_wip where `Package_Name` = 
 select distinct `Focus_Group` from ppc.customer_data_wip where `Package_Name` = 'TSSOP_4.4_EP';
 select distinct `Focus_Group` from ppc.customer_data_wip where `Package_Name` = 'SOIC_W';
 
+select * from qdn_db_test.package_list where package_type = "SOT-223";
+select * from qdn_db_test.package_list where package_type = "LFCSP" and lead_count = "32" and focus_grp = "MPD";
+select * from qdn_db_test.package_list where package_type = "LFCSP" and lead_count = "32" and dimensions = '5X5X1.45';
+select * from qdn_db_test.package_list where package_type = "LFCSP_CAV" and lead_count = "32" and dimensions = '5X5X1.45';
+
 select * from qdn_db.machine_focus_group_rules;
 
 SELECT

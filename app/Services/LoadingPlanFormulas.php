@@ -8,12 +8,15 @@ use Illuminate\Database\Eloquent\Model;
 
 class LoadingPlanFormulas
 {
+    // put this in settings in loading plan
     public const BAKE_STATIONS = [
+        'GTBATCH_T',
+        'GTBKIPBE_T',
+        'GTBKLDBE',
         'GTBKLDBE_T',
         'GTIQA_T',
         'GTLPI_T',
         'GTTRANS_T',
-        'GTBRAND_T',
     ];
 
     public ?float $ct;

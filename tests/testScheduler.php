@@ -18,6 +18,10 @@
 | They are looked up by lot_id in the SAME csv, are never moved/removed,
 | and their setup state is the anchor the other lots are costed against.
 |
+| Timing: per-step laps are collected during simulate() and printed at the
+| END of the output (and saved in the text file) so they never get buried
+| under the long list of planned lots.
+|
 | Run:  php artisan tinker tests/testScheduler.php
 */
 
@@ -26,7 +30,7 @@
 // ---------------------------------------------------------------------
 
 $targetDate = \Carbon\Carbon::parse('2026-09-09');
-$csvPath    = storage_path('app/ftproot/2026-09-30_08-30-01/daily_backend_wip.csv');
+$csvPath    = storage_path('app/ftproot/2026-10-07_08-30-01/daily_backend_wip.csv');
 
 $limit = 300;   // max lots to schedule from the csv. null = all (slow!)
 $limit = null;   // max lots to schedule from the csv. null = all (slow!)
@@ -42,29 +46,70 @@ $allowedPackages = [
 
 // Pinned lot per machine: machine_id => [lot_id (must exist in the csv), optional setup_state_id]
 $pinnedByNum = [
-    // '02LEDCON' => ['lot_id' => 'BD15687.20'],
-    // '14HSI250' => ['lot_id' => 'BD26747.2'],
-    // '02AT468' => ['lot_id' => 'BD26580.3'],
-    // '01SRMXD244' => ['lot_id' => 'BD26135.7'],
-    // '25AT128' => ['lot_id' => 'BD25787.2'],
-    // '21AT128' => ['lot_id' => 'G165793.11'],
-    // '54G6L' => ['lot_id' => 'BB53409.4'],
-    // '13G6L' => ['lot_id' => 'BD26243.2'],
-    // '33G6L' => ['lot_id' => 'BD26772.4'],
-    // '42G6L' => ['lot_id' => 'BD26134.3'],
-    // '47G6L' => ['lot_id' => 'BD26246.2'],
-    // '10G6L' => ['lot_id' => 'BD25326.2'],
-    // '45AT28' => ['lot_id' => 'BD26663.3'],
-    // '04MV853A (ADGT)' => ['lot_id' => 'BD25932.9'],
-    // '05MV853A (ADGT)' => ['lot_id' => 'BD25932.8'],
-    // '48AT28' => ['lot_id' => 'BD25521.2'],
-    // '51AT28' => ['lot_id' => 'BD25800.3'],
-    // '09HSI200' => ['lot_id' => 'BD26396.2'],
-    // '58AT28' => ['lot_id' => 'BD26461.2'],
-    // '06HSI200' => ['lot_id' => 'BD26106.3'],
-    // '33HSI250' => ['lot_id' => 'BD26461.3'],
-    // '29G6L' => ['lot_id' => 'BD26573.2'],
-    // '41G6L' => ['lot_id' => 'BD26447.2'],
+    '02AT468' => ['lot_id' => 'G166101.5'],
+    '01SRM' => ['lot_id' => 'BD29570.4'],
+    '21AT128' => ['lot_id' => 'BB53407.5'],
+    '25AT128' => ['lot_id' => 'BD28898.2'],
+    '42G6L' => ['lot_id' => 'BB53275.8'],
+    '33G6L' => ['lot_id' => 'BD29507.2'],
+    '47G6L' => ['lot_id' => 'BD29011.3'],
+    '51AT28' => ['lot_id' => 'G165619.17'],
+    '45AT28' => ['lot_id' => 'G165887.11'],
+    '48AT28' => ['lot_id' => 'BD29158.3'],
+    '05MV853A' => ['lot_id' => 'BD27879.2'],
+    '04MV853A' => ['lot_id' => 'BB53610.5'],
+    '29G6L' => ['lot_id' => 'BD29198.3'],
+    '41G6L' => ['lot_id' => 'BD29189.2'],
+    '07HSI' => ['lot_id' => 'BD29592.3'],
+    '33HSI250' => ['lot_id' => 'BD29581.3'],
+    '58AT28' => ['lot_id' => 'BD29445.2'],
+    '14HSI' => ['lot_id' => 'BD29665.3'],
+    '12HSI' => ['lot_id' => 'BB53424.4'],
+    '20G6L' => ['lot_id' => 'BD28580.3'],
+    '24G6L' => ['lot_id' => 'BD27972.5'],
+    '26G6L' => ['lot_id' => 'BD27972.3'],
+    '27G6L' => ['lot_id' => 'BD28209.3'],
+    '28G6L' => ['lot_id' => 'BD27679.2'],
+    '40G6L' => ['lot_id' => 'BD28935.2'],
+    '43G6L' => ['lot_id' => 'BD29404.3'],
+    '45G6L' => ['lot_id' => 'BD28471.2'],
+    '62G6L' => ['lot_id' => 'BD29491.4'],
+    '58G6L' => ['lot_id' => 'BD28716.2'],
+    '04G6L' => ['lot_id' => 'BD29302.1'],
+    '05G6L' => ['lot_id' => 'BC46812.8'],
+    '07G6L' => ['lot_id' => 'BD28475.1'],
+    '12G6L' => ['lot_id' => 'BD29408.3'],
+    '21G6L' => ['lot_id' => 'BD29257.7'],
+    '22G6L' => ['lot_id' => 'BB53507.3'],
+    '38G6L' => ['lot_id' => 'BD28354.1'],
+    '39G6L' => ['lot_id' => 'BD29498.2'],
+    '57G6L' => ['lot_id' => 'BD24497.2'],
+    '06G6L' => ['lot_id' => 'SM55522.1'],
+    '02G6L' => ['lot_id' => 'BD29509.3'],
+    '34G6L' => ['lot_id' => 'BD29643.2'],
+    '29AT128' => ['lot_id' => 'BD29460.3'],
+    '04STI' => ['lot_id' => 'BD28688.1'],
+    '27AT28' => ['lot_id' => 'G165886.6'],
+    '29AT28' => ['lot_id' => 'BD29409.2'],
+    '44AT28' => ['lot_id' => 'BD29371.2'],
+    '34AT28' => ['lot_id' => 'BD29244.2'],
+    '52AT28' => ['lot_id' => 'BB53668.4'],
+    '30G6L' => ['lot_id' => 'BD29448.2'],
+    '51G6L' => ['lot_id' => 'BD28915.2'],
+    'AT128040' => ['lot_id' => 'BD18764.3'],
+    '08G6L' => ['lot_id' => 'BB50148.5'],
+    '09G6L' => ['lot_id' => 'BD29040.3'],
+    '36G6L' => ['lot_id' => 'BD29040.2'],
+    '15AT128' => ['lot_id' => 'BD29341.2'],
+    '10AT128' => ['lot_id' => 'BD29341.4'],
+    '53G6L' => ['lot_id' => 'BD29236.2'],
+    '32G6L' => ['lot_id' => 'BB50710.5'],
+    '31G6L' => ['lot_id' => 'BD29365.4'],
+    '50G6L' => ['lot_id' => 'BD29577.3'],
+    '01MV853A' => ['lot_id' => 'BD28708.2'],
+    '11AT128' => ['lot_id' => 'BC94240.2'],
+    '49G6L' => ['lot_id' => 'BD28916.2'],
+    '44G6L' => ['lot_id' => 'BD29100.2'],
 ];
 
 // Same station rules as scopeLoadingPlanStations + scopeExcludingPostTnr
@@ -179,7 +224,7 @@ $readWipCsv = function (string $path, array $pinnedLotIds) use ($limit, $allowed
 // ---------------------------------------------------------------------
 // DRY-RUN SUBCLASS
 // ---------------------------------------------------------------------
-
+$startTime = microtime(true);
 $sim = new class(
     app(\App\Services\FocusGroupFactoryService::class),
     app(\App\Services\LoadingPlanEntryService::class)
@@ -215,6 +260,22 @@ $sim = new class(
 
     public function simulate(array $wipRows, array $pinnedByMachine, array $pinnedWipRows, \Carbon\Carbon $targetDate): array
     {
+        // Laps are collected (not echoed) so they can be shown at the very end.
+        $timings = [];
+        $simStart = microtime(true);
+        $t = $simStart;
+        $lap = function (string $label) use (&$t, &$timings) {
+            $now = microtime(true);
+            $timings[] = ['label' => $label, 'seconds' => $now - $t];
+            $t = $now;
+        };
+        $finishTimings = function () use (&$timings, $simStart) {
+            return [
+                'laps'  => $timings,
+                'total' => microtime(true) - $simStart,
+            ];
+        };
+
         $scope = \App\Services\SchedulerService::class;
 
         // $plan / $fakeEntryId are private on the parent -> scope-bound closures.
@@ -241,6 +302,7 @@ $sim = new class(
             $stationByLot[$lot->Lot_Id] = $attrs['Station'] ?? null;
             $lots->push($lot);
         }
+        $lap('hydrate');
 
         // --- hydrate pinned lots -------------------------------------------
         $pinnedLots = collect();
@@ -267,37 +329,38 @@ $sim = new class(
                 'warnings' => $warnings,
                 'plan' => [],
                 'pinned' => [],
+                'doableByLot' => [],
                 'unassigned' => collect(),
                 'machineIds' => collect(),
                 'stationByLot' => $stationByLot,
+                'timings' => $finishTimings(),
             ];
         }
 
         // Reference data + package list scoped to everything in this run
         $this->preloadReferenceData($all);
         $this->preloadPackageList($all);
+        $lap('preload');
 
+        // Doable (= commit = intdiv(qty, recipe)) per lot. Same value that
+        // estimateCommit() subtracts from remaining capacity.
+        $doableByLot = [];
+        foreach ($all as $lot) {
+            $doableByLot[$lot->Lot_Id] = $this->estimateCommit($lot);
+        }
+        $lap('doable');
+
+        $inferred = $this->inferAnchorStates($pinnedLots);
         // --- resolve each pinned lot's setup state --------------------------
         $pinned = [];
         foreach ($pinnedLots as $machineId => $lot) {
-            $stateId = $pinnedByMachine[$machineId]['setup_state_id'] ?? null;
+            // optional explicit override, otherwise let the scheduler decide
+            $stateId = $pinnedByMachine[$machineId]['setup_state_id'] ?? $inferred[$machineId] ?? null;
 
             if ($stateId === null) {
-                $ctx = $this->buildLotContext($lot);
-                $matches = $ctx
-                    ? $ctx->candidateStates->where('machine_id', $machineId)->pluck('setup_state_id')->unique()->values()
-                    : collect();
-
-                if ($matches->isEmpty()) {
-                    $warnings[] = "Pinned lot {$lot->Lot_Id} ({$lot->Part_Name}) has no capable setup state on machine {$machineId}. "
-                        . "Set 'setup_state_id' explicitly to pin it anyway — skipped.";
-                    continue;
-                }
-                if ($matches->count() > 1) {
-                    $warnings[] = "Pinned lot {$lot->Lot_Id} on machine {$machineId} matches states [{$matches->implode(', ')}]; "
-                        . "using {$matches->first()}. Set 'setup_state_id' to choose.";
-                }
-                $stateId = $matches->first();
+                $warnings[] = "Pinned lot {$lot->Lot_Id} ({$lot->Part_Name}) on machine {$machineId}: "
+                    . "scheduler could not infer a setup state — skipped.";
+                continue;
             }
 
             $pinned[$machineId] = [
@@ -306,16 +369,25 @@ $sim = new class(
                 'commit'   => $this->estimateCommit($lot) ?? 0,
             ];
         }
+        $lap('pinned');
 
         // --- machines in play: candidates for the lots + pinned machines ----
         $machineIds = $this->getCandidateMachineIds($lots)
             ->merge(array_keys($pinned))
             ->unique()
             ->values();
+        $lap('getCandidateMachineIds');
 
-        $anchorStateByMachine       = $this->getAnchorStates($machineIds);
+        $anchorStateByMachine       = $this->getAnchorStates($machineIds, $lots);
         $remainingCapacityByMachine = $this->getRemainingCapacityByMachine($machineIds, $targetDate);
         $openEntriesByMachine       = collect();
+        $lap('anchor+capacity');
+
+        $capacityByMachine = $machineIds->mapWithKeys(
+            fn($id) => [$id => \App\Models\MachineCapacity::effectiveFor($id, $targetDate)?->capacity]
+        )->all();
+        $initialRemaining = $remainingCapacityByMachine->all();
+        $pinnedCommit = [];
 
 
         $capacityByMachine = $machineIds->mapWithKeys(
@@ -339,10 +411,12 @@ $sim = new class(
                 'resulting_setup_state_id' => $p['state_id'],
             ]]);
         }
+        $lap('pinned anchors');
 
         // --- same tier flow as rebuildForPickupArrival ----------------------
         $results = ['placed' => [], 'unassigned' => collect()];
         $tiers = $lots->groupBy(fn($lot) => $this->priorityTier($lot));
+        $lap('tier grouping');
 
         $this->placeTierByPriority(
             $tiers->get(1, collect()),
@@ -352,6 +426,8 @@ $sim = new class(
             $dateString,
             $results
         );
+        $lap('tier1');
+
         $this->placeTierByPriority(
             $tiers->get(2, collect()),
             $openEntriesByMachine,
@@ -360,6 +436,8 @@ $sim = new class(
             $dateString,
             $results
         );
+        $lap('tier2');
+
         $this->greedyPlaceTier(
             $tiers->get(3, collect()),
             $openEntriesByMachine,
@@ -368,6 +446,28 @@ $sim = new class(
             $dateString,
             $results
         );
+        $lap('tier3');
+
+        $capacityReport = [];
+        foreach ($machineIds as $id) {
+            $cap = $capacityByMachine[$id] ?? null;
+            if ($cap === null) {
+                $capacityReport[$id] = null;
+                continue;
+            }
+            $initial = $initialRemaining[$id];
+            $pinnedC = $pinnedCommit[$id] ?? 0;
+            $final   = $remainingCapacityByMachine[$id];
+
+            $capacityReport[$id] = [
+                'capacity'     => $cap,
+                'db_committed' => $cap - $initial,            // already on the machine today (DB)
+                'pinned'       => $pinnedC,
+                'planned'      => ($initial - $pinnedC) - $final,  // newly placed by this run
+                'remaining'    => $final,
+            ];
+        }
+        $lap('capacity report');
 
         $capacityReport = [];
         foreach ($machineIds as $id) {
@@ -404,6 +504,7 @@ $sim = new class(
                 fn($r) => $r['type'] === 'block'
             )->all();
         }
+        $lap('final sort');
 
         return [
             'lots'         => $lots,
@@ -412,9 +513,11 @@ $sim = new class(
             'pinned'       => $pinned,
             'capacity'     => $capacityReport,
             'unassigned'   => $results['unassigned'],
+            'doableByLot'  => $doableByLot,
             'machineIds'   => $machineIds,
             'stationByLot' => $stationByLot,
             'tierCounts'   => [1 => $tiers->get(1, collect())->count(), 2 => $tiers->get(2, collect())->count(), 3 => $tiers->get(3, collect())->count()],
+            'timings'      => $finishTimings(),
         ];
     }
 };
@@ -429,7 +532,9 @@ $log = function (string $line = '') use (&$output) {
     echo $line . "\n";
 };
 
+$csvReadStart = microtime(true);
 $csv = $readWipCsv($csvPath, array_values(array_filter(array_map(fn($p) => $p['lot_id'] ?? null, $pinned))));
+$csvReadSeconds = microtime(true) - $csvReadStart;
 
 $log("CSV: {$csvPath}");
 $log("Read " . count($csv['rows']) . " WIP lot(s) to schedule"
@@ -493,6 +598,7 @@ $cols = [
     'Lot_Id',
     'Station',
     'Qty',
+    'Doable',
     'Lot_Type',
     'Focus_Group',
     'Entry_Days',
@@ -500,7 +606,7 @@ $cols = [
     'Ramp_Time',
     'Body_Size'
 ];
-$rightAligned = ['Lead_Count', 'Qty', 'Entry_Days', 'CT'];
+$rightAligned = ['Lead_Count', 'Qty', 'Doable', 'Entry_Days', 'CT'];
 $cell = fn($v) => ($v === null || $v === '') ? '-' : (is_float($v) ? (string) round($v, 2) : (string) $v);
 
 $placedTotal = 0;
@@ -515,8 +621,10 @@ $track = function (array $cells) use (&$widths, $cell) {
     }
 };
 
+$doableTotals = [];
 foreach ($machinesToShow as $machineId) {
     $items = [];
+    $doableTotals[$machineId] = ['pinned' => 0, 'planned' => 0];
 
     if (isset($r['pinned'][$machineId])) {
         $lot = $r['pinned'][$machineId]['lot'];
@@ -528,6 +636,7 @@ foreach ($machinesToShow as $machineId) {
             $lot->Lot_Id,
             $r['stationByLot'][$lot->Lot_Id] ?? null,
             $lot->Qty,
+            $r['doableByLot'][$lot->Lot_Id] ?? null,
             $lot->Lot_Type,
             $lot->Focus_Group,
             $lot->Lot_Entry_Time_Days ?? null,
@@ -536,6 +645,7 @@ foreach ($machinesToShow as $machineId) {
             $lot->Body_Size
         ];
         $track($cells);
+        $doableTotals[$machineId]['pinned'] += $r['doableByLot'][$lot->Lot_Id] ?? 0;
         $items[] = ['cells' => $cells, 'suffix' => ''];
     }
 
@@ -558,6 +668,7 @@ foreach ($machinesToShow as $machineId) {
             $row['lot_id'],
             $r['stationByLot'][$row['lot_id']] ?? null,
             $row['qty'],
+            $r['doableByLot'][$row['lot_id']] ?? null,
             $lot->Lot_Type ?? null,
             $lot->Focus_Group ?? null,
             $row['sort']['entry_days'] ?? null,
@@ -566,6 +677,7 @@ foreach ($machinesToShow as $machineId) {
             $lot->Body_Size ?? null,
         ];
         $track($cells);
+        $doableTotals[$machineId]['planned'] += $r['doableByLot'][$row['lot_id']] ?? 0;
 
         $tags = '';
         if ($row['is_manual_expedite'])                          $tags .= '  [EXPEDITE]';
@@ -616,6 +728,27 @@ foreach ($blocks as $machineId => $items) {
     foreach ($items as $item) {
         $log(isset($item['text']) ? '  ' . $item['text'] : $pad($item['cells']) . $item['suffix']);
     }
+
+    $dt  = $doableTotals[$machineId];
+    $cap = $r['capacity'][$machineId] ?? null;
+    $line = sprintf(
+        '  Doable total: %d (pinned %d + planned %d)',
+        $dt['pinned'] + $dt['planned'],
+        $dt['pinned'],
+        $dt['planned']
+    );
+    if ($cap !== null) {
+        $line .= sprintf(
+            ' | + DB committed %d = %d / %d capacity',
+            $cap['db_committed'],
+            $dt['pinned'] + $dt['planned'] + $cap['db_committed'],
+            $cap['capacity']
+        );
+        if ($dt['pinned'] !== $cap['pinned'] || $dt['planned'] !== $cap['planned']) {
+            $line .= '  [MISMATCH vs capacity report]';
+        }
+    }
+    $log($line);
     $log();
 }
 
@@ -662,7 +795,33 @@ if ($r['unassigned']->isNotEmpty()) {
             . "  qty=" . ($lot->Qty ?? '-') . "  fg=" . ($lot->Focus_Group ?? '-')
             . "  ramp=" . ($lot->Ramp_Time ?? '-'));
     }
+    $log();
 }
+
+// ---------------------------------------------------------------------
+// TIMING (last thing printed, also saved to the text file)
+// ---------------------------------------------------------------------
+
+$totalElapsed = microtime(true) - $startTime;
+$simTotal     = $r['timings']['total'];
+
+$log(str_repeat('=', 60));
+$log('TIMING');
+$log(str_repeat('=', 60));
+$log(sprintf('  %-28s %9s %7s', 'Step', 'Seconds', '% sim'));
+foreach ($r['timings']['laps'] as $lapRow) {
+    $pct = $simTotal > 0 ? ($lapRow['seconds'] / $simTotal * 100) : 0;
+    $log(sprintf('  %-28s %9.3f %6.1f%%', $lapRow['label'], $lapRow['seconds'], $pct));
+}
+$log(str_repeat('-', 60));
+$log(sprintf('  %-28s %9.3f', 'simulate() total', $simTotal));
+$log(sprintf('  %-28s %9.3f', 'CSV read', $csvReadSeconds));
+$log(sprintf('  %-28s %9.3f  (%.2f min)', 'Script total', $totalElapsed, $totalElapsed / 60));
+$log();
+
+// ---------------------------------------------------------------------
+// WRITE FILE
+// ---------------------------------------------------------------------
 
 $csvName  = preg_replace(
     '/[^A-Za-z0-9_-]+/',
@@ -673,4 +832,5 @@ $filename = "scheduler_test_{$csvName}_" . now()->format('Y-m-d_His') . '.txt';
 $path = storage_path('app/' . $filename);
 file_put_contents($path, $output);
 
-echo "\nFull output written to: {$path}\n";
+echo "Test completed in " . number_format($totalElapsed, 4) . " seconds\n";
+echo "Full output written to: {$path}\n";
