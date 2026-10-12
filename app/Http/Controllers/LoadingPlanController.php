@@ -409,9 +409,9 @@ class LoadingPlanController extends Controller
         $previousDate = Carbon::parse($date)->subDay()->toDateString();
         $isVisitingYesterday = $date === ShiftDay::yesterday();
 
-        if ($isVisitingYesterday) {
-            return back()->with('error', 'Cannot run scheduler on a past date.');
-        }
+        // if ($isVisitingYesterday) {
+        //     return back()->with('error', 'Cannot run scheduler on a past date.');
+        // }
 
         $lockKey = "scheduler-run-lock:{$date}";
         $lock = Cache::lock($lockKey, 60); // hold for max 60s

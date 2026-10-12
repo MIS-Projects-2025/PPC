@@ -76,14 +76,7 @@ export function machineBaseDateTime(baseTimes, machine, referenceDate) {
         : dayjs(`${referenceDate} 06:00:00`, "YYYY-MM-DD HH:mm:ss");
 }
 
-export function applyTimeStartEdit(
-    rows,
-    dndId,
-    machine,
-    newTimeStartStr, // still bare "HH:mm" from the edit control
-    baseTimes,
-    referenceDate, // the viewed scheduled_date — only used as the base for offset math
-) {
+export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTimes, referenceDate, dayOffsetOverride = null){
     const machineRows = rows.filter((r) => r.machine === machine);
     const idx = machineRows.findIndex((r) => r._dndId === dndId);
     const idxOfAbove = idx - 1;
@@ -111,7 +104,8 @@ export function applyTimeStartEdit(
         ? (rowAbove.time_end_day_offset ?? 0)
         : dayjs(baseTimes[machine]).startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
 
-    const editedRowDayOffset = editedRow.time_start_day_offset ?? referenceDayOffset;
+    const editedRowDayOffset =
+        dayOffsetOverride ?? editedRow.time_start_day_offset ?? referenceDayOffset;
 
     const [h, m] = newTimeStartStr.split(":").map(Number);
     const newStart = dayjs(referenceDate)

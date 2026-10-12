@@ -31,6 +31,7 @@ class CapabilityMatrixController extends Controller
     public function page(string $machine)
     {
         $m = $this->resolveMachine($machine);
+        // dd($m);
 
         return Inertia::render('MachineCapabilities', [
             'machine'  => $m, // frontend should use $m->id for later API calls

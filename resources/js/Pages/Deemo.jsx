@@ -344,9 +344,24 @@ function RowHistoryButton({ isHidden, anchorElement, onViewHistory, buttonsRef }
 const ALL_PACKAGES_TAB = "ALL PACKAGE";
 const RES_TAB = "RES";
 const FOR_BAKE_TAB = "FOR BAKE";
+const PICKUP_TAB = "PICKUP";
+const ORPHAN_TAB = "NO MACHINE";
 const RES_STATION = "GTTRES_T";
 const isResRow = (r) => r.station === RES_STATION;
 const isForBakeRow = (r) => !!r.is_for_bake;
+
+const compareUnassigned = (a, b) => {
+    const pkg = (a.package_name ?? "").localeCompare(b.package_name ?? "", undefined, { numeric: true });
+    if (pkg !== 0) return pkg;
+
+    const an = a.lead_count == null ? NaN : Number(a.lead_count);
+    const bn = b.lead_count == null ? NaN : Number(b.lead_count);
+    if (Number.isNaN(an) && Number.isNaN(bn)) return 0;
+    if (Number.isNaN(an)) return 1;   // missing lead_count goes last
+    if (Number.isNaN(bn)) return -1;
+    return an - bn;                   // swap to `bn - an` for descending
+};
+
 // ---------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------
@@ -383,6 +398,11 @@ export default function Deemo({
         [serverMachines],
     );
 
+    const knownMachineNames = useMemo(
+        () => new Set(serverMachines.map((m) => m.name)),
+        [serverMachines],
+    );
+    
     const {
         present: { rows: dataRows },
         update,
@@ -391,7 +411,22 @@ export default function Deemo({
         canUndo,
         canRedo
     } = useLoadingPlanStore();
+
+    const isOrphanRow = useCallback(
+        (r) => !!r.machine
+            && r.machine !== MACHINE_MANUAL
+            && !isNonMachineKey(r.machine)
+            && !knownMachineNames.has(r.machine),
+        [knownMachineNames],
+    );
     
+    const orphanMachines = useMemo(
+        () => [...new Set(dataRows.filter(isOrphanRow).map((r) => r.machine))].sort(),
+        [dataRows, isOrphanRow],
+    );
+
+    console.log("LOG ~ Deemo.jsx:428 ~ Deemo ~ orphanMachines:", orphanMachines);
+
     // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
     // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
 
@@ -568,6 +603,9 @@ export default function Deemo({
                 ? `entry-${row.entry_id}`
                 : `${row.id ?? Math.random()}`,
         }));
+
+        console.log(data.find(r => r.lot_id === "BC222.2"));
+        console.log(data.find(r => r.lot_id === "BD30368.5"));
 
         useLoadingPlanStore.getState().reset(seeded);
     }, [data]);
@@ -876,7 +914,7 @@ export default function Deemo({
             const groupPkgs = packagesInGroup(activePackage, packageGroups);
             const resolvedPackage = packageName || groupPkgs[0] || activePackage;
 
-            if ((activePackage === ALL_PACKAGES_TAB || activePackage === FOR_BAKE_TAB) && !packageName) {
+            if ([ALL_PACKAGES_TAB, FOR_BAKE_TAB, PICKUP_TAB, ORPHAN_TAB].includes(activePackage) && !packageName) {
                 return Promise.reject(new Error("Pick a package for the new lot"));
             }
 
@@ -1205,12 +1243,14 @@ export default function Deemo({
     );
 
     const rowInActiveTabOwn = useCallback((r) => {
+        if (activePackage === ORPHAN_TAB) return isOrphanRow(r);
+        if (activePackage === PICKUP_TAB) return !!r.is_pickup;
         if (activePackage === RES_TAB) return isResRow(r);
         if (activePackage === FOR_BAKE_TAB) return isForBakeRow(r);
         if (isResRow(r)) return false;
         if (activePackage === ALL_PACKAGES_TAB) return true;
         return (activePackageGroup ?? []).includes(r.package_name);
-    }, [activePackage, activePackageGroup]);
+    }, [activePackage, activePackageGroup, isOrphanRow]);
 
     const rowInActiveTab = useCallback((r) => {
         if (r.machine !== null && r.machine !== MACHINE_MANUAL && isOtherLoc(r)) return false; // lives in the "other location" group
@@ -1342,11 +1382,30 @@ export default function Deemo({
                     : [header, ...rows.map((r) => ({ ...r, __type: "data" }))];
             });
 
+        const orphanSections = (isVisible) =>
+            orphanMachines.flatMap((m) => {
+                const rows = dataRows.filter((r) => r.machine === m && !isParked(r) && isVisible(r));
+                if (rows.length === 0) return [];
+                const isCollapsed = collapsedMachines.has(m);
+                const headerRow = {
+                    id: `header-${m}`,
+                    __type: "header",
+                    machine: m,
+                    machineLabel: m,
+                    __rowCount: rows.length,
+                    __lotCount: rows.filter((r) => !isBlockRow(r)).length,
+                    otherPackageCount: 0,
+                    __isCollapsed: isCollapsed,
+                    isLocked: true,
+                };
+                return isCollapsed ? [headerRow] : [headerRow, ...rows.map((r) => ({ ...r, __type: "data" }))];
+            });
+
         // ── "Unassigned" tab: every unplanned, non-parked lot across all packages ──
         if (activePackage === "Unassigned") {
-            const rowsForMachine = dataRows.filter(
-                (r) => r.machine === null && !isResRow(r) && !isParked(r) && !isOtherLoc(r)
-            );
+            const rowsForMachine = dataRows
+                .filter((r) => r.machine === null && !isResRow(r) && !isParked(r) && !isOtherLoc(r))
+                .sort(compareUnassigned);
             const isCollapsed = collapsedMachines.has(null);
 
             const headerRow = {
@@ -1369,22 +1428,26 @@ export default function Deemo({
             ];
         }
 
+        if (activePackage === ORPHAN_TAB) return orphanSections(() => true);
+
         // ── Every other tab ──
         const visible = (r) => rowInActiveTab(r);
 
         const machineSections = [...machines, ...nonMachineKeys].flatMap((m) => {
             const isUnassigned = m === null;
             const isManual = m === MACHINE_MANUAL;
+            const isOrphan = orphanMachines.includes(m);
             const isNonMachine = isNonMachineKey(m);
             const canCollapse = !isUnassigned && !isManual;
             const showAll = canCollapse && expandedMachines.has(m);
             const showLoc = !canCollapse || expandedLocations.has(m);
 
-            if (isManual && activePackage !== "MANUAL" && !isAll) return [];
+            if (isOrphan && !(activePackage === ORPHAN_TAB || activePackage === PICKUP_TAB || isAll)) return [];
+            if (isManual && activePackage !== "MANUAL" && !isAll && activePackage !== PICKUP_TAB) return [];
 
-            const machineRows = dataRows.filter(
-                (r) => r.machine === m && !isParked(r) && !(isUnassigned && isOtherLoc(r)),
-            );
+            const machineRows = dataRows
+                .filter((r) => r.machine === m && !isParked(r) && !(isUnassigned && isOtherLoc(r)));
+            if (isUnassigned) machineRows.sort(compareUnassigned);
             const hiddenKind = (r) => {
                 if (isBlockRow(r)) return null;
                 if (isOtherLoc(r)) return showLoc ? null : "location";
@@ -1472,7 +1535,11 @@ export default function Deemo({
         });
 
         // Top-level groups (Anticipate, Upcoming, ...) go below every machine.
-        return [...machineSections, ...bucketSections(null, visible)];
+        const orphans = activePackage === PICKUP_TAB || isAll
+            ? orphanSections(activePackage === PICKUP_TAB ? (r) => !!r.is_pickup : () => true)
+            : [];
+
+        return [...machineSections, ...orphans, ...bucketSections(null, visible)];
     }, [
         nonMachineKeys,
         nonMachineNameByKey,
@@ -1913,14 +1980,14 @@ export default function Deemo({
     }, [beginWrite, withUpdating, toast, mutate, date, applyRecalc, reportError]);
 
     const handleSchedulePickups = useCallback(async (pickups) => {
-        const release = holdLock();                      // one lock for submit + reload
-        try {
-            if (!beginWrite()) throw new Error("Still saving…");
-            if (pickups.length === 0) {
-                toast?.error?.("Pickup is Empty");
-                throw new Error();
-            }
+        if (pickups.length === 0) {
+            toast?.error?.("Pickup is Empty");
+            throw new Error("Pickup is Empty");
+        }
+        if (!beginWrite()) throw new Error("Still saving…");
 
+        const release = holdLock();   // one lock covering submit + reload
+        try {
             const result = await mutate(route("loading-plan.schedule-pickup"), {
                 body: { date, pickups },
             });
@@ -1930,7 +1997,6 @@ export default function Deemo({
                     preserveScroll: true,
                     onSuccess: () => setStaleInfo(null),
                     onFinish: resolve,
-                    onError: () => {throw new Error()},
                 }),
             );
 
@@ -1944,11 +2010,15 @@ export default function Deemo({
             return result;
         } catch (err) {
             reportError(err, "Couldn't schedule the pickups.");
-            throw err;                                   // keeps the modal open
+            throw err; // keeps the modal open
         } finally {
             release();
         }
-    }, [beginWrite, holdLock, mutate, date, router, toast, reportError]);
+    }, [beginWrite, holdLock, mutate, date, toast, reportError]);
+
+    useEffect(() => {
+        if (activePackage === ORPHAN_TAB && orphanMachines.length === 0) setActivePackage(ALL_PACKAGES_TAB);
+    }, [activePackage, orphanMachines.length]);
 
     return (
         <div
@@ -2159,6 +2229,8 @@ export default function Deemo({
                                 ALL_PACKAGES_TAB,
                                 RES_TAB,
                                 FOR_BAKE_TAB,
+                                PICKUP_TAB,
+                                ...(orphanMachines.length ? [ORPHAN_TAB] : []),
                                 ...packageGroupNames,
                                 // { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> }, // might be deprecated
                             ]}

@@ -95,16 +95,6 @@ class LoadingPlanEntryService
             ?? Carbon::parse("{$date} " . LotScheduleCalculator::NON_MACHINE_DEFAULT_START);
     }
 
-    private function retimeFromFirstRow(array $machineIds, string $date, LotScheduleCalculator $calc): void
-    {
-        foreach (array_unique(array_filter($machineIds)) as $machineId) {
-            $restart = self::findFirstRemainingRow($machineId, $date);
-            if ($restart) {
-                $calc->recomputeTimeStartAndEnd($restart, $machineId);
-            }
-        }
-    }
-
     public function setNonMachineStart(int $id, string $start): array
     {
         return DB::transaction(function () use ($id, $start) {
@@ -260,6 +250,7 @@ class LoadingPlanEntryService
             $machinesToLock = collect([...$sourceMachineIds, $targetMachineId])->filter()->unique()->sort()->values()->all();
             $nonMachinesToLock = collect([...$sourceNonMachineIds, $targetNonMachineId])->filter()->unique()->sort()->values()->all();
             $lockedRows = $this->lockLaneRows($machinesToLock, $nonMachinesToLock, $date);
+            $machineAnchors = $this->machineAnchors($lockedRows, $machinesToLock);
 
             $targetRows = $targetNonMachineId !== null
                 ? $lockedRows->where('non_machine_id', $targetNonMachineId)
@@ -297,7 +288,7 @@ class LoadingPlanEntryService
                 }
             }
 
-            $this->retimeFromFirstRow([$targetMachineId, ...$sourceMachineIds], $date, $calc);
+            $this->retimeFromFirstRow([$targetMachineId, ...$sourceMachineIds], $date, $calc, $machineAnchors);
             if ($targetNonMachineId !== null) {
                 $calc->recomputeNonMachineTimes($targetNonMachineId, $date, $targetAnchor);
             }
@@ -386,6 +377,7 @@ class LoadingPlanEntryService
                     $activeSplits->get($e->lot_id . '|' . $e->scheduled_date->toDateString())
                 );
             });
+            $machineAnchor = $this->machineAnchor($lotEntries);
 
             // entry id => root lot id (null for blocks, which have no lot_id)
             $rootLotIdByEntry = $lotEntries->mapWithKeys(
@@ -464,7 +456,7 @@ class LoadingPlanEntryService
             $lap('LotScheduleCalculator construct');
 
             if ($firstChangedId) {
-                $calc->recomputeTimeStartAndEnd(LoadingPlanEntry::findOrFail($firstChangedId), $targetMachineId);
+                $calc->recomputeTimeStartAndEnd(LoadingPlanEntry::findOrFail($firstChangedId), $targetMachineId, $machineAnchor);
             }
             $lap('recomputeTimeStartAndEnd');
 
@@ -549,6 +541,7 @@ class LoadingPlanEntryService
                 ? $this->lockNonMachineRows([$nonMachineId], $date)
                 : $this->lockMachineRows([$machineId], $date);
             $anchor = $nonMachineId !== null ? $this->laneAnchor($rows, $date) : null;
+            $machineAnchor = $machineId !== null ? $this->machineAnchor($rows) : null;
 
             $newOrder = $this->resolveSequenceOrder(
                 $rows,
@@ -600,7 +593,7 @@ class LoadingPlanEntryService
             ]);
 
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$source->lot_id]])->loadPackageList();
-            $calc->recalculateAndRetime($rework->id, $machineId, retime: $nonMachineId === null);
+            $calc->recalculateAndRetime($rework->id, $machineId, retime: $nonMachineId === null, anchor: $machineAnchor);
             if ($nonMachineId !== null) {
                 $calc->recomputeNonMachineTimes($nonMachineId, $date, $anchor);
             }
@@ -665,6 +658,7 @@ class LoadingPlanEntryService
 
             // the lane keeps its start even if the first row is the one being moved
             $anchor = $nonMachineId !== null ? $this->laneAnchor($rows, $resolvedDate) : null;
+            $machineAnchor = $machineId !== null ? $this->machineAnchor($rows) : null;
 
             $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $resolvedDate);
 
@@ -687,7 +681,7 @@ class LoadingPlanEntryService
             } else {
                 $restart = $this->findFirstRemainingRow($machineId, $resolvedDate);
                 if ($restart) {
-                    $calc->recomputeTimeStartAndEnd($restart, $machineId);
+                    $calc->recomputeTimeStartAndEnd($restart, $machineId, $machineAnchor);
                 }
             }
 
@@ -774,6 +768,10 @@ class LoadingPlanEntryService
             $sourceAnchor = ($sourceNonMachineId !== null && $sourceNonMachineId !== $targetNonMachineId)
                 ? $this->laneAnchor($rows->where('non_machine_id', $sourceNonMachineId), $resolvedDate)
                 : null;
+            $targetMachineAnchor = $targetMachineId !== null
+                ? $this->machineAnchor($rows->where('machine_id', $targetMachineId)) : null;
+            $sourceMachineAnchor = ($sourceMachineId && $sourceMachineId !== $targetMachineId)
+                ? $this->machineAnchor($rows->where('machine_id', $sourceMachineId)) : null;
 
             $newOrder = $this->resolveSequenceOrder(
                 $targetRows,
@@ -799,13 +797,13 @@ class LoadingPlanEntryService
             if ($targetNonMachineId !== null) {
                 $calc->recomputeNonMachineTimes($targetNonMachineId, $resolvedDate, $targetAnchor);
             } else {
-                $calc->recomputeTimeStartAndEnd($entry->fresh(), $targetMachineId);
+                $calc->recomputeTimeStartAndEnd($entry->fresh(), $targetMachineId, $targetMachineAnchor);
             }
 
             if ($sourceMachineId && $sourceMachineId !== $targetMachineId) {
                 $sourceRestart = $this->findFirstRemainingRow($sourceMachineId, $resolvedDate);
                 if ($sourceRestart) {
-                    $calc->recomputeTimeStartAndEnd($sourceRestart, $sourceMachineId);
+                    $calc->recomputeTimeStartAndEnd($sourceRestart, $sourceMachineId, $sourceMachineAnchor);
                 }
             }
             if ($sourceNonMachineId && $sourceNonMachineId !== $targetNonMachineId) {
@@ -858,6 +856,7 @@ class LoadingPlanEntryService
                 : $this->lockMachineRows([$machineId], $date);
 
             $anchor = $nonMachineId !== null ? $this->laneAnchor($rows, $date) : null;
+            $machineAnchor = $machineId !== null ? $this->machineAnchor($rows) : null;
 
             $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
 
@@ -878,14 +877,7 @@ class LoadingPlanEntryService
             if ($nonMachineId !== null) {
                 $calc->recomputeNonMachineTimes($nonMachineId, $date, $anchor);
             } else {
-                $calc->recomputeTimeStartAndEnd($entry, $machineId);
-
-                if ($calc->findPredecessor($entry) === null) {
-                    DB::table('machine_day_starts')->updateOrInsert(
-                        ['machine_id' => $machineId, 'scheduled_date' => $date],
-                        ['day_start_time' => $entry->fresh()->time_start->format('H:i:s'), 'updated_at' => now()]
-                    );
-                }
+                $calc->recomputeTimeStartAndEnd($entry, $machineId, $machineAnchor);
             }
 
             return $this->withTimings(
@@ -901,17 +893,41 @@ class LoadingPlanEntryService
         });
     }
 
+    private function machineAnchor(Collection $laneRows): ?Carbon
+    {
+        return $laneRows->sortBy('sequence_order')->first()?->time_start?->copy();
+    }
+
+    /** @return array<int, ?Carbon> machine_id => anchor, from already-locked rows */
+    private function machineAnchors(Collection $lockedRows, array $machineIds): array
+    {
+        return collect($machineIds)->filter()->unique()
+            ->mapWithKeys(fn($id) => [$id => $this->machineAnchor($lockedRows->where('machine_id', $id))])
+            ->all();
+    }
+
+    private function retimeFromFirstRow(array $machineIds, string $date, LotScheduleCalculator $calc, array $anchors = []): void
+    {
+        foreach (array_unique(array_filter($machineIds)) as $machineId) {
+            $restart = self::findFirstRemainingRow($machineId, $date);
+            if ($restart) {
+                $calc->recomputeTimeStartAndEnd($restart, $machineId, $anchors[$machineId] ?? null);
+            }
+        }
+    }
+
     public function deleteEntry(int $id, ?string $machine, bool $forceDelete = false): array
     {
         return DB::transaction(function () use ($id, $machine, $forceDelete) {
-            $machineId = $machine ? $this->resolveMachineId($machine) : null;
             $entry = LoadingPlanEntry::whereKey($id)->firstOrFail();
 
             $date = $entry->scheduled_date->toDateString();
             $vacatedNonMachineId = $entry->non_machine_id;
+            $vacatedMachineId = $entry->machine_id;
 
-            if ($machineId) {
-                $this->lockMachineRows([$machineId], $date);
+            $machineAnchor = null;
+            if ($vacatedMachineId) {
+                $machineAnchor = $this->machineAnchor($this->lockMachineRows([$vacatedMachineId], $date));
             }
 
             $nonMachineAnchor = null;
@@ -920,8 +936,6 @@ class LoadingPlanEntryService
             }
 
             $this->assertNotFinalized($entry);
-
-            $vacatedMachineId = $entry->machine_id;
 
             if ($forceDelete || $entry->entry_type === 'block' || $entry->rework_seq > 0) {
                 $entry->delete();
@@ -940,7 +954,7 @@ class LoadingPlanEntryService
             if ($vacatedMachineId) {
                 $restart = $this->findFirstRemainingRow($vacatedMachineId, $date);
                 if ($restart) {
-                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $vacatedMachineId);
+                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $vacatedMachineId, $machineAnchor);
                 }
             }
 
@@ -1007,6 +1021,7 @@ class LoadingPlanEntryService
             $sourceNonMachineIds = array_values(array_diff($nonMachinesToLock, [$targetNonMachineId]));
 
             $lockedRows = $this->lockLaneRows($machinesToLock, $nonMachinesToLock, $date);
+            $machineAnchors = $this->machineAnchors($lockedRows, $machinesToLock);
 
             $targetLane = match (true) {
                 $targetNonMachineId !== null => $lockedRows->where('non_machine_id', $targetNonMachineId),
@@ -1100,15 +1115,14 @@ class LoadingPlanEntryService
             // this call touched (fresh(), since pass 1 above updated its accu_time)
             // and recomputeTimeStartAndEnd walks every row downstream of it itself.
             if ($firstAffectedEntry !== null && $targetMachineId !== null) {
-                $calculator->recomputeTimeStartAndEnd($firstAffectedEntry->fresh(), $targetMachineId);
+                $calculator->recomputeTimeStartAndEnd($firstAffectedEntry->fresh(), $targetMachineId, $machineAnchors[$targetMachineId] ?? null);
             }
 
             if ($firstAffectedEntry !== null && $targetNonMachineId !== null) {
                 $calculator->recomputeNonMachineTimes($targetNonMachineId, $date, $targetAnchor);
             }
 
-            $this->retimeFromFirstRow($sourceMachineIds, $date, $calculator);
-
+            $this->retimeFromFirstRow($sourceMachineIds, $date, $calculator, $machineAnchors);
             foreach ($sourceNonMachineIds as $id) {
                 $calculator->recomputeNonMachineTimes($id, $date, $sourceAnchors[$id]);
             }
@@ -1202,6 +1216,7 @@ class LoadingPlanEntryService
                 ->all();
 
             $lockedRows = $this->lockMachineRows($machinesToLock, $date);
+            $machineAnchors = $this->machineAnchors($lockedRows, $machinesToLock);
 
             // Independent sequence counter per target machine, seeded from
             // that machine's current max sequence_order (same GAP_SEED spacing).
@@ -1295,8 +1310,7 @@ class LoadingPlanEntryService
             // One forward walk per affected target machine, starting from the
             // earliest entry that landed on it — recomputeTimeStartAndEnd walks
             // everything downstream on that machine itself.
-            $this->retimeFromFirstRow([...$sourceMachineIds, ...array_keys($firstAffectedByMachine)], $date, $calculator);
-
+            $this->retimeFromFirstRow([...$sourceMachineIds, ...array_keys($firstAffectedByMachine)], $date, $calculator, $machineAnchors);
             return [
                 'entries'          => $updated,
                 'affected_timings' => $this->timingsFor($machinesToLock, $date),
@@ -1315,7 +1329,7 @@ class LoadingPlanEntryService
             $nonMachines = $entries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
 
             $lockedRows = $this->lockLaneRows($machines, $nonMachines, $date);
-
+            $machineAnchors = $this->machineAnchors($lockedRows, $machines);
             // lane starts, captured before rows leave
             $anchors = collect($nonMachines)
                 ->mapWithKeys(fn($id) => [$id => $this->laneAnchor($lockedRows->where('non_machine_id', $id), $date)])
@@ -1355,7 +1369,7 @@ class LoadingPlanEntryService
                 foreach ($machines as $machineId) {
                     $restart = $this->findFirstRemainingRow($machineId, $date);
                     if ($restart) {
-                        $calc->recomputeTimeStartAndEnd($restart, $machineId);
+                        $calc->recomputeTimeStartAndEnd($restart, $machineId, $machineAnchors[$machineId] ?? null);
                     }
                 }
                 foreach ($nonMachines as $id) {
@@ -1430,6 +1444,7 @@ class LoadingPlanEntryService
             $nonMachineId = null;
             $newOrder = null;
             $anchor = null;
+            $machineAnchor = null;
 
             if ($machine !== null) {
                 [$machineId, $nonMachineId] = $this->resolveTarget($machine);
@@ -1440,6 +1455,7 @@ class LoadingPlanEntryService
                     $anchor = $this->laneAnchor($rows, $date);
                 } else {
                     $rows = $this->lockMachineRows([$machineId], $date);
+                    $machineAnchor = $this->machineAnchor($rows);
                 }
 
                 $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $date);
@@ -1476,7 +1492,7 @@ class LoadingPlanEntryService
             }
 
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])->loadPackageList();
-            $calc->recalculateAndRetime($entry->getKey(), $machineId, retime: $nonMachineId === null);
+            $calc->recalculateAndRetime($entry->getKey(), $machineId, retime: $nonMachineId === null, anchor: $machineAnchor);
 
             if ($nonMachineId !== null) {
                 $calc->recomputeNonMachineTimes($nonMachineId, $date, $anchor);
@@ -1535,7 +1551,7 @@ class LoadingPlanEntryService
         // accu_time changes need to cascade — anything else this method allows
         // (remarks, tag, status, etc.) doesn't affect timing at all
         if (array_key_exists('accu_time', $fields) && ($entry->machine_id !== null || $entry->non_machine_id !== null)) {
-            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $entry->machine_id);
+            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $entry->machine_id, $entry->time_start?->copy());
             $entry = $entry->fresh();
         }
 
@@ -1583,10 +1599,10 @@ class LoadingPlanEntryService
             $entry = LoadingPlanEntry::findOrFail($existing->id);
             app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])
                 ->loadPackageList()
-                ->recalculateAndRetime($entry, $machineId);
+                ->recalculateAndRetime($entry, $machineId, anchor: $entry->time_start?->copy());
         } elseif ($needsRetimeOnly) {
             $entry = LoadingPlanEntry::findOrFail($existing->id);
-            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $machineId);
+            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $machineId, $entry->time_start?->copy());
         }
 
         return LoadingPlanEntry::findOrFail($entry_id);
@@ -1665,10 +1681,10 @@ class LoadingPlanEntryService
                     $lotQuantity->save();
 
                     $entry = LoadingPlanEntry::findOrFail($entryId);
-                    $calc->recalculateAndRetime($entry, $existing->machine_id);
+                    $calc->recalculateAndRetime($entry, $existing->machine_id, anchor: $entry->time_start?->copy());
                 } elseif ($needsRetimeOnly) {
                     $entry = LoadingPlanEntry::findOrFail($entryId);
-                    $calc->recomputeTimeStartAndEnd($entry, $existing->machine_id);
+                    $calc->recomputeTimeStartAndEnd($entry, $existing->machine_id, $entry->time_start?->copy());
                 }
 
                 $entries[] = LoadingPlanEntry::find($entryId);
@@ -2078,6 +2094,7 @@ class LoadingPlanEntryService
             ])->filter()->unique()->sort()->values()->all();
 
             $lockedLaneRows = $this->lockLaneRows($machineIds, $nonMachineIds, $date);
+            $machineAnchors = $this->machineAnchors($lockedLaneRows, $machineIds);
 
             // lane starts, captured before anything changes
             $laneAnchors = collect($nonMachineIds)
@@ -2119,7 +2136,7 @@ class LoadingPlanEntryService
             foreach ($vacatedMachineIds as $machineId) {
                 $restart = $this->findFirstRemainingRow($machineId, $date);
                 if ($restart) {
-                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId);
+                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId, $machineAnchors[$machineId] ?? null);
                 }
             }
 
@@ -2409,6 +2426,7 @@ class LoadingPlanEntryService
         }
 
         $currentIds = $currentRows->pluck('id')->all();
+        $machineAnchor = $this->machineAnchor($currentRows);
         $stray = array_diff($currentIds, $entryIds);
 
         if (!empty($stray)) {
@@ -2476,12 +2494,7 @@ class LoadingPlanEntryService
         // itself and stops once times stop changing — one call here covers
         // every row pass 1 touched.
         if ($restart) {
-            $calc->recomputeTimeStartAndEnd($restart->fresh(), $machineId);
-
-            DB::table('machine_day_starts')->updateOrInsert(
-                ['machine_id' => $machineId, 'scheduled_date' => $date],
-                ['day_start_time' => $restart->fresh()->time_start?->format('H:i:s'), 'updated_at' => now()]
-            );
+            $calc->recomputeTimeStartAndEnd($restart->fresh(), $machineId, $machineAnchor);
         }
     }
 
@@ -2860,7 +2873,7 @@ class LoadingPlanEntryService
 
             app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$entry->lot_id]])
                 ->loadPackageList()
-                ->recalculateAndRetime($entry->id, $entry->machine_id);
+                ->recalculateAndRetime($entry->id, $entry->machine_id, anchor: $entry->time_start?->copy());
 
             $fresh = $entry->fresh(['machineModel', 'nonMachine', 'lotQuantity']);
             $wip = CustomerDataWip::query()
@@ -2932,6 +2945,7 @@ class LoadingPlanEntryService
             $nonMachineIds = $entries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
 
             $locked = $this->lockLaneRows($machineIds, $nonMachineIds, $date);
+            $machineAnchors = $this->machineAnchors($locked, $machineIds);
             $anchors = collect($nonMachineIds)
                 ->mapWithKeys(fn($id) => [$id => $this->laneAnchor($locked->where('non_machine_id', $id), $date)])
                 ->all();
@@ -2942,7 +2956,7 @@ class LoadingPlanEntryService
             foreach ($entries as $e) {
                 $calc->recalculateAndRetime($e->id, $e->machine_id, retime: false);
             }
-            $this->retimeFromFirstRow($machineIds, $date, $calc);
+            $this->retimeFromFirstRow($machineIds, $date, $calc, $machineAnchors);
             foreach ($nonMachineIds as $id) {
                 $calc->recomputeNonMachineTimes($id, $date, $anchors[$id]);
             }
@@ -3275,9 +3289,9 @@ class LoadingPlanEntryService
             }
 
             $machineIds = $entries->pluck('machine_id')->filter()->unique()->sort()->values()->all();
-            if ($machineIds) {
-                $this->lockMachineRows($machineIds, $date);
-            }
+            $machineAnchors = $machineIds
+                ? $this->machineAnchors($this->lockMachineRows($machineIds, $date), $machineIds)
+                : [];
 
             $nonMachineIds = $entries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
             $lockedNm = $this->lockNonMachineRows($nonMachineIds, $date);
@@ -3292,7 +3306,7 @@ class LoadingPlanEntryService
             foreach ($machineIds as $machineId) {
                 $restart = $this->findFirstRemainingRow($machineId, $date);
                 if ($restart) {
-                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId);
+                    app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId, $machineAnchors[$machineId] ?? null);
                 }
             }
 

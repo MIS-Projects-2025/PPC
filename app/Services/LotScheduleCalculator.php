@@ -21,6 +21,7 @@ class LotScheduleCalculator
     private array $dates;
     private array $lotIds;
     public const NON_MACHINE_DEFAULT_START = '06:00:00';
+    public const MACHINE_DEFAULT_START = '06:00:00';
 
     public function nonMachineLaneStart(int $nonMachineId, string $date): Carbon
     {
@@ -156,6 +157,7 @@ class LotScheduleCalculator
         ?int $machineId,
         ?string $newPartName = null,
         bool $retime = true,
+        ?Carbon $anchor = null,
     ): void {
         $entry = $lotEntryId instanceof LoadingPlanEntry
             ? $lotEntryId
@@ -178,7 +180,7 @@ class LotScheduleCalculator
             return;
         }
 
-        $this->recomputeTimeStartAndEnd($entry, $machineId);
+        $this->recomputeTimeStartAndEnd($entry, $machineId, $anchor);
     }
 
     public function machineNumFor(int $id): string
@@ -199,7 +201,7 @@ class LotScheduleCalculator
      * 
      * TODO: we can even just make affectedEntry into just all the entry starting from firts anchor towards the end
      */
-    public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, ?int $machineId): void
+    public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, ?int $machineId, ?Carbon $anchor = null): void
     {
         if ($affectedEntry->non_machine_id !== null) {
             $this->recomputeNonMachineTimes($affectedEntry->non_machine_id, $affectedEntry->scheduled_date->toDateString());
@@ -231,7 +233,7 @@ class LotScheduleCalculator
 
         $cursor = ($predecessor && $predecessor->time_end !== null)
             ? $predecessor->time_end
-            : $this->getOrCreateDayStart($machineId, $date);
+            : $this->resolveLaneStart($machineId, $date, $anchor);
 
         foreach ($chain as $current) {
             $newStart = $cursor;
@@ -252,6 +254,37 @@ class LotScheduleCalculator
         }
     }
 
+    /**
+     * No predecessor, so this lane starts here. Priority:
+     *   1. anchor (first row's time_start, captured by the caller BEFORE mutating)
+     *   2. stored machine_day_starts row
+     *   3. 06:00
+     * The result is persisted so machine_day_starts stays in sync.
+     */
+    private function resolveLaneStart(int $machineId, string $date, ?Carbon $anchor): Carbon
+    {
+        $stored = DB::table('machine_day_starts')
+            ->where('machine_id', $machineId)
+            ->where('scheduled_date', $date)
+            ->value('day_start_time');
+
+        $storedStart = $stored ? Carbon::parse("{$date} {$stored}") : null;
+
+        if ($storedStart && ! $storedStart->isSameDay(Carbon::parse($date))) {
+            $storedStart = null; // e.g. stored value was a full datetime from another day
+        }
+
+        $start = $anchor?->copy()
+            ?? $storedStart
+            ?? Carbon::parse("{$date} " . self::MACHINE_DEFAULT_START);
+
+        DB::table('machine_day_starts')->updateOrInsert(
+            ['machine_id' => $machineId, 'scheduled_date' => $date],
+            ['day_start_time' => $start->format('H:i:s'), 'updated_at' => now()]
+        );
+
+        return $start;
+    }
 
     // Stale
     // public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, int $machineId): void

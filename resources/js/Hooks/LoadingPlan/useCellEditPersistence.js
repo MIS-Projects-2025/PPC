@@ -36,9 +36,11 @@ export function useCellEditPersistence({
             const field = column.key;
             const prevRow = dataRows.find((r) => r.id === changedRow.id);
             if (!prevRow) return;
-
+          
             const value = changedRow[field];
-            if (value === prevRow[field]) return;
+            const dayOffset = changedRow.time_start_day_offset ?? 0;
+            const dayChanged = field === "time_start" && dayOffset !== (prevRow.time_start_day_offset ?? 0);
+            if (value === prevRow[field] && !dayChanged) return;
             if (!beginWrite()) return;
 
             if (field === "time_start") {
@@ -52,7 +54,7 @@ export function useCellEditPersistence({
                             toast?.error?.("That time isn't valid.");
                             return;
                         }
-                        const timeStart = dayjs(date).hour(h).minute(m).format("YYYY-MM-DD HH:mm:00");
+                        const timeStart = dayjs(date).add(dayOffset, "day").hour(h).minute(m).format("YYYY-MM-DD HH:mm:00");
                         const nonMachineId = Number(prevRow.machine.slice(3));
 
                         withUpdating(
@@ -74,14 +76,7 @@ export function useCellEditPersistence({
                     toast?.error?.("Can't recompute the schedule — baseTimes wasn't provided to the grid.");
                     return;
                 }
-                const { rows: withGap, error } = applyTimeStartEdit(
-                    dataRows,
-                    prevRow._dndId,
-                    prevRow.machine,
-                    value,
-                    baseTimes,
-                    date,
-                );
+                const { rows: withGap, error } = applyTimeStartEdit(dataRows, prevRow._dndId, prevRow.machine, value, baseTimes, date, dayOffset);
 
                 if (error) {
                     toast?.error?.(error);

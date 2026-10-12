@@ -49,6 +49,7 @@ Route::redirect('/', "/$app_name");
 require __DIR__ . '/auth.php';
 
 Route::prefix('rules')->group(function () {
+    Route::get('/machine-picker', [CapabilityMatrixController::class, 'machinePicker']);
     Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page']);
     Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data']);
     Route::get('/machines/{machine}/transition-rules', [CapabilityMatrixController::class, 'transitionRules']);
@@ -65,12 +66,6 @@ Route::prefix('rules')->group(function () {
     Route::delete('/groups/{group}', [TransitionGroupController::class, 'destroyGroup'])->whereNumber('group');
     Route::put('/groups/{group}/members', [TransitionGroupController::class, 'syncMembers'])->whereNumber('group');
     Route::delete('/group-rules/{rule}', [TransitionGroupController::class, 'destroyRule'])->whereNumber('rule');
-
-    Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page']);
-    Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data']);
-    Route::post('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkStore']);
-    Route::patch('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkUpdate']);
-    Route::delete('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkDestroy']);
 
     Route::get('/', [RuleExplorerController::class, 'index']);
     Route::get('/data', [RuleExplorerController::class, 'data']);

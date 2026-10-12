@@ -1296,7 +1296,9 @@ class SchedulerService
 
     protected function describeOperation(array $cost, int $fromStateId, int $toStateId): string
     {
-        return ucfirst($cost['operation_type']) . ": state {$fromStateId} -> {$toStateId}";
+        // return ucfirst($cost['operation_type']) . ": state {$fromStateId} -> {$toStateId}";
+        // just using simple operation label
+        return ucfirst($cost['operation_type']);
     }
 
     protected function applyPlacement(object $lot, array $choice, string $date): array

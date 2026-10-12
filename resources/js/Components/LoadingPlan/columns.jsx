@@ -21,6 +21,52 @@ export const EDITABLE_COLUMNS = {
 
 export const fmtHours = (m) => (m == null || m === "" ? "" : (Number(m) / 60).toFixed(2));
 
+export function TimeStartEditor({ row, onRowChange, onClose }) {
+    const [t, setT] = useState(row.time_start ?? "");
+    const [day, setDay] = useState(row.time_start_day_offset ?? 0);
+    const done = useRef(false);
+    const wrap = useRef(null);
+    const timeRef = useRef(null);
+    useEffect(() => { timeRef.current?.focus(); }, []);
+
+    const commit = () => {
+        if (done.current) return;
+        done.current = true;
+        if (!t) return onClose(false);
+        if (t === row.time_start && day === (row.time_start_day_offset ?? 0)) return onClose(false);
+        onRowChange({ ...row, time_start: t, time_start_day_offset: day }, true);
+    };
+
+    return (
+        <div
+            ref={wrap}
+            className="flex w-full h-full gap-1 items-center"
+            onBlur={(e) => { if (!wrap.current?.contains(e.relatedTarget)) commit(); }}
+            onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+                if (e.key === "Escape") { done.current = true; onClose(false); }
+            }}
+        >
+            <input
+                ref={timeRef}
+                type="time"
+                value={t}
+                onChange={(e) => setT(e.target.value)}
+                className="h-full flex-1 min-w-0 border border-info rounded px-1 text-sm bg-base-100"
+            />
+            <select
+                value={day}
+                onChange={(e) => setDay(Number(e.target.value))}
+                className="h-full border border-info rounded text-xs bg-base-100"
+            >
+                <option value={-1}>Yest</option>
+                <option value={0}>Today</option>
+                <option value={1}>Tmrw</option>
+            </select>
+        </div>
+    );
+}
+
 export function AccuTimeEditor({ row, onRowChange, onClose }) {
     const [v, setV] = useState(row.accu_time == null ? "" : String(+(row.accu_time / 60).toFixed(4)));
     const done = useRef(false);
@@ -471,7 +517,9 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     return row[col.key];
                 },
                 ...(EDITABLE_COLUMNS[col.key] && {
-                    renderEditCell: col.key === "accu_time" ? AccuTimeEditor : CellEditor,
+                    renderEditCell: col.key === "accu_time" ? AccuTimeEditor
+                        : col.key === "time_start" ? TimeStartEditor
+                        : CellEditor,
                     editable: (row) =>
                         !isUpdating &&
                         row.__type !== "collapsed" &&
