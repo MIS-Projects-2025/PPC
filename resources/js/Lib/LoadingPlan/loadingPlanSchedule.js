@@ -126,21 +126,43 @@ export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTi
     }
 
     if (newStart.isBefore(referencePoint)) {
-        return {
-            rows: null,
-            error: "Time can't be earlier than the previous lot's end time.",
-        };
+        // Nothing above to shrink (first row on the machine; its floor is the base time).
+        if (!rowAbove) {
+            if (!newStart.isSame(dayjs(referenceDate), "day")) {
+                return { rows: null, error: "A lane can't start on a different day than the plan date." };
+            }
+            // First row on the machine: move the lane start, rows themselves don't change.
+            return { rows: next, error: null, laneStart: newStart.format("HH:mm:ss") };
+        }
+
+        // Pull the previous row's end back to the new start by trimming its duration.
+        const shrink = referencePoint.diff(newStart, "minute");
+        const newAccu = (Number(rowAbove.accu_time) || 0) - shrink;
+
+        if (newAccu <= 0) {
+            return {
+                rows: null,
+                error: "Time can't be earlier than the previous lot's start time.",
+            };
+        }
+
+        next = next.map((r) =>
+            r._dndId === rowAbove._dndId ? { ...r, accu_time: newAccu } : r,
+        );
+        return { rows: next, error: null };
     }
 
     const gapDuration = newStart.diff(referencePoint, "minute");
 
-    if (isGapAbove) {
+    if (rowAbove) {
+        // Lot or block above: stretch it to fill the gap, no new block.
         next = next.map((r) =>
             r._dndId === rowAbove._dndId
-                ? { ...r, accu_time: r.accu_time + gapDuration }
+                ? { ...r, accu_time: (Number(r.accu_time) || 0) + gapDuration }
                 : r,
         );
     } else {
+        // First row on the machine: nothing above to stretch, so create the gap block.
         const newBlock = {
             _dndId: `entry-${generateId()}`,
             is_block: true,

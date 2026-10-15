@@ -16,13 +16,16 @@ import { Head, Link, router } from "@inertiajs/react";
 import axios from "axios";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-const PROCESSES = ["taping", "tubing", "both", "tray"];
+const PROCESSES = ["taping", "tubing", "both", "tray", "gel", "header", "bag"];
 
 const PROCESS_STYLE = {
     taping: "bg-sky-100 text-sky-800",
     tubing: "bg-emerald-100 text-emerald-800",
     both: "bg-indigo-100 text-indigo-800",
     tray: "bg-orange-100 text-orange-800",
+    gel: "bg-pink-100 text-pink-800",
+    header: "bg-yellow-100 text-yellow-800",
+    bag: "bg-purple-100 text-purple-800",
 };
 
 const PROCESS_FILL = {
@@ -30,6 +33,9 @@ const PROCESS_FILL = {
     tubing: "bg-emerald-500 text-white",
     both: "bg-indigo-500 text-white",
     tray: "bg-orange-500 text-white",
+    gel: "bg-pink-500 text-white",
+    header: "bg-yellow-500 text-white",
+    bag: "bg-purple-500 text-white",
 };
 
 const linkBtn = "text-xs text-blue-600 underline hover:text-blue-800";
@@ -58,6 +64,7 @@ function RowForm({ row, onSubmit, onClose }) {
         thickness: row?.thickness ?? "",
         focus_group: row?.focus_group ?? "",
         lot_type: row?.lot_type ?? "",
+        station: row?.station ?? "",
     });
     const [error, setError] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -123,6 +130,7 @@ function RowForm({ row, onSubmit, onClose }) {
             {field("Thickness", "thickness", { type: "number", step: "any" })}
             {field("Focus group (blank = any)", "focus_group")}
             {field("Lot type (blank = any)", "lot_type")}
+            {field("Station (blank = any)", "station")}
             {error && (
                 <div className="rounded border border-red-500 bg-red-50 px-3 py-2 text-xs text-red-700">
                     {error}
@@ -210,6 +218,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
             thickness: blank(row.thickness) ? null : row.thickness,
             focus_group: blank(row.focus_group) ? null : row.focus_group,
             lot_type: blank(row.lot_type) ? null : row.lot_type,
+            station: blank(row.station) ? null : row.station,
             ...(single ? { leadcount_min: col.n, leadcount_max: col.n } : {}),
             process_type: process,
             remarks: `${machine.machine_num}: ${row.factory} ${row.package_name ?? "ANY pkg"}${row.body_size ? ` ${row.body_size}` : ""}${single ? `, ${col.n}L` : ""}, ${process}`,
@@ -398,6 +407,7 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                 thickness: row.thickness,
                 focus_group: row.focus_group,
                 lot_type: row.lot_type,
+                station: row.station,
                 ...(col.kind === "single"
                     ? { leadcount_min: col.n, leadcount_max: col.n }
                     : {}),
@@ -748,6 +758,12 @@ export default function MachineCapabilities({ machine, machines = [] }) {
                                                         {r.lot_type && (
                                                             <Chip className="bg-teal-50 text-teal-800">
                                                                 lot {r.lot_type}
+                                                            </Chip>
+                                                        )}
+                                                        {r.station && (
+                                                            <Chip className="bg-teal-50 text-teal-800">
+                                                                station{" "}
+                                                                {r.station}
                                                             </Chip>
                                                         )}
                                                     </div>

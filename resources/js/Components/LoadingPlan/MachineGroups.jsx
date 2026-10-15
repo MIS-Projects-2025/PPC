@@ -2,7 +2,7 @@ import { buildGrid, cellKey, colInfo, colLabel, rowTitle } from '@/Lib/LoadingPl
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
 
-const PROCESS_LABEL = { taping: 'tape', tubing: 'tube', both: 'both', tray: 'tray' };
+const PROCESS_LABEL = { taping: 'tape', tubing: 'tube', both: 'both', tray: 'tray', gel: 'gel', header: 'header', bag: 'bag' };
 const SOFT_GROUP_LIMIT = 8;
 const AXIS_LABEL = { factory: 'factory', package_group: 'package group', leadcount: 'leadcount', body_size: 'body size', process_type: 'process' };
 const linkBtn = 'text-xs text-blue-600 underline hover:text-blue-800';
@@ -13,7 +13,7 @@ function Dot({ color }) {
 }
 
 function stateLabel(s) {
-    return `${rowTitle(s)} · ${colLabel(colInfo(s))} · ${PROCESS_LABEL[s.process_type] ?? s.process_type}${s.part_rule_count > 0 ? ' (part-routed)' : ''}`;
+    return `${rowTitle(s)} · ${colLabel(colInfo(s))} · ${PROCESS_LABEL[s.process_type] ?? s.process_type}${s.station ? ` · stn ${s.station}` : ''}${s.part_rule_count > 0 ? ' (part-routed)' : ''}`;
 }
 
 // ---------------------------------------------------------------------
@@ -409,6 +409,9 @@ export default function MachineGroups({ machine, states, dev = false, onOpenRule
                                         >
                                             <span className="mr-1.5 rounded bg-gray-800 px-1.5 py-0.5 text-[11px] font-normal text-white">{r.factory}</span>
                                             {rowTitle(r)}
+                                            {r.station && (
+                                                <span className="ml-1.5 rounded bg-teal-50 px-1.5 py-0.5 text-[11px] font-normal text-teal-800">station {r.station}</span>
+                                            )}
                                         </button>
                                     </td>
                                     {grid.cols.map((c) => (

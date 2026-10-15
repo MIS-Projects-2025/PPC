@@ -9,10 +9,8 @@ class FocusGroupFactoryService
 {
     private const CACHE_TTL = 86400; // 24 hours
     private const CACHE_KEY = 'focus_group_factory_map';
+    private const CACHE_STORE = 'file';
 
-    /**
-     * In-memory cache for the current lifecycle.
-     */
     private static ?array $runtimeMap = null;
 
     public function resolveFactory(?string $focusGroup): ?string
@@ -21,29 +19,21 @@ class FocusGroupFactoryService
             return null;
         }
 
-        $map = $this->getMap();
-
-        return $map[$focusGroup] ?? null;
+        return $this->getMap()[$focusGroup] ?? null;
     }
 
     public function getMap(): array
     {
-        // 1. If already loaded in memory during this request, return immediately
-        if (self::$runtimeMap !== null) {
-            return self::$runtimeMap;
-        }
-
-        // 2. Fetch from Cache (or DB if cache expired/missed)
-        self::$runtimeMap = Cache::remember(self::CACHE_KEY, self::CACHE_TTL, function () {
-            return FocusGroupFactory::pluck('factory', 'focus_group')->toArray();
-        });
-
-        return self::$runtimeMap;
+        return self::$runtimeMap ??= Cache::store(self::CACHE_STORE)->remember(
+            self::CACHE_KEY,
+            self::CACHE_TTL,
+            fn() => FocusGroupFactory::pluck('factory', 'focus_group')->toArray()
+        );
     }
 
     public function clearCache(): void
     {
         self::$runtimeMap = null;
-        Cache::forget(self::CACHE_KEY);
+        Cache::store(self::CACHE_STORE)->forget(self::CACHE_KEY);
     }
 }

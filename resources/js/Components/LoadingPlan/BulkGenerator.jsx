@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 
 const FACTORIES = ["F1", "F2", "F3"];
-const PROCESSES = ["taping", "tubing", "both", "tray"];
+const PROCESSES = ["taping", "tubing", "both", "tray", "gel", "header", "bag"];
 export const MAX_BULK_STATES = 2000;
 
 // Mirrors the server's max lengths in CapabilityMatrixController@bulkStore
-const LIMITS = { packages: 50, bodySizes: 20, focusGroups: 50, lotTypes: 20 };
+const LIMITS = { packages: 50, bodySizes: 20, focusGroups: 50, lotTypes: 20, stations: 30 };
 
 const tokens = (s) => [
     ...new Set(
@@ -48,6 +48,7 @@ export default function BulkGenerator({ onGenerate, onClose }) {
         thicknesses: "",
         focusGroups: "",
         lotTypes: "",
+        stations: "",
         leadcounts: "",
     });
     const [busy, setBusy] = useState(false);
@@ -72,6 +73,7 @@ export default function BulkGenerator({ onGenerate, onClose }) {
             thicknesses: orNull(thickRaw.filter((t) => !badThick.includes(t))),
             focusGroups: orNull(tokens(text.focusGroups)),
             lotTypes: orNull(tokens(text.lotTypes)),
+            stations: orNull(tokens(text.stations)),
             leadcounts: orNull(
                 leadRaw
                     .filter((t) => !badLead.includes(t))
@@ -92,7 +94,8 @@ export default function BulkGenerator({ onGenerate, onClose }) {
         parsed.bodySizes.length *
         parsed.thicknesses.length *
         parsed.focusGroups.length *
-        parsed.lotTypes.length;
+        parsed.lotTypes.length *
+        parsed.stations.length;
     const colCount = parsed.leadcounts.length;
     const total = rowCount * colCount * processes.length;
 
@@ -123,14 +126,8 @@ export default function BulkGenerator({ onGenerate, onClose }) {
                     for (const thickness of parsed.thicknesses)
                         for (const focus_group of parsed.focusGroups)
                             for (const lot_type of parsed.lotTypes)
-                                rows.push({
-                                    factory,
-                                    package_name,
-                                    body_size,
-                                    thickness,
-                                    focus_group,
-                                    lot_type,
-                                });
+                                for (const station of parsed.stations)
+                                    rows.push({ factory, package_name, body_size, thickness, focus_group, lot_type, station });
 
         const cols = parsed.leadcounts.map((n) =>
             n === null ? { kind: "any" } : { kind: "single", n },
@@ -179,6 +176,7 @@ export default function BulkGenerator({ onGenerate, onClose }) {
             {field("Thickness (blank = any)", "thicknesses", "0.75, 0.85")}
             {field("Focus groups (blank = any)", "focusGroups")}
             {field("Lot types (blank = any)", "lotTypes")}
+            {field("Stations (blank = any)", "stations", "GTREEL_T")}
             {field("Leadcounts (blank = any)", "leadcounts", "10, 32")}
             <div>
                 <label className="mb-1 block text-xs font-semibold">

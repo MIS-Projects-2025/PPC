@@ -230,9 +230,11 @@ class LotScheduleCalculator
         $chain = $chain->slice($startIdx)->values();
 
         $predecessor = $this->findPredecessor($affectedEntry);
+        $dayStart = Carbon::parse($date)->startOfDay();
+        $predecessorEnd = $predecessor?->time_end;
 
-        $cursor = ($predecessor && $predecessor->time_end !== null)
-            ? $predecessor->time_end
+        $cursor = ($predecessorEnd !== null && $predecessorEnd->gte($dayStart))
+            ? $predecessorEnd->copy()
             : $this->resolveLaneStart($machineId, $date, $anchor);
 
         foreach ($chain as $current) {
@@ -272,6 +274,11 @@ class LotScheduleCalculator
 
         if ($storedStart && ! $storedStart->isSameDay(Carbon::parse($date))) {
             $storedStart = null; // e.g. stored value was a full datetime from another day
+        }
+
+        $dayStart = Carbon::parse($date)->startOfDay();
+        if ($anchor !== null && $anchor->lt($dayStart)) {
+            $anchor = null; // captured from an outdated row
         }
 
         $start = $anchor?->copy()

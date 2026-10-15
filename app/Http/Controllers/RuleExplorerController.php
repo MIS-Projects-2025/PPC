@@ -82,13 +82,14 @@ class RuleExplorerController extends Controller
             'package_name' => 'nullable|string|max:50',
             'focus_group' => 'nullable|string|max:50',
             'lot_type' => 'nullable|string|max:20',
+            'station' => 'nullable|string|max:30',
             'body_size' => 'nullable|string|max:20',
             'thickness' => 'nullable|numeric',
             'leadcount_min' => 'nullable|integer',
             'leadcount_max' => 'nullable|integer',
             'leadcount_exclude' => 'nullable|string|max:50',
             'leadcount_include' => 'nullable|string|max:255',
-            'process_type' => 'required|in:taping,tubing,both,tray',
+            'process_type' => 'required|in:taping,tubing,both,tray,gel,header,bag',
             'remarks' => 'nullable|string|max:255',
         ]);
 
@@ -112,11 +113,12 @@ class RuleExplorerController extends Controller
             'thickness' => 'nullable|numeric',
             'focus_group' => 'nullable|string|max:50',
             'lot_type' => 'nullable|string|max:20',
+            'station' => 'nullable|string|max:30',
             'leadcount_min' => 'nullable|integer',
             'leadcount_max' => 'nullable|integer',
             'leadcount_exclude' => 'nullable|string|max:50',
             'leadcount_include' => 'nullable|string|max:255',
-            'process_type' => 'sometimes|in:taping,tubing,both,tray',
+            'process_type' => 'sometimes|in:taping,tubing,both,tray,gel,header,bag',
             'remarks' => 'nullable|string|max:255',
         ]);
         $state->update($data);

@@ -11,6 +11,7 @@ use Carbon\CarbonInterface;
 //TODO: distinguish Collection from Eloquence and Support
 use Illuminate\Support\Collection;
 use App\Support\Probe;
+use App\Services\PackageGroups;
 
 class LoadingPlanService
 {
@@ -26,7 +27,7 @@ class LoadingPlanService
     public readonly Collection $todayLeakedPlannedLotEntries;
     public readonly Collection $todayPlannedLotEntries;
     public readonly Collection $extraTodayWipRows;
-
+    private ?PackageGroups $packageGroups = null;
     // at the top of the class
     public static array $acc = [];
 
@@ -531,8 +532,18 @@ class LoadingPlanService
             : ($entry?->scheduled_date?->toDateString() ?? null);
 
         $t = microtime(true);
-        $location = self::timed('PackageLocation::for', fn() =>
-        PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name));
+        // $location = self::timed('PackageLocation::for', fn() =>
+        // PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name));
+
+        $packageName = $wipRow?->Package_Name ?? $entry?->package_name ?? null;
+        $focusGroup  = $wipRow?->Focus_Group ?? null;
+        $leadCount   = $wipRow?->Lead_Count ?? null;
+
+        $location = self::timed('PackageLocation::resolve', fn() =>
+        PackageLocation::resolve($packageName, $focusGroup, $leadCount));
+
+        $this->packageGroups ??= app(PackageGroups::class);
+        $packageGroup = $this->packageGroups->resolve($packageName, $focusGroup, $leadCount);
 
         $fmt = fn($v) => ($ts = LoadingPlanFormulas::toTimestamp($v)) === null
             ? null
@@ -557,7 +568,8 @@ class LoadingPlanService
         $isLeaked = $scheduledDate === $this->previousDate;
 
         return [
-            'location'                   => $location,
+            'location'      => $location,
+            'package_group' => $packageGroup,
 
             // Entry Metadata
             'entry_id'                   => $entry?->id,

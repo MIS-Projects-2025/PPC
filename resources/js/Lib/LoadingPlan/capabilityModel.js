@@ -1,7 +1,7 @@
 export const blank = (v) => v === null || v === undefined || v === '';
 
 export const rowKey = (s) =>
-    [s.factory, s.package_name ?? '', s.body_size ?? '', blank(s.thickness) ? '' : Number(s.thickness).toFixed(2), s.focus_group ?? '', s.lot_type ?? ''].join('|');
+    [s.factory, s.package_name ?? '', s.body_size ?? '', blank(s.thickness) ? '' : Number(s.thickness).toFixed(2), s.focus_group ?? '', s.lot_type ?? '', s.station ?? ''].join('|');
 
 // Which column a state lands in. Single leadcounts get their own column; "any",
 // ranges and include lists each get a labelled column so no state is hidden.
@@ -41,7 +41,7 @@ export function buildGrid(states, draftRows = [], draftCols = []) {
         const rk = rowKey(s);
         const c = colInfo(s);
         if (!rowMap.has(rk)) {
-            rowMap.set(rk, { key: rk, factory: s.factory, package_name: s.package_name, body_size: s.body_size, thickness: s.thickness, focus_group: s.focus_group, lot_type: s.lot_type });
+            rowMap.set(rk, { key: rk, factory: s.factory, package_name: s.package_name, body_size: s.body_size, thickness: s.thickness, focus_group: s.focus_group, lot_type: s.lot_type, station: s.station });
         }
         if (!colMap.has(c.key)) colMap.set(c.key, c);
         const ck = `${rk}#${c.key}`;
@@ -56,11 +56,10 @@ export function buildGrid(states, draftRows = [], draftCols = []) {
         if (!colMap.has(String(n))) colMap.set(String(n), { key: String(n), kind: 'single', n, sort: n });
     });
 
-    const rows = [...rowMap.values()].sort((a, b) =>
-        `${a.factory}${a.package_name ?? ''}${a.body_size ?? ''}`.localeCompare(`${b.factory}${b.package_name ?? ''}${b.body_size ?? ''}`)
-    );
-    const cols = [...colMap.values()].sort((a, b) => a.sort - b.sort || a.key.localeCompare(b.key));
+    const sortKey = (r) => `${r.factory}${r.package_name ?? ''}${r.body_size ?? ''}${r.focus_group ?? ''}${r.lot_type ?? ''}${r.station ?? ''}`;
+    const rows = [...rowMap.values()].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
 
+    const cols = [...colMap.values()].sort((a, b) => a.sort - b.sort || a.key.localeCompare(b.key));
     return { rows, cols, cells, routed };
 }
 

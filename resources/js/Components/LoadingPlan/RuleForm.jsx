@@ -20,10 +20,11 @@ const FIELD_DEFS = {
         { name: 'leadcount_max', label: 'Leadcount Max', type: 'number', half: true},
         { name: 'leadcount_exclude', label: 'Leadcount Exclude (csv)', type: 'text', half: true},
         { name: 'leadcount_include', label: 'Leadcount Include (csv)', type: 'text', half: true},
-        { name: 'process_type', label: 'Process Type', type: 'select', options: ['taping', 'tubing', 'both', 'tray'], required: true },
+        { name: 'process_type', label: 'Process Type', type: 'select', options: ['taping', 'tubing', 'both', 'tray', 'gel', 'header', 'bag'], required: true },
         { name: 'remarks', label: 'Remarks', type: 'text' },
         { name: 'focus_group', label: 'Focus Group (blank = any)', type: 'text' },
         { name: 'lot_type', label: 'Lot Type (blank = any)', type: 'text' },
+        { name: 'station', label: 'Station (blank = any)', type: 'text' },
     ],
     transition_rule: [
         { name: 'machine_id', label: 'Machine', type: 'machine_select', required: true },
@@ -118,7 +119,7 @@ function stateLabel(s) {
         if (s.leadcount_exclude) lead += ` except [${s.leadcount_exclude}]`;
     }
     const thickness = s.thickness != null ? ` (thickness ${s.thickness})` : '';
-    return `#${s.setup_state_id} — ${s.factory}, ${s.package_name ?? 'ANY pkg'}, ${s.body_size ?? 'any size'}${thickness}, leadcount ${lead}, ${s.process_type}`;
+    return `#${s.setup_state_id} — ${s.factory}, ${s.package_name ?? 'ANY pkg'}, ${s.body_size ?? 'any size'}${thickness}, leadcount ${lead}${s.station ? `, station ${s.station}` : ''}, ${s.process_type}`;
 }
 
 function fieldInputClasses(hasError) {

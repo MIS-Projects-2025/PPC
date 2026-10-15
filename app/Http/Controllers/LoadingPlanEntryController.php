@@ -469,6 +469,8 @@ class LoadingPlanEntryController extends Controller
             'rows.*.fields'              => 'nullable|array',
             'deleted'                    => 'nullable|array',
             'deleted.*'                  => 'integer',
+            'lane_starts'   => 'nullable|array',
+            'lane_starts.*' => 'date_format:H:i:s',
             'rows.*.fields.status'       => 'nullable|string',
             'rows.*.fields.remarks'      => 'nullable|string',
             'rows.*.fields.tag'          => 'nullable|string',
@@ -481,7 +483,7 @@ class LoadingPlanEntryController extends Controller
         ]);
 
         try {
-            $result = $this->service->syncRows($data['rows'], $data['order'] ?? [], $data['deleted'] ?? [], $data['scheduled_date']);
+            $result = $this->service->syncRows($data['rows'], $data['order'] ?? [], $data['deleted'] ?? [], $data['scheduled_date'], $data['lane_starts'] ?? []);
             return response()->json($result);
         } catch (ActiveSplitChildException | ActiveMergeParticipantException $e) {
             return response()->json([

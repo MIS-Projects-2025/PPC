@@ -11,7 +11,7 @@ import { applyAffectedTimings } from "./loadingPlanSchedule";
  * whatever recompute/validation each row's data implies (split_info
  * conservation, doable, sequencing) on its own.
  */
-export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toast, deletedEntryIds = [], syncServerFields) {
+export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toast, deletedEntryIds = [], syncServerFields, laneStarts = {}) {
     const prevById = new Map(prevRows.map((r) => [r._dndId, r]));
 
     const added = nextRows.filter((r) => !prevById.has(r._dndId));
@@ -32,7 +32,8 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
     const affected = [...added, ...changed];
     const order = buildOrderPerMachine(prevRows, nextRows, addedIds);
 
-    if (affected.length === 0 && deletedEntryIds.length === 0 && Object.keys(order).length === 0) {
+    if (affected.length === 0 && deletedEntryIds.length === 0 && Object.keys(order).length === 0
+        && Object.keys(laneStarts).length === 0) {
         return Promise.resolve();
     }
 
@@ -61,7 +62,7 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
     });
 
     return mutate(route("loading-plan.batch-sync"), {
-        body: { rows, order, deleted: deletedEntryIds, scheduled_date: date },
+        body: { rows, order, deleted: deletedEntryIds, lane_starts: laneStarts, scheduled_date: date },
     })
         .then(({ results, affected_timings }) => {
             // structural removal (deletions) still only concerns `present` —

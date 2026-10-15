@@ -345,7 +345,7 @@ const ALL_PACKAGES_TAB = "ALL PACKAGE";
 const RES_TAB = "RES";
 const FOR_BAKE_TAB = "FOR BAKE";
 const PICKUP_TAB = "PICKUP";
-const ORPHAN_TAB = "NO MACHINE";
+const ORPHAN_TAB = "OTHER MACHINE";
 const RES_STATION = "GTTRES_T";
 const isResRow = (r) => r.station === RES_STATION;
 const isForBakeRow = (r) => !!r.is_for_bake;
@@ -639,18 +639,18 @@ export default function Deemo({
         setSelectedRows(new Set());
     }, []);
 
-    const activePackageGroup = useMemo(() => {
-        if (
-            activePackage === "Unassigned" ||
-            activePackage === ALL_PACKAGES_TAB ||
-            activePackage === RES_TAB || 
-            activePackage === FOR_BAKE_TAB
-        ) return null;
+    // const activePackageGroup = useMemo(() => {
+    //     if (
+    //         activePackage === "Unassigned" ||
+    //         activePackage === ALL_PACKAGES_TAB ||
+    //         activePackage === RES_TAB || 
+    //         activePackage === FOR_BAKE_TAB
+    //     ) return null;
 
-        const group = packageGroups?.[activePackage];
-        if (!group) return null;
-        return Array.isArray(group) ? group : Object.values(group);
-    }, [activePackage, packageGroups]);
+    //     const group = packageGroups?.[activePackage];
+    //     if (!group) return null;
+    //     return Array.isArray(group) ? group : Object.values(group);
+    // }, [activePackage, packageGroups]);
 
     // console.log("LOG ~ Deemo.jsx:1001 ~ Deemo ~ activePackageGroup:", activePackageGroup);
 
@@ -1249,8 +1249,8 @@ export default function Deemo({
         if (activePackage === FOR_BAKE_TAB) return isForBakeRow(r);
         if (isResRow(r)) return false;
         if (activePackage === ALL_PACKAGES_TAB) return true;
-        return (activePackageGroup ?? []).includes(r.package_name);
-    }, [activePackage, activePackageGroup, isOrphanRow]);
+        return (r.package_group ?? r.package_name) === activePackage;
+    }, [activePackage, isOrphanRow]);
 
     const rowInActiveTab = useCallback((r) => {
         if (r.machine !== null && r.machine !== MACHINE_MANUAL && isOtherLoc(r)) return false; // lives in the "other location" group
@@ -1292,6 +1292,36 @@ export default function Deemo({
         });
         return result;
     }, [dataRows, rowInActiveTab, isParked]);
+
+        // ── Commit vs capacity, all machines (overview modal) ──────────────────
+    // machineCapacity is a Deferred prop: undefined until it loads.
+    const capacityLoading = machineCapacity === undefined;
+
+    const capacityRows = useMemo(
+        () =>
+            serverMachines.map((m) => {
+                const commit = machineTotalDoable[m.name] ?? 0;
+                const cap = machineCapacity?.[m.name];
+                const capacity = Number(cap?.capacity) > 0 ? Number(cap.capacity) : null;
+                return {
+                    name: m.name,
+                    commit,
+                    capacity,
+                    effectiveFrom: cap?.effective_from?.split("T")[0] ?? null,
+                    qty: machineTotalQuantity[m.name] ?? 0,
+                    pct: capacity ? (commit / capacity) * 100 : null,
+                };
+            }),
+        [serverMachines, machineTotalDoable, machineTotalQuantity, machineCapacity],
+    );
+
+    const capacityTotals = useMemo(
+        () => capacityRows.reduce(
+            (t, r) => ({ commit: t.commit + r.commit, capacity: t.capacity + (r.capacity ?? 0) }),
+            { commit: 0, capacity: 0 },
+        ),
+        [capacityRows],
+    );
 
     const bakeOvens = useMemo(() => {
         const set = new Set((bakeLots ?? []).map((r) => r.oven_num));
@@ -2023,7 +2053,7 @@ export default function Deemo({
     return (
         <div
             className="bg-base-100"
-            style={{ padding: 24, minHeight: "90vh" }}
+            style={{ paddingLeft: 8, paddingRight: 8, minHeight: "90vh" }}
         >
             <SavingCursorBadge active={isUpdating} />
             
@@ -2046,7 +2076,7 @@ export default function Deemo({
                 />
             )}
 
-            <div className="flex-none pt-4">
+            <div className="flex-none pt-2">
                 <div className="flex flex-col">
                     {/* Row 1: date/status (left) — selection info, undo/redo, integrity (right) */}
                     <div className="flex flex-wrap items-end justify-between gap-2">
@@ -2161,6 +2191,14 @@ export default function Deemo({
                                     ) && (
                                         <span className="w-1.5 h-1.5 rounded-full bg-warning ml-1" />
                                     )}
+                                </button>
+
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={() => document.getElementById("capacity_overview_modal")?.showModal()}
+                                    title="Commit vs capacity for all machines"
+                                >
+                                    Capacity
                                 </button>
 
                                 {!readOnly && (
@@ -2426,7 +2464,7 @@ export default function Deemo({
                                         }
                                         onScroll={handleGridScroll}
                                         className="bg-base-100"
-                                        style={{ blockSize: "70vh" }}
+                                        style={{ blockSize: "80vh" }}
                                     />
 
                                     {hoveredRow && (
@@ -3062,6 +3100,89 @@ export default function Deemo({
                 <form method="dialog" className="modal-backdrop">
                     <button>close</button>
                 </form>
+            </dialog>
+
+            <dialog id="capacity_overview_modal" className="modal">
+                <div className="modal-box bg-base-300 w-11/12 max-w-4xl max-h-[80vh] flex flex-col">
+                    <h3 className="font-bold text-lg mb-3">Commit / Capacity — All Machines</h3>
+
+                    <div className="overflow-y-auto">
+                        <table className="table table-sm table-pin-rows">
+                            <thead>
+                                <tr>
+                                    <th>Machine</th>
+                                    <th className="text-right">Commit</th>
+                                    <th className="text-right">Capacity</th>
+                                    <th className="text-right">Qty</th>
+                                    <th>Effective</th>
+                                    <th className="w-40">Utilization</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {capacityRows.map((r) => (
+                                    <tr
+                                        key={r.name}
+                                        className={!capacityLoading && r.capacity == null ? "bg-warning/10" : undefined}
+                                    >
+                                        <td className="font-medium">{r.name}</td>
+                                        <td className="text-right">{r.commit.toLocaleString()}</td>
+                                        <td className="text-right">
+                                            {capacityLoading ? (
+                                                <span className="loading loading-spinner loading-xs" />
+                                            ) : r.capacity != null ? (
+                                                r.capacity.toLocaleString()
+                                            ) : (
+                                                "—"
+                                            )}
+                                        </td>
+                                        <td className="text-right">{r.qty.toLocaleString()}</td>
+                                        <td className="text-xs opacity-60">{r.effectiveFrom ?? ""}</td>
+                                        <td>
+                                            {capacityLoading ? null : r.pct == null ? (
+                                                <span className="text-xs opacity-50">no capacity</span>
+                                            ) : (
+                                                <div className="flex items-center gap-2">
+                                                    <progress
+                                                        className={clsx(
+                                                            "progress w-20",
+                                                            r.pct > 100
+                                                                ? "progress-error"
+                                                                : r.pct >= 90
+                                                                ? "progress-warning"
+                                                                : "progress-success",
+                                                        )}
+                                                        value={Math.min(r.pct, 100)}
+                                                        max="100"
+                                                    />
+                                                    <span className="text-xs tabular-nums">{r.pct.toFixed(0)}%</span>
+                                                </div>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                            <tfoot>
+                                <tr className="font-semibold">
+                                    <td>Total</td>
+                                    <td className="text-right">{capacityTotals.commit.toLocaleString()}</td>
+                                    <td className="text-right">{capacityTotals.capacity.toLocaleString()}</td>
+                                    <td />
+                                    <td />
+                                    <td className="text-xs tabular-nums">
+                                        {capacityTotals.capacity
+                                            ? `${((capacityTotals.commit / capacityTotals.capacity) * 100).toFixed(0)}%`
+                                            : ""}
+                                    </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+
+                    <div className="modal-action">
+                        <form method="dialog"><button className="btn btn-ghost btn-sm">Close</button></form>
+                    </div>
+                </div>
+                <form method="dialog" className="modal-backdrop"><button>close</button></form>
             </dialog>
         </div>
     );

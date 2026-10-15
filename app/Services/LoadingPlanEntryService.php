@@ -2072,9 +2072,9 @@ class LoadingPlanEntryService
         DB::statement($sql, [...$bindings, $machineId, $nonMachineId, $date, ...$ids]);
     }
 
-    public function syncRows(array $rows, array $order, array $deletedEntryIds, string $date): array
+    public function syncRows(array $rows, array $order, array $deletedEntryIds, string $date, array $laneStarts = []): array
     {
-        return DB::transaction(function () use ($rows, $order, $deletedEntryIds, $date) {
+        return DB::transaction(function () use ($rows, $order, $deletedEntryIds, $date, $laneStarts) {
             $this->assertDateNotFinalized($date);
 
             $deletedEntries = empty($deletedEntryIds)
@@ -2085,6 +2085,7 @@ class LoadingPlanEntryService
                 ...collect($rows)->pluck('machine')->filter()->all(),
                 ...$deletedEntries->pluck('machine_id')->filter()->all(),
                 ...array_keys($order),
+                ...array_keys($laneStarts),
             ]);
 
             $nonMachineIds = collect([
@@ -2190,8 +2191,33 @@ class LoadingPlanEntryService
                 }
             }
 
+            $editedEntries = collect($rows)
+                ->filter(fn($r) => $r['entry_id'] !== null && array_key_exists('accu_time', $r['fields'] ?? []))
+                ->map(fn($r) => LoadingPlanEntry::find($r['entry_id']))
+                ->filter();
+
+            foreach ($editedEntries->whereNotNull('machine_id')->groupBy('machine_id') as $machineId => $entries) {
+                $earliest = $entries->sortBy([['scheduled_date', 'asc'], ['sequence_order', 'asc']])->first();
+                $sharedCalc->recomputeTimeStartAndEnd($earliest, (int) $machineId, $machineAnchors[$machineId] ?? null);
+            }
+
+            foreach ($editedEntries->whereNotNull('non_machine_id')->pluck('non_machine_id')->unique() as $id) {
+                $sharedCalc->recomputeNonMachineTimes($id, $date, $laneAnchors[$id] ?? null);
+            }
+
+            foreach ($laneStarts as $machine => $time) {
+                $machineId = $this->resolveMachineId($machine);
+                $first = LoadingPlanEntry::where('machine_id', $machineId)
+                    ->where('scheduled_date', $date)
+                    ->orderBy('sequence_order')->orderBy('id')
+                    ->first();
+                if (!$first) continue;
+
+                $sharedCalc->recomputeTimeStartAndEnd($first, $machineId, Carbon::parse("{$date} {$time}"));
+            }
+
             $timingMachineIds = array_values(array_unique([
-                ...$this->resolveMachineIds([...collect($rows)->pluck('machine')->filter()->all(), ...array_keys($order)]),
+                ...$this->resolveMachineIds([...collect($rows)->pluck('machine')->filter()->all(), ...array_keys($order), ...array_keys($laneStarts)]),
                 ...$vacatedMachineIds,
             ]));
 

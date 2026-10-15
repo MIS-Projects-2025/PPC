@@ -76,7 +76,7 @@ export function useCellEditPersistence({
                     toast?.error?.("Can't recompute the schedule — baseTimes wasn't provided to the grid.");
                     return;
                 }
-                const { rows: withGap, error } = applyTimeStartEdit(dataRows, prevRow._dndId, prevRow.machine, value, baseTimes, date, dayOffset);
+                const { rows: withGap, error, laneStart } = applyTimeStartEdit(dataRows, prevRow._dndId, prevRow.machine, value, baseTimes, date, dayOffset);
 
                 if (error) {
                     toast?.error?.(error);
@@ -84,10 +84,13 @@ export function useCellEditPersistence({
                 }
 
                 const prevSnapshot = dataRows;
-                update(() => withGap);
+                update(() => withGap, !!laneStart);
                 setIsDirty(true);
 
-                withUpdating(syncDeemoToServer(prevSnapshot, withGap, date, mutate, update, toast, [], syncServerFields));
+                withUpdating(syncDeemoToServer(
+                    prevSnapshot, withGap, date, mutate, update, toast, [], syncServerFields,
+                    laneStart ? { [prevRow.machine]: laneStart } : {},
+                ));
                 return;
             }
 

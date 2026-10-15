@@ -133,7 +133,7 @@ class CapabilityMatrixController extends Controller
                 $lc = ($s->leadcount_min ?? 'any') . '–' . ($s->leadcount_max ?? 'any');
             }
 
-            return "{$s->factory} " . ($s->package_name ?? 'ANY pkg') . ($s->body_size ? " {$s->body_size}" : '') . " · {$lc}L · {$s->process_type}";
+            return "{$s->factory} " . ($s->package_name ?? 'ANY pkg') . ($s->body_size ? " {$s->body_size}" : '') . " · {$lc}L · {$s->process_type}" . ($s->station ? " · stn {$s->station}" : '');
         };
 
         $withLabels = fn($rows) => $rows->map(fn($r) => (array) $r + [
@@ -179,6 +179,7 @@ class CapabilityMatrixController extends Controller
             'states.*.factory'            => 'required|in:F1,F2,F3',
             'states.*.focus_group'        => 'nullable|string|max:50',
             'states.*.lot_type'           => 'nullable|string|max:20',
+            'states.*.station'            => 'nullable|string|max:30',
             'states.*.package_name'       => 'nullable|string|max:50',
             'states.*.body_size'          => 'nullable|string|max:20',
             'states.*.thickness'          => 'nullable|numeric',
@@ -186,7 +187,7 @@ class CapabilityMatrixController extends Controller
             'states.*.leadcount_max'      => 'nullable|integer',
             'states.*.leadcount_include'  => 'nullable|string|max:255',
             'states.*.leadcount_exclude'  => 'nullable|string|max:50',
-            'states.*.process_type'       => 'required|in:taping,tubing,both,tray',
+            'states.*.process_type'       => 'required|in:taping,tubing,both,tray,gel,header,bag',
             'states.*.remarks'            => 'nullable|string|max:255',
         ]);
 
@@ -229,6 +230,7 @@ class CapabilityMatrixController extends Controller
             'fields.thickness'      => 'nullable|numeric',
             'fields.focus_group'    => 'nullable|string|max:50',
             'fields.lot_type'       => 'nullable|string|max:20',
+            'fields.station'        => 'nullable|string|max:30',
         ]);
 
         $machineId = $this->resolveMachineId($data['machine_id']);
@@ -322,6 +324,7 @@ class CapabilityMatrixController extends Controller
             $v('factory'),
             $v('focus_group'),
             $v('lot_type'),
+            $v('station'),
             $v('package_name'),
             $v('body_size'),
             $thickness,

@@ -38,12 +38,14 @@ class LoadingPlanFormulas
         ?float $lotEntryTimeDays = null,
         ?string $bake = null,
         ?string $station = null,
-        ?int $bakeCount = null
+        ?int $bakeCount = null,
+        ?string $lotStatus = null,
     ) {
         // Resolve values from source object/array or explicit fallbacks
         $dateLoaded       = $dateLoaded ?? $this->resolve($source, 'Date_Loaded');
         $beStarttime      = $beStarttime ?? $this->resolve($source, 'BE_Starttime');
         $backendLeadtime  = $backendLeadtime ?? $this->resolve($source, 'Backend_Leadtime');
+        $lotStatus        = $lotStatus ?? $this->resolve($source, 'Lot_Status');
         $cr3              = $cr3 ?? $this->resolve($source, 'CR3');
         $lotEntryTimeDays = $lotEntryTimeDays ?? (float) $this->resolve($source, 'Lot_Entry_Time_Days');
         $bake             = $bake ?? $this->resolve($source, 'Bake');
@@ -61,7 +63,8 @@ class LoadingPlanFormulas
 
         $this->isBakeHighlight = ($bake === 'For Bake')
             && in_array($station, self::BAKE_STATIONS, true)
-            && ($bakeCount === 0);
+            && ($bakeCount === 0)
+            && ($station !== 'GTBKIPBE_T' || $lotStatus === 'RUN');
     }
 
     /**

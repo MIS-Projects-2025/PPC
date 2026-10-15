@@ -32,7 +32,7 @@
 // ---------------------------------------------------------------------
 
 $targetDate = \Carbon\Carbon::parse('2026-09-01');
-$csvPath    = storage_path('app/ftproot/2026-10-07_08-30-01/daily_backend_wip.csv');
+$csvPath    = storage_path('app/ftproot/2026-10-12_08-30-01/daily_backend_wip.csv');
 
 $limit = null;   // max lots to schedule from the csv. null = all (slow!)
 
@@ -41,7 +41,7 @@ $allowedPackages = [
     // 'SOIC_N',
 ];
 
-$pinnedByNum = [
+$pinnedByNum = $pinnedByNum ?? [
     // --- by lot id ---
     // '02AT468'  => 'G166101.5',
     // '01SRM'    => 'BD29570.4',
@@ -121,6 +121,7 @@ $pinnedByNum = [
 
 // Same station rules as scopeLoadingPlanStations + scopeExcludingPostTnr
 $allowedStations = array_map('strtoupper', config('wip.tape_reel_stations'));
+// $allowedStations[] = 'GTTRES_T';
 $postTnrStations = ['GTTFVI_T', 'GTTOQA_T', 'GTTBOX_T'];
 
 $machineIdColumn = 'id';   // PK column of qdn_db.machine_list
@@ -424,6 +425,7 @@ $sim = new class(
      */
     public function simulate(array $wipRows, array $pins, array $pinnedWipRows, \Carbon\Carbon $targetDate): array
     {
+        $this->lastPlannedLotByMachine = [];
         // Laps are collected (not echoed) so they can be shown at the very end.
         $timings = [];
         $simStart = microtime(true);
@@ -596,6 +598,16 @@ $sim = new class(
             $pinnedCommit[$machineId] = $p['commit'];
             $anchorStateByMachine[$machineId] = $p['state_id'];
 
+            // The pin must also be the predecessor LOT for axis costing, overriding
+            // whatever getAnchorStates() seeded from the DB's frozen entries.
+            if ($p['lot'] !== null) {
+                $this->lastPlannedLotByMachine[(int) $machineId] = $p['lot'];
+            } else {
+                // Spec pin: no real lot exists, so drop any DB-seeded lot and fall
+                // back to state-only costing for the first placement.
+                unset($this->lastPlannedLotByMachine[(int) $machineId]);
+            }
+
             if ($remainingCapacityByMachine[$machineId] !== null) {
                 $remainingCapacityByMachine[$machineId] -= $p['commit'];
             }
@@ -640,6 +652,14 @@ $sim = new class(
             ];
         }
         $lap('capacity report');
+
+        foreach ($this->plan as $mid => $rows) {
+            Log::debug("[plan BEFORE sort] machine {$mid}", collect($rows)->map(
+                fn($r) => $r['type'] === 'block'
+                    ? 'BLOCK'
+                    : [$r['lot_id'], $r['sort']['cycle_time_exceed'], $r['sort']['cycle_time_exceed_residual'], $r['sort']['is_res'], $r['sort']['ct']]
+            )->all());
+        }
 
         $this->sortPlan();
         $plan = $readPlan();

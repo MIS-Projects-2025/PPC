@@ -196,10 +196,6 @@ class LoadingPlanController extends Controller
             return [$deferred, $mark];
         }
 
-        // ── Full load only ──────────────────────────────────────────────
-        $packageLineMap = PackageLocation::map();
-        $mark('packageLineMap');
-
         $activeMachines = $this->getActiveMachines();
         $mark('activeMachines');
 
@@ -209,16 +205,21 @@ class LoadingPlanController extends Controller
         $result = $this->attachBuckets($svc->initEntries(), $date);
         $mark('initEntries + attachBuckets');
 
-        $groups   = app(PackageGroups::class);
-        $groupMap = $groups->reverseMap();
+        $groups = app(PackageGroups::class);
 
         $packages = $result
             ->filter(fn($row) => !$row['is_block'] && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION)
-            ->pluck('package_name')
-            ->filter()->unique()
-            ->filter(fn($pkg) => $packageLineMap->get($pkg) === $selectedLocation)
-            ->map(fn($pkg) => $groupMap[$pkg] ?? $pkg)
-            ->unique()->sort()->values();
+            ->filter(fn($row) => PackageLocation::resolve(
+                $row['package_name'] ?? null,
+                $row['focus_group'] ?? null,
+                $row['lead_count'] ?? null,
+            ) === $selectedLocation)
+            ->map(fn($row) => $groups->resolve(
+                $row['package_name'] ?? null,
+                $row['focus_group'] ?? null,
+                $row['lead_count'] ?? null,
+            ))
+            ->filter()->unique()->sort()->values();
         $mark('packages list');
 
         $machineNameById = QdnMachine::pluck('machine_num', 'id');
