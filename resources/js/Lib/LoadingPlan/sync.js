@@ -25,7 +25,9 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
             p.status !== r.status ||
             p.remarks !== r.remarks ||
             p.tag !== r.tag ||
-            p.accu_time !== r.accu_time
+            p.accu_time !== r.accu_time ||
+            !!p.is_manual_expedite !== !!r.is_manual_expedite ||
+            !!p.is_scm !== !!r.is_scm
         );
     });
 
@@ -34,7 +36,7 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
 
     if (affected.length === 0 && deletedEntryIds.length === 0 && Object.keys(order).length === 0
         && Object.keys(laneStarts).length === 0) {
-        return Promise.resolve();
+        return Promise.resolve(true);
     }
 
     const rows = affected.map((r) => {
@@ -55,7 +57,9 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
                 remarks: r.remarks,
                 tag: r.tag,
                 accu_time: r.accu_time,
-                ...(isBlockRow(r) ? { block_label: r.block_label } : {}),
+                ...(isBlockRow(r)
+                    ? { block_label: r.block_label }
+                    : { is_manual_expedite: !!r.is_manual_expedite, is_scm: !!r.is_scm }),
             },
             lock_version: isResurrected ? null : (r.lock_version ?? null),
         };
@@ -85,18 +89,16 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
             applyAffectedTimings(update, affected_timings, date);
         })
         .catch((err) => {
-            // console.log("LOG ~ sync.js:83 ~ syncDeemoToServer ~ err:", err);
-            if (err.response?.data?.error === 'active_split_or_merge') {
-                toast?.error?.(err?.message);
-            }
-
-            if (err.response?.data?.error === 'stale_write') {
-                toast?.error?.(err?.message);
-            }
-
             console.error("Sync failed to persist:", err);
-            update(() => prevRows);
-            toast?.error?.("That change couldn't be saved and was reverted.");
+            const code = err?.data?.error;
+            update(() => prevRows, true); // skipHistory, so no stray undo entry
+
+            if (code === "active_split_or_merge" || code === "stale_write") {
+                toast?.error?.(err.data?.message ?? err.message);
+            } else {
+                toast?.error?.("That change couldn't be saved and was reverted.");
+            }
+            return false;
         });
 }
 

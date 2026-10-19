@@ -117,6 +117,9 @@ export function useBulkOperations({
             const prevSnapshot = dataRows;
 
             const affectedMachines = new Set();
+
+            if (lotEntryIds.length === 0 && unplannedLotIds.length === 0 && blockEntryIds.length === 0) return;
+
             update((prev) => {
                 const next = prev.map((r) => {
                     if (!selectedRows.has(r.id)) return { ...r };
@@ -129,11 +132,18 @@ export function useBulkOperations({
             setIsDirty(true);
             clearSelection();
 
-            if (lotEntryIds.length === 0 && unplannedLotIds.length === 0 && blockEntryIds.length === 0) return;
-
             withUpdating(
                 mutate(route("loading-plan.bulk-transfer"), {
-                    body: { lot_ids: unplannedLotIds, entry_ids: lotEntryIds, block_entry_ids: blockEntryIds, target_machine: targetMachine, scheduled_date: date },
+                    body: { 
+                        lot_ids: unplannedLotIds, 
+                        entry_ids: lotEntryIds, 
+                        block_entry_ids: blockEntryIds, 
+                        target_machine: targetMachine, 
+                        scheduled_date: date,
+                        locks: Object.fromEntries(
+                            selected.filter((r) => r.entry_id).map((r) => [r.entry_id, r.lock_version ?? null]),
+                        ),
+                    },
                 }),
             )
                 .then(({ entries, affected_timings }) => {
@@ -177,7 +187,17 @@ export function useBulkOperations({
                     if (!selectedRows.has(r.id)) return r;
                     affectedMachines.add(r.machine);
                     if (removable(r)) return r;
-                    return { ...r, machine: null, sequence_order: null };
+                    return {
+                        ...r,
+                        machine: null,
+                        sequence_order: null,
+                        time_start: null,
+                        time_end: null,
+                        time_start_day_offset: 0,
+                        time_end_day_offset: 0,
+                        time_start_at: null,
+                        time_end_at: null,
+                    };
                 })
                 .filter((r) => !(selectedRows.has(r.id) && removable(r)));
 
@@ -189,7 +209,13 @@ export function useBulkOperations({
 
         if (entryIds.length === 0) return false;
 
-        withUpdating(mutate(route("loading-plan.bulk-delete"), { body: { ids: entryIds, scheduled_date: date } }))
+        withUpdating(mutate(route("loading-plan.bulk-delete"), { 
+            body: { 
+                ids: entryIds, 
+                locks: Object.fromEntries(targets.map((r) => [r.entry_id, r.lock_version ?? null])), 
+                scheduled_date: date
+            }, 
+        }))
             .then(({ unassigned, affected_timings }) => {
                 const patches = targets.map((r) => {
                     const m = unassigned?.find((e) => e.id === r.entry_id);

@@ -50,6 +50,73 @@ class LoadingPlanEntryService
             ->all();
     }
 
+    public function deleteEntriesWithHistory(\Illuminate\Support\Collection $entries): void
+    {
+        if ($entries->isEmpty()) return;
+
+        $now = now();
+        // $by = auth()->id(); // auth() is not available on this whole app.
+        $by = null;
+        $ignored = ['updated_at', 'lock_version']; // matches LoadingPlanEntryObserver
+
+        $history = $entries->map(function ($e) use ($now, $by, $ignored) {
+            $attrs = collect($e->getAttributes())->except($ignored)->all();
+            return [
+                'entry_id'        => $e->id,
+                'changed_by'      => $by,
+                'change_type'     => 'deleted',
+                'changed_columns' => json_encode(array_keys($attrs)),
+                'old_values'      => json_encode($attrs),
+                'new_values'      => null,
+                'changed_at'      => $now,
+            ];
+        })->values()->all();
+
+        foreach ($entries->pluck('id')->chunk(1000) as $ids) {
+            LoadingPlanEntry::whereKey($ids->all())->delete();
+        }
+        foreach (array_chunk($history, 500) as $chunk) {
+            LoadingPlanEntryHistory::insert($chunk);
+        }
+    }
+
+    /** @return array{0: ?int, 1: ?int} anchors usable on $date */
+    private function sameDateAnchors(string $date, ?int $beforeId, ?int $afterId, array $excludeIds = []): array
+    {
+        $anchors = LoadingPlanEntry::whereKey(array_filter([$beforeId, $afterId]))->get()->keyBy('id');
+        $before = $beforeId ? $anchors->get($beforeId) : null;
+        $after  = $afterId ? $anchors->get($afterId) : null;
+
+        foreach ([$before, $after] as $a) {
+            if ($a && $a->scheduled_date->toDateString() > $date) {
+                throw new \InvalidArgumentException("The drop position is on a later day than this row.");
+            }
+        }
+
+        $isToday = fn(?LoadingPlanEntry $a) => $a && $a->scheduled_date->toDateString() === $date;
+        $beforeId = $isToday($before) ? $before->id : null;
+        $afterId  = $isToday($after) ? $after->id : null;
+
+        if ($after && $afterId === null) {
+            $head = LoadingPlanEntry::where('scheduled_date', $date)
+                ->when(
+                    $after->non_machine_id !== null,
+                    fn($q) => $q->where('non_machine_id', $after->non_machine_id),
+                    fn($q) => $q->where('machine_id', $after->machine_id),
+                )
+                ->when($excludeIds, fn($q) => $q->whereNotIn('id', $excludeIds))
+                ->orderBy('sequence_order')
+                ->value('id');
+
+            if ($head !== null) {
+                $beforeId = null;
+                $afterId = $head;
+            }
+        }
+
+        return [$beforeId, $afterId];
+    }
+
     private function resolveTarget(int|string|null $target): array
     {
         $nonMachineId = NonMachine::idFromKey($target);
@@ -95,12 +162,17 @@ class LoadingPlanEntryService
             ?? Carbon::parse("{$date} " . LotScheduleCalculator::NON_MACHINE_DEFAULT_START);
     }
 
-    public function setNonMachineStart(int $id, string $start): array
+    public function setNonMachineStart(int $id, string $start, string $date): array
     {
-        return DB::transaction(function () use ($id, $start) {
-            $nm = NonMachine::lockForUpdate()->findOrFail($id);
+        return DB::transaction(function () use ($id, $start, $date) {
+            NonMachine::lockForUpdate()->findOrFail($id);
+            $date = Carbon::parse($date)->toDateString();
             $anchor = Carbon::parse($start);
-            $date = $anchor->toDateString();
+
+            $allowed = [Carbon::parse($date)->subDay()->toDateString(), $date, Carbon::parse($date)->addDay()->toDateString()];
+            if (!in_array($anchor->toDateString(), $allowed, true)) {
+                throw new \InvalidArgumentException('Start time is more than a day away from the plan date.');
+            }
 
             foreach ($this->lockNonMachineRows([$id], $date) as $entry) {
                 $this->assertNotFinalized($entry);
@@ -119,7 +191,6 @@ class LoadingPlanEntryService
         if (!$machineIds && !$nonMachineIds) return [];
 
         $from = Carbon::parse($date)->subDay()->toDateString();
-        $to   = Carbon::parse($date)->addDay()->toDateString();
         $cols = ['id', 'scheduled_date', 'sequence_order', 'accu_time', 'time_start', 'time_end'];
 
         $rows = collect();
@@ -127,7 +198,9 @@ class LoadingPlanEntryService
         if ($machineIds) {
             $rows = $rows->concat(
                 LoadingPlanEntry::whereIn('machine_id', $machineIds)
-                    ->whereBetween('scheduled_date', [$from, $to])
+                    ->where(fn($q) => $q
+                        ->where('scheduled_date', $date)
+                        ->orWhere(fn($q2) => $q2->where('scheduled_date', $from)->where('time_end', '>', $date)))
                     ->get($cols)
             );
         }
@@ -173,6 +246,12 @@ class LoadingPlanEntryService
             }
 
             $existing = LoadingPlanEntry::with('machineModel')->whereKey($entryIds)->get()->keyBy('id');
+
+            $date = $existing->isNotEmpty()
+                ? $this->assertConsistentDates($existing->values())
+                : $requestDate;
+
+            [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($date, $beforeEntryId, $afterEntryId, $entryIds);
             if ($existing->count() !== count(array_unique($entryIds))) {
                 throw new \InvalidArgumentException('Some rows no longer exist — refresh and try again.');
             }
@@ -250,6 +329,13 @@ class LoadingPlanEntryService
             $machinesToLock = collect([...$sourceMachineIds, $targetMachineId])->filter()->unique()->sort()->values()->all();
             $nonMachinesToLock = collect([...$sourceNonMachineIds, $targetNonMachineId])->filter()->unique()->sort()->values()->all();
             $lockedRows = $this->lockLaneRows($machinesToLock, $nonMachinesToLock, $date);
+            $lockedById = $lockedRows->keyBy('id');
+            foreach ($items as $i) {
+                if (!empty($i['entry_id'])) {
+                    $this->assertFresh($lockedById->get($i['entry_id']) ?? $existing->get($i['entry_id']), $i['lock_version'] ?? null);
+                }
+            }
+
             $machineAnchors = $this->machineAnchors($lockedRows, $machinesToLock);
 
             $targetRows = $targetNonMachineId !== null
@@ -536,6 +622,7 @@ class LoadingPlanEntryService
             }
 
             $date = $source->scheduled_date->toDateString();
+            [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($date, $beforeEntryId, $afterEntryId);
 
             $rows = $nonMachineId !== null
                 ? $this->lockNonMachineRows([$nonMachineId], $date)
@@ -630,37 +717,26 @@ class LoadingPlanEntryService
             ->firstOrFail();
     }
 
-    public function moveEntry(string $entryType, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine)
+    public function moveEntry(string $entryType, ?int $entryId, ?int $beforeEntryId, ?int $afterEntryId, string $machine, ?int $lockVersion = null)
     {
-        return DB::transaction(function () use ($entryType, $entryId, $beforeEntryId, $afterEntryId, $machine) {
+        return DB::transaction(function () use ($entryType, $entryId, $beforeEntryId, $afterEntryId, $machine, $lockVersion) {
             $entry = $this->resolveEntry($entryId);
             $this->assertNotFinalized($entry);
 
-            $anchorEntries = collect([$entry]);
-
-            if ($beforeEntryId) {
-                $before = LoadingPlanEntry::find($beforeEntryId);
-                if ($before) $anchorEntries->push($before);
-            }
-
-            if ($afterEntryId) {
-                $after = LoadingPlanEntry::find($afterEntryId);
-                if ($after) $anchorEntries->push($after);
-            }
-
-            $resolvedDate = $this->assertConsistentDates($anchorEntries);
-
+            $resolvedDate = $entry->scheduled_date->toDateString();
+            [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($resolvedDate, $beforeEntryId, $afterEntryId, [$entry->id]);
             [$machineId, $nonMachineId] = $this->resolveTarget($machine);
 
             $rows = $nonMachineId !== null
                 ? $this->lockNonMachineRows([$nonMachineId], $resolvedDate)
                 : $this->lockMachineRows([$machineId], $resolvedDate);
+            $this->assertFresh($rows->firstWhere('id', $entry->id) ?? $entry, $lockVersion);
 
             // the lane keeps its start even if the first row is the one being moved
             $anchor = $nonMachineId !== null ? $this->laneAnchor($rows, $resolvedDate) : null;
             $machineAnchor = $machineId !== null ? $this->machineAnchor($rows) : null;
 
-            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $resolvedDate);
+            $newOrder = $this->resolveSequenceOrder($rows, $beforeEntryId, $afterEntryId, $machine, $resolvedDate, $entry->id);
 
             $entry->update(['sequence_order' => $newOrder, 'lock_version' => DB::raw('lock_version + 1')]);
 
@@ -704,8 +780,9 @@ class LoadingPlanEntryService
         ?int $afterEntryId,
         ?string $lotId = null,
         ?string $scheduledDate = null,
+        ?int $lockVersion = null,
     ): array {
-        return DB::transaction(function () use ($entryType, $entryId, $targetMachine, $beforeEntryId, $afterEntryId, $lotId, $scheduledDate) {
+        return DB::transaction(function () use ($entryType, $entryId, $targetMachine, $beforeEntryId, $afterEntryId, $lotId, $scheduledDate, $lockVersion) {
             if ($entryId === null) {
                 if ($entryType !== 'lot' || !$lotId || !$scheduledDate) {
                     abort(422, 'lot_id and scheduled_date are required to create an entry for an unassigned WIP.');
@@ -731,17 +808,8 @@ class LoadingPlanEntryService
                 $this->assertNotFinalized($entry);
             }
 
-            $anchorEntries = collect([$entry]);
-            if ($beforeEntryId) {
-                $before = LoadingPlanEntry::find($beforeEntryId);
-                if ($before) $anchorEntries->push($before);
-            }
-            if ($afterEntryId) {
-                $after = LoadingPlanEntry::find($afterEntryId);
-                if ($after) $anchorEntries->push($after);
-            }
-
-            $resolvedDate = $this->assertConsistentDates($anchorEntries);
+            $resolvedDate = $entry->scheduled_date->toDateString();
+            [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($resolvedDate, $beforeEntryId, $afterEntryId, [$entry->id]);
             log_entities($entry);
             if ($entryType === 'lot' && $entry->rework_seq === 0) $this->releaseFromBuckets([$entry->lot_id], $resolvedDate);
 
@@ -758,6 +826,7 @@ class LoadingPlanEntryService
                 collect([$sourceNonMachineId, $targetNonMachineId])->filter()->unique()->sort()->values()->all(),
                 $resolvedDate,
             );
+            $this->assertFresh($rows->firstWhere('id', $entry->id) ?? $entry->fresh(), $lockVersion);
 
             $targetRows = $targetNonMachineId !== null
                 ? $rows->where('non_machine_id', $targetNonMachineId)
@@ -779,6 +848,7 @@ class LoadingPlanEntryService
                 $afterEntryId,
                 $targetMachine,
                 $resolvedDate,
+                $entry->id
             );
 
             $entry->update([
@@ -844,6 +914,7 @@ class LoadingPlanEntryService
     {
         return DB::transaction(function () use ($machine, $date, $label, $durationMinutes, $beforeEntryId, $afterEntryId) {
             $this->assertDateNotFinalized($date);
+            [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($date, $beforeEntryId, $afterEntryId);
 
             [$machineId, $nonMachineId] = $this->resolveTarget($machine);
 
@@ -916,24 +987,30 @@ class LoadingPlanEntryService
         }
     }
 
-    public function deleteEntry(int $id, ?string $machine, bool $forceDelete = false): array
+    private function assertFresh(?LoadingPlanEntry $current, ?int $expected): void
     {
-        return DB::transaction(function () use ($id, $machine, $forceDelete) {
+        if ($expected === null || $current === null) return;   // client didn't send one: not enforced
+        if ((int) $current->lock_version !== $expected) {
+            throw new StaleWriteException($current);
+        }
+    }
+
+    public function deleteEntry(int $id, ?string $machine, bool $forceDelete = false, ?int $lockVersion = null): array
+    {
+        return DB::transaction(function () use ($id, $machine, $forceDelete, $lockVersion) {
             $entry = LoadingPlanEntry::whereKey($id)->firstOrFail();
 
             $date = $entry->scheduled_date->toDateString();
-            $vacatedNonMachineId = $entry->non_machine_id;
+
             $vacatedMachineId = $entry->machine_id;
+            $locked = $vacatedMachineId ? $this->lockMachineRows([$vacatedMachineId], $date) : collect();
+            $machineAnchor = $vacatedMachineId ? $this->machineAnchor($locked) : null;
+            $this->assertFresh($locked->firstWhere('id', $entry->id) ?? $entry, $lockVersion);
 
-            $machineAnchor = null;
-            if ($vacatedMachineId) {
-                $machineAnchor = $this->machineAnchor($this->lockMachineRows([$vacatedMachineId], $date));
-            }
-
-            $nonMachineAnchor = null;
-            if ($vacatedNonMachineId) {
-                $nonMachineAnchor = $this->laneAnchor($this->lockNonMachineRows([$vacatedNonMachineId], $date), $date);
-            }
+            $vacatedNonMachineId = $entry->non_machine_id;
+            $lockedNonMachine = $vacatedNonMachineId ? $this->lockNonMachineRows([$vacatedNonMachineId], $date) : collect();
+            $nonMachineAnchor = $vacatedNonMachineId ? $this->laneAnchor($lockedNonMachine, $date) : null;
+            $this->assertFresh($lockedNonMachine->firstWhere('id', $entry->id) ?? $entry, $lockVersion);
 
             $this->assertNotFinalized($entry);
 
@@ -966,9 +1043,9 @@ class LoadingPlanEntryService
         });
     }
 
-    public function bulkTransfer(array $lotIds, array $blockEntryIds, ?string $targetMachine, string $date, array $entryIds = [])
+    public function bulkTransfer(array $lotIds, array $blockEntryIds, ?string $targetMachine, string $date, array $entryIds = [], array $locks = [])
     {
-        return DB::transaction(function () use ($lotIds, $entryIds, $blockEntryIds, $targetMachine, $date) {
+        return DB::transaction(function () use ($lotIds, $entryIds, $blockEntryIds, $targetMachine, $date, $locks) {
             [$targetMachineId, $targetNonMachineId] = $this->resolveTarget($targetMachine);
             $isUnassign = $targetMachineId === null && $targetNonMachineId === null;
 
@@ -990,7 +1067,10 @@ class LoadingPlanEntryService
             $plannedLotIds = $lotEntries->where('rework_seq', 0)->pluck('lot_id')->all();
             $unplannedLotIds = array_values(array_diff($lotIds, $plannedLotIds));
 
-            $allEntries = $lotEntries->concat($blockEntries);
+            $requestOrder = array_flip([...$entryIds, ...$blockEntryIds]);
+            $allEntries = $lotEntries->concat($blockEntries)
+                ->sortBy(fn($e) => $requestOrder[$e->id] ?? PHP_INT_MAX)
+                ->values();
 
             if ($isUnassign && $lotEntries->contains(fn($e) => $e->rework_seq > 0)) {
                 throw new \InvalidArgumentException('Rework rows cannot be unassigned — delete them instead.');
@@ -1021,6 +1101,11 @@ class LoadingPlanEntryService
             $sourceNonMachineIds = array_values(array_diff($nonMachinesToLock, [$targetNonMachineId]));
 
             $lockedRows = $this->lockLaneRows($machinesToLock, $nonMachinesToLock, $date);
+            $lockedById = $lockedRows->keyBy('id');
+            foreach ($movers as $m) {
+                $this->assertFresh($lockedById->get($m->id) ?? $m, $locks[$m->id] ?? null);
+            }
+
             $machineAnchors = $this->machineAnchors($lockedRows, $machinesToLock);
 
             $targetLane = match (true) {
@@ -1049,7 +1134,7 @@ class LoadingPlanEntryService
                 $entry->update([
                     'machine_id'     => $targetMachineId,
                     'non_machine_id' => $targetNonMachineId,
-                    'sequence_order' => $nextSeq,
+                    'sequence_order' => $isUnassign ? null : $nextSeq,
                     'lock_version'   => DB::raw('lock_version + 1'),
                     'time_start'     => $isUnassign ? null : $entry->time_start,
                     'time_end'       => $isUnassign ? null : $entry->time_end,
@@ -1063,7 +1148,7 @@ class LoadingPlanEntryService
 
                 $firstAffectedEntry ??= $entry;
 
-                $updatedEntries->push($entry->fresh('machineModel'));
+                $updatedEntries->push($entry);
                 $nextSeq += self::GAP_SEED;
             }
 
@@ -1086,7 +1171,7 @@ class LoadingPlanEntryService
                     'machine_id'     => $targetMachineId,
                     'non_machine_id' => $targetNonMachineId,
                     'package_name'   => $wipItem?->Package_Name ?? null,
-                    'sequence_order' => $nextSeq,
+                    'sequence_order' => $isUnassign ? null : $nextSeq,
                     'lock_version'   => 1,
                 ]);
 
@@ -1107,7 +1192,7 @@ class LoadingPlanEntryService
 
                 $firstAffectedEntry ??= $entry;
 
-                $updatedEntries->push($entry->fresh('machineModel'));
+                $updatedEntries->push($entry);
                 $nextSeq += self::GAP_SEED;
             }
 
@@ -1235,8 +1320,6 @@ class LoadingPlanEntryService
             $calculator = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
             $calculator->loadPackageList();
 
-            \Log::info('calculator', ['mb_start_for_loop' => memory_get_usage(true) / 1048576]);
-
             $sourceMachineIds = $movers->pluck('machine_id')->filter()->unique()->values()->all();
 
             foreach ($movers as $i => $entry) {
@@ -1318,10 +1401,14 @@ class LoadingPlanEntryService
         });
     }
 
-    public function bulkDelete(array $ids): array
+    public function bulkDelete(array $ids, array $locks = []): array
     {
-        return DB::transaction(function () use ($ids) {
+        return DB::transaction(function () use ($ids, $locks) {
             $entries = LoadingPlanEntry::whereKey($ids)->get();
+
+            if ($entries->isEmpty()) {
+                return ['deleted' => [], 'unassigned' => [], 'affected_timings' => []];
+            }
 
             $date = $this->assertConsistentDates($entries);
 
@@ -1329,6 +1416,11 @@ class LoadingPlanEntryService
             $nonMachines = $entries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
 
             $lockedRows = $this->lockLaneRows($machines, $nonMachines, $date);
+            $lockedById = $lockedRows->keyBy('id');
+            foreach ($entries as $e) {
+                $this->assertFresh($lockedById->get($e->id) ?? $e, $locks[$e->id] ?? null);
+            }
+
             $machineAnchors = $this->machineAnchors($lockedRows, $machines);
             // lane starts, captured before rows leave
             $anchors = collect($nonMachines)
@@ -1344,24 +1436,21 @@ class LoadingPlanEntryService
 
             $deleted = $blocks->pluck('id')->merge($reworks->pluck('id'))->all();
 
-            if ($blocks->isNotEmpty()) {
-                LoadingPlanEntry::whereKey($blocks->pluck('id'))->delete();
-            }
-            foreach ($reworks as $e) {          // model delete so history observers fire
+            foreach ($blocks->concat($reworks) as $e) {
                 $e->delete();
                 $this->purgeReworkQuantity($e);
             }
 
             $unassignedIds = $others->pluck('id')->all();
             if (!empty($unassignedIds)) {
-                LoadingPlanEntry::whereKey($unassignedIds)->update([
+                $this->auditedRawUpdate($unassignedIds, fn() => LoadingPlanEntry::whereKey($unassignedIds)->update([
                     'machine_id'     => null,
                     'non_machine_id' => null,
                     'sequence_order' => null,
                     'time_start'     => null,
                     'time_end'       => null,
                     'lock_version'   => DB::raw('lock_version + 1'),
-                ]);
+                ]));
             }
 
             if (!empty($machines) || !empty($nonMachines)) {
@@ -1412,14 +1501,15 @@ class LoadingPlanEntryService
                 $this->purgeReworkQuantity($e);
             }
 
-            if ($others->isNotEmpty()) {
-                LoadingPlanEntry::whereKey($others->pluck('id'))->update([
+            $unassignedIds = $others->pluck('id')->all();
+            if (!empty($unassignedIds)) {
+                $this->auditedRawUpdate($unassignedIds, fn() => LoadingPlanEntry::whereKey($unassignedIds)->update([
                     'non_machine_id' => null,
                     'sequence_order' => null,
                     'time_start'     => null,
                     'time_end'       => null,
                     'lock_version'   => DB::raw('lock_version + 1'),
-                ]);
+                ]));
             }
 
             $nm->delete();
@@ -1437,6 +1527,7 @@ class LoadingPlanEntryService
     {
         return DB::transaction(function () use ($machine, $date, $fields, $beforeEntryId, $afterEntryId) {
             $this->assertDateNotFinalized($date);
+            [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($date, $beforeEntryId, $afterEntryId);
 
             $lotId = $fields['lot_id'] ?? ('MANUAL-' . now()->format('YmdHis') . '-' . strtoupper(Str::random(4)));
 
@@ -1513,99 +1604,94 @@ class LoadingPlanEntryService
         });
     }
 
+    private function assertLockVersion(LoadingPlanEntry $entry, ?int $expected): void
+    {
+        $current = $entry->lock_version;
+        $matches = $expected === null ? $current === null : ($current !== null && (int) $current === $expected);
+        if (!$matches) {
+            throw new StaleWriteException($entry);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Field-only edits — optimistic locking, no machine lock
     // ------------------------------------------------------------------
 
-    public function editField(int $id, array $fields, int $expectedLockVersion): LoadingPlanEntry
+    public function editField(int $id, array $fields, ?int $expectedLockVersion): LoadingPlanEntry
     {
-
-        // var_dump("LOG ~ LoadingPlanEntryService.php:528 ~ LoadingPlanEntryService ~ editField ~ expectedLockVersion:", $expectedLockVersion);
-
-        // var_dump("LOG ~ LoadingPlanEntryService.php:528 ~ LoadingPlanEntryService ~ editField ~ fields:", $fields);
-
-        // var_dump("LOG ~ LoadingPlanEntryService.php:528 ~ LoadingPlanEntryService ~ editField ~ id:", $id);
-        // TODO: might be used to edit capacity UPH and others that might need recalculation
         $this->assertSupportedEditField($fields);
 
-        $existing = LoadingPlanEntry::find($id);
+        return DB::transaction(function () use ($id, $fields, $expectedLockVersion) {
+            $existing = LoadingPlanEntry::whereKey($id)->lockForUpdate()->firstOrFail();
+            $this->assertNotFinalized($existing);
+            $this->assertLockVersion($existing, $expectedLockVersion);
 
-        if (! $existing) {
-            throw new Exception("Row not found");
-        }
+            $existing->fill($fields);
+            $existing->lock_version = (int) $existing->lock_version + 1;
+            $existing->save();
+            $entry = $existing;
 
-        $affected = LoadingPlanEntry::whereKey($id)
-            ->where('lock_version', $expectedLockVersion)
-            ->whereNull('finalized_at')
-            ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
-
-        if ($affected === 0) {
-            if ($existing && $existing->finalized_at !== null) {
-                throw new LoadingPlanDateFinalizedException($existing->scheduled_date, $existing->id);
+            if (array_key_exists('accu_time', $fields) && ($entry->machine_id !== null || $entry->non_machine_id !== null)) {
+                app(LotScheduleCalculator::class)
+                    ->recomputeTimeStartAndEnd($entry, $entry->machine_id, $entry->time_start?->copy(), stopWhenStable: true);
+                $entry = $entry->fresh();
             }
-            throw new StaleWriteException($existing);
-        }
 
-        $entry = LoadingPlanEntry::findOrFail($id);
-
-        // accu_time changes need to cascade — anything else this method allows
-        // (remarks, tag, status, etc.) doesn't affect timing at all
-        if (array_key_exists('accu_time', $fields) && ($entry->machine_id !== null || $entry->non_machine_id !== null)) {
-            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $entry->machine_id, $entry->time_start?->copy());
-            $entry = $entry->fresh();
-        }
-
-        return $entry;
+            return $entry;
+        });
     }
 
     public function editLotField(int $entry_id, array $fields, ?int $expectedLockVersion): LoadingPlanEntry
     {
         $this->assertSupportedEditField($fields);
 
-        $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
+        return DB::transaction(function () use ($entry_id, $fields, $expectedLockVersion) {
+            $existing = LoadingPlanEntry::whereKey($entry_id)->lockForUpdate()->firstOrFail();
+            $this->assertNotFinalized($existing);
+            $this->assertLockVersion($existing, $expectedLockVersion);
 
-        $existing = LoadingPlanEntry::whereKey($entry_id)
-            ->where('lock_version', $expectedLockVersion)
-            ->whereNull('finalized_at')
-            ->firstOrFail();
+            $date = $existing->scheduled_date->toDateString();
+            $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
+            $touchesQuantity = array_key_exists('qty', $fields) || array_key_exists('part_name', $fields);
 
-        $this->assertNotFinalized($existing);
+            if ($touchesQuantity) {
+                $lotQuantity = LotQuantity::firstOrNew([
+                    'lot_id' => $existing->lot_id,
+                    'scheduled_date' => $date,
+                    'rework_seq' => (int) $existing->rework_seq,
+                ]);
+                if (array_key_exists('qty', $fields)) {
+                    $lotQuantity->qty_base = $fields['qty'];
+                }
+                if (array_key_exists('part_name', $fields)) {
+                    $lotQuantity->part_name = $fields['part_name'];
+                }
+                $lotQuantity->part_name ??= '';
 
-        $lotId = $existing->lot_id;
-        $machineId = $existing->machine_id;
-        $date = $existing->scheduled_date;
-
-        $affected = LoadingPlanEntry::whereKey($existing->id)
-            ->where('lock_version', $expectedLockVersion)
-            ->whereNull('finalized_at')
-            ->update([...$entryFields, 'lock_version' => DB::raw('lock_version + 1')]);
-
-        if ($affected === 0) {
-            throw new StaleWriteException(LoadingPlanEntry::find($existing->id));
-        }
-
-        $needsRecalculate = array_key_exists('qty', $fields) || array_key_exists('part_name', $fields);
-        $needsRetimeOnly = !$needsRecalculate && array_key_exists('accu_time', $fields) && ($machineId !== null || $existing->non_machine_id !== null);
-
-        if ($needsRecalculate) {
-            $lotQuantity = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => $existing->rework_seq]);
-
-            if (array_key_exists('qty', $fields)) {
-                $lotQuantity->qty_base = $fields['qty'];
+                if ($lotQuantity->effectiveQty() < 0) {
+                    throw new \InvalidArgumentException(
+                        "Lot [{$existing->lot_id}] can't go below what's already been split out or merged away."
+                    );
+                }
+                $lotQuantity->save();
             }
 
-            $lotQuantity->save();
+            $existing->fill($entryFields);
+            $existing->lock_version = (int) $existing->lock_version + 1;
+            $existing->save();
+            $entry = $existing;
 
-            $entry = LoadingPlanEntry::findOrFail($existing->id);
-            app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$lotId]])
-                ->loadPackageList()
-                ->recalculateAndRetime($entry, $machineId, anchor: $entry->time_start?->copy());
-        } elseif ($needsRetimeOnly) {
-            $entry = LoadingPlanEntry::findOrFail($existing->id);
-            app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($entry, $machineId, $entry->time_start?->copy());
-        }
+            $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => [$existing->lot_id]]);
+            $isPlaced = $entry->machine_id !== null || $entry->non_machine_id !== null;
 
-        return LoadingPlanEntry::findOrFail($entry_id);
+            if ($touchesQuantity) {
+                $calc->loadPackageList()->recalculateAndRetime($entry, $entry->machine_id, anchor: $entry->time_start?->copy());
+            } elseif ($isPlaced && array_key_exists('accu_time', $fields)) {
+                $calc->recomputeTimeStartAndEnd($entry, $entry->machine_id, $entry->time_start?->copy(), stopWhenStable: true);
+            }
+
+            return LoadingPlanEntry::findOrFail($entry_id);
+        });
     }
 
     public function bulkEditField(array $updates): array
@@ -1615,26 +1701,14 @@ class LoadingPlanEntryService
             $conflicts = [];
 
             $entryIds = collect($updates)->pluck('entry_id')->unique()->values()->all();
-
-            $existingEntries = LoadingPlanEntry::whereIn('id', $entryIds)
-                ->get()
-                ->keyBy('id');
-
+            $existingEntries = LoadingPlanEntry::whereIn('id', $entryIds)->get()->keyBy('id');
             $date = $this->assertConsistentDates($existingEntries);
 
-            $machineIds = $existingEntries->pluck('machine_id')
-                ->filter()
-                ->unique()
-                ->sort()
-                ->values()
-                ->all();
-
-            if (!empty($machineIds)) {
-                $this->lockMachineRows($machineIds, $date);
-            }
+            $machineIds = $existingEntries->pluck('machine_id')->filter()->unique()->sort()->values()->all();
+            $nonMachineIds = $existingEntries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
+            $locked = $this->lockLaneRows($machineIds, $nonMachineIds, $date)->keyBy('id');
 
             $lotIds = $existingEntries->pluck('lot_id')->filter()->unique()->values()->all();
-
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList();
 
             foreach ($updates as $u) {
@@ -1644,47 +1718,50 @@ class LoadingPlanEntryService
                 $fields = $u['fields'];
                 $entryFields = collect($fields)->except(['qty', 'part_name'])->all();
 
-                $existing = $existingEntries->get($entryId);
-
+                $existing = $locked->get($entryId) ?? LoadingPlanEntry::whereKey($entryId)->lockForUpdate()->first();
                 if (!$existing) {
                     throw new \RuntimeException("Entry [{$entryId}] not found.");
                 }
-
                 $this->assertNotFinalized($existing);
 
-                $affected = LoadingPlanEntry::whereKey($entryId)
-                    ->where('lock_version', $u['lock_version'] ?? null)
-                    ->whereNull('finalized_at')
-                    ->update([...$entryFields, 'lock_version' => DB::raw('lock_version + 1')]);
-
-                if ($affected === 0) {
-                    $conflicts[] = LoadingPlanEntry::find($entryId);
+                try {
+                    $this->assertLockVersion($existing, $u['lock_version'] ?? null);
+                } catch (StaleWriteException) {
+                    $conflicts[] = $existing;
                     continue;
                 }
 
                 $needsRecalculate = array_key_exists('qty', $fields) || array_key_exists('part_name', $fields);
-                $needsRetimeOnly = !$needsRecalculate && array_key_exists('accu_time', $fields) && ($existing->machine_id !== null || $existing->non_machine_id !== null);
+                $isPlaced = $existing->machine_id !== null || $existing->non_machine_id !== null;
+                $needsRetimeOnly = !$needsRecalculate && array_key_exists('accu_time', $fields) && $isPlaced;
 
                 if ($needsRecalculate) {
                     $lotQuantity = LotQuantity::firstOrNew(['lot_id' => $existing->lot_id, 'scheduled_date' => $date, 'rework_seq' => $existing->rework_seq]);
-
                     if (array_key_exists('qty', $fields)) {
                         $lotQuantity->qty_base = $fields['qty'];
                     }
-
+                    if (array_key_exists('part_name', $fields)) {
+                        $lotQuantity->part_name = $fields['part_name'];
+                    }
+                    $lotQuantity->part_name ??= '';
                     if ($lotQuantity->effectiveQty() < 0) {
                         throw new \InvalidArgumentException(
                             "Lot [{$existing->lot_id}] can't go below what's already been split out or merged away."
                         );
                     }
-
                     $lotQuantity->save();
+                }
 
+                $existing->fill($entryFields);
+                $existing->lock_version = (int) $existing->lock_version + 1;
+                $existing->save();
+
+                if ($needsRecalculate) {
                     $entry = LoadingPlanEntry::findOrFail($entryId);
                     $calc->recalculateAndRetime($entry, $existing->machine_id, anchor: $entry->time_start?->copy());
                 } elseif ($needsRetimeOnly) {
                     $entry = LoadingPlanEntry::findOrFail($entryId);
-                    $calc->recomputeTimeStartAndEnd($entry, $existing->machine_id, $entry->time_start?->copy());
+                    $calc->recomputeTimeStartAndEnd($entry, $existing->machine_id, $entry->time_start?->copy(), stopWhenStable: true);
                 }
 
                 $entries[] = LoadingPlanEntry::find($entryId);
@@ -1705,20 +1782,14 @@ class LoadingPlanEntryService
     /** Resolve a machine name (from frontend/legacy callers) to its id in qdn_db. */
     private function resolveMachineId(int|string|null $machine): ?int
     {
-        if ($machine === null || $machine === '') {
-            return null;
+        if ($machine === null || $machine === '') return null;
+        if (is_int($machine)) return $machine;
+
+        if (isset($this->machineIdByNum[$machine])) {
+            return $this->machineIdByNum[$machine];
         }
 
-        if (is_int($machine)) {
-            return $machine;
-        }
-
-        // Handles string values (e.g. numeric strings "12" or machine names)
-        if (is_numeric($machine)) {
-            return (int) $machine;
-        }
-
-        return $this->machineIdByNum[$machine] ?? null;
+        return ctype_digit($machine) ? (int) $machine : null;
     }
 
     /** Batch version — returns just the ids, order not guaranteed to match input. */
@@ -1786,19 +1857,21 @@ class LoadingPlanEntryService
         ?int $beforeEntryId,
         ?int $afterEntryId,
         int|string $machine,
-        string $date
+        string $date,
+        ?int $excludeEntryId = null
     ): float {
-        [$before, $after] = $this->resolveBounds($machineRows, $beforeEntryId, $afterEntryId);
+        $without = fn(Collection $rows) => $excludeEntryId === null
+            ? $rows
+            : $rows->reject(fn($r) => $r->id === $excludeEntryId);
+
+        [$before, $after] = $this->resolveBounds($without($machineRows), $beforeEntryId, $afterEntryId);
 
         try {
             return $this->computeSequenceOrder($before, $after, $machine, $date);
         } catch (SequenceExhaustedException) {
             [$machineId, $nonMachineId] = $this->resolveTarget($machine);
             $rebalanced = $this->rebalance($machineId, $date, $nonMachineId);
-
-            // same resolution as the first pass, against the re-spaced rows,
-            // so a single-anchor request still gets its other neighbour filled in
-            [$before, $after] = $this->resolveBounds($rebalanced, $beforeEntryId, $afterEntryId);
+            [$before, $after] = $this->resolveBounds($without($rebalanced), $beforeEntryId, $afterEntryId);
 
             return $this->computeSequenceOrder($before, $after, $machine, $date);
         }
@@ -2048,28 +2121,70 @@ class LoadingPlanEntryService
         );
     }
 
+    private function auditedRawUpdate(array $ids, callable $write, array $ignore = []): void
+    {
+        $ids = array_values(array_unique(array_filter($ids)));
+        if (!$ids) {
+            $write();
+            return;
+        }
+
+        $ignore = array_merge(['updated_at', 'lock_version'], $ignore);
+        $before = LoadingPlanEntry::whereKey($ids)->get()->keyBy('id');
+        $write();
+
+        $now = now();
+        $by = auth()->id();
+        $rows = [];
+
+        foreach (LoadingPlanEntry::whereKey($ids)->get() as $after) {
+            $old = $before->get($after->id);
+            if (!$old) continue;
+
+            $oldAttrs = $old->getAttributes();
+            $new = collect($after->getAttributes())->except($ignore)
+                ->filter(fn($v, $k) => ($oldAttrs[$k] ?? null) !== $v)->all();
+            if (!$new) continue;
+
+            $rows[] = [
+                'entry_id'        => $after->id,
+                'changed_by'      => $by,
+                'change_type'     => 'updated',
+                'changed_columns' => json_encode(array_keys($new)),
+                'old_values'      => json_encode(array_intersect_key($oldAttrs, $new)),
+                'new_values'      => json_encode($new),
+                'changed_at'      => $now,
+            ];
+        }
+        foreach (array_chunk($rows, 500) as $chunk) {
+            LoadingPlanEntryHistory::insert($chunk);
+        }
+    }
+
     private function applyPositionsInBulk(array $positions, ?int $machineId, string $date, ?int $nonMachineId = null): void
     {
         $ids = array_column($positions, 'entry_id');
-        $this->stageTempSequenceOrders($ids);
+        $this->auditedRawUpdate($ids, function () use ($positions, $ids, $machineId, $nonMachineId, $date) {
+            $this->stageTempSequenceOrders($ids);
 
-        $cases = [];
-        $bindings = [];
-        foreach ($positions as $pos) {
-            $cases[] = "WHEN id = ? THEN ?";
-            $bindings[] = $pos['entry_id'];
-            $bindings[] = $pos['sequence_order'];
-        }
+            $cases = [];
+            $bindings = [];
+            foreach ($positions as $pos) {
+                $cases[] = "WHEN id = ? THEN ?";
+                $bindings[] = $pos['entry_id'];
+                $bindings[] = $pos['sequence_order'];
+            }
 
-        $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $sql = "UPDATE loading_plan_entries
-        SET sequence_order = CASE " . implode(' ', $cases) . " END,
-            machine_id = ?,
-            non_machine_id = ?,
-            lock_version = lock_version + 1
-            WHERE scheduled_date = ? AND id IN ($placeholders)";
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $sql = "UPDATE loading_plan_entries
+            SET sequence_order = CASE " . implode(' ', $cases) . " END,
+                machine_id = ?,
+                non_machine_id = ?,
+                lock_version = lock_version + 1
+                WHERE scheduled_date = ? AND id IN ($placeholders)";
 
-        DB::statement($sql, [...$bindings, $machineId, $nonMachineId, $date, ...$ids]);
+            DB::statement($sql, [...$bindings, $machineId, $nonMachineId, $date, ...$ids]);
+        });
     }
 
     public function syncRows(array $rows, array $order, array $deletedEntryIds, string $date, array $laneStarts = []): array
@@ -2093,6 +2208,12 @@ class LoadingPlanEntryService
                 ...collect($order)->keys()->map(fn($m) => NonMachine::idFromKey($m))->all(),
                 ...$deletedEntries->pluck('non_machine_id')->all(),
             ])->filter()->unique()->sort()->values()->all();
+
+            $resequencedMachines = array_flip($this->resolveMachineIds(
+                array_keys(array_filter($order, fn($ids) => !empty($ids)))
+            ));
+            $resequencedNonMachines = array_flip(collect(array_keys(array_filter($order, fn($ids) => !empty($ids))))
+                ->map(fn($m) => NonMachine::idFromKey($m))->filter()->all());
 
             $lockedLaneRows = $this->lockLaneRows($machineIds, $nonMachineIds, $date);
             $machineAnchors = $this->machineAnchors($lockedLaneRows, $machineIds);
@@ -2135,6 +2256,8 @@ class LoadingPlanEntryService
 
             $vacatedMachineIds = $deletedEntries->pluck('machine_id')->filter()->unique()->values()->all();
             foreach ($vacatedMachineIds as $machineId) {
+                if (isset($resequencedMachines[$machineId])) continue;
+
                 $restart = $this->findFirstRemainingRow($machineId, $date);
                 if ($restart) {
                     app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $machineId, $machineAnchors[$machineId] ?? null);
@@ -2142,6 +2265,8 @@ class LoadingPlanEntryService
             }
 
             foreach ($deletedEntries->pluck('non_machine_id')->filter()->unique()->all() as $id) {
+                if (isset($resequencedNonMachines[$id])) continue;
+
                 app(LotScheduleCalculator::class)->recomputeNonMachineTimes($id, $date, $laneAnchors[$id]);
             }
 
@@ -2197,11 +2322,15 @@ class LoadingPlanEntryService
                 ->filter();
 
             foreach ($editedEntries->whereNotNull('machine_id')->groupBy('machine_id') as $machineId => $entries) {
+                if (isset($resequencedMachines[(int) $machineId])) continue;
+
                 $earliest = $entries->sortBy([['scheduled_date', 'asc'], ['sequence_order', 'asc']])->first();
                 $sharedCalc->recomputeTimeStartAndEnd($earliest, (int) $machineId, $machineAnchors[$machineId] ?? null);
             }
 
             foreach ($editedEntries->whereNotNull('non_machine_id')->pluck('non_machine_id')->unique() as $id) {
+                if (isset($resequencedNonMachines[$id])) continue;
+
                 $sharedCalc->recomputeNonMachineTimes($id, $date, $laneAnchors[$id] ?? null);
             }
 
@@ -2220,6 +2349,17 @@ class LoadingPlanEntryService
                 ...$this->resolveMachineIds([...collect($rows)->pluck('machine')->filter()->all(), ...array_keys($order), ...array_keys($laneStarts)]),
                 ...$vacatedMachineIds,
             ]));
+
+            $entryIds = collect($results)->pluck('entry_id')->filter()->all();
+            if ($entryIds) {
+                $currentVersions = LoadingPlanEntry::whereKey($entryIds)->pluck('lock_version', 'id');
+                foreach ($results as &$r) {
+                    if (isset($r['entry_id']) && $currentVersions->has($r['entry_id'])) {
+                        $r['lock_version'] = $currentVersions[$r['entry_id']];
+                    }
+                }
+                unset($r);
+            }
 
             return [
                 'results'          => $results,
@@ -2255,7 +2395,9 @@ class LoadingPlanEntryService
             'remarks'        => $fields['remarks'] ?? null,
             'tag'            => $fields['tag'] ?? null,
             'accu_time'      => $fields['accu_time'] ?? null,
-            'lock_version'   => 1,
+            'is_manual_expedite' => (bool) ($fields['is_manual_expedite'] ?? false),
+            'is_scm'             => (bool) ($fields['is_scm'] ?? false),
+            'lock_version'       => 1,
         ]);
 
         $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
@@ -2330,15 +2472,14 @@ class LoadingPlanEntryService
         $placeholders = implode(',', array_fill(0, count($allIds), '?'));
 
         // ids not already in this lane ride in from another lane (a transfer in the same payload)
-        DB::statement(
+        $this->auditedRawUpdate($allIds, fn() => DB::statement(
             "UPDATE loading_plan_entries
-        SET sequence_order = CASE " . implode(' ', $cases) . " END,
+            SET sequence_order = CASE " . implode(' ', $cases) . " END,
             machine_id = NULL,
-            non_machine_id = ?,
-            lock_version = lock_version + 1
-        WHERE id IN ($placeholders)",
+            non_machine_id = ?
+            WHERE id IN ($placeholders)",
             [...$bindings, $nonMachineId, ...$allIds]
-        );
+        ), ignore: ['sequence_order']);
 
         // accu_time is manual here: recalculate quantity metrics only (never overwrites accu_time)
         $typeById = LoadingPlanEntry::whereKey($allIds)->pluck('entry_type', 'id');
@@ -2354,11 +2495,12 @@ class LoadingPlanEntryService
     private function updateRow(array $row)
     {
         $entryId = $row['entry_id'];
-        $existing = LoadingPlanEntry::find($entryId);
+        $existing = LoadingPlanEntry::whereKey($entryId)->lockForUpdate()->first();
         if (!$existing) {
             throw new \RuntimeException("Row [{$entryId}] not found.");
         }
         $this->assertNotFinalized($existing);
+        $this->assertLockVersion($existing, $row['lock_version'] ?? null);
 
         $fields = $row['fields'] ?? [];
         $this->assertSupportedEditField($fields);
@@ -2371,16 +2513,11 @@ class LoadingPlanEntryService
             $fields['non_machine_id'] = $nonMachineId;
         }
 
-        $affected = LoadingPlanEntry::whereKey($entryId)
-            ->where('lock_version', $row['lock_version'] ?? null)
-            ->whereNull('finalized_at')
-            ->update([...$fields, 'lock_version' => DB::raw('lock_version + 1')]);
+        $existing->fill($fields);
+        $existing->lock_version = (int) $existing->lock_version + 1;
+        $existing->save();
 
-        if ($affected === 0) {
-            throw new StaleWriteException(LoadingPlanEntry::find($entryId));
-        }
-
-        $freshEntry = LoadingPlanEntry::findOrFail($entryId);
+        $freshEntry = $existing->fresh();
 
         $wipItem = CustomerDataWip::query()
             ->where('Lot_Id', $freshEntry->lot_id)
@@ -2483,14 +2620,13 @@ class LoadingPlanEntryService
         $allIds = [...$entryIds, ...$stray];
         $placeholders = implode(',', array_fill(0, count($allIds), '?'));
 
-        DB::statement(
+        $this->auditedRawUpdate($allIds, fn() => DB::statement(
             "UPDATE loading_plan_entries
             SET sequence_order = CASE " . implode(' ', $cases) . " END,
-                machine_id = ?,
-                lock_version = lock_version + 1
+                machine_id = ?
             WHERE id IN ($placeholders)",
             [...$bindings, $machineId, ...$allIds]
-        );
+        ), ignore: ['sequence_order']);
 
         $rowsById = $currentRows->keyBy('id');
         $missingFromCurrent = collect($allIds)->diff($rowsById->keys());
@@ -2524,6 +2660,7 @@ class LoadingPlanEntryService
         }
     }
 
+    // stale
     // public function batchApply(array $operations, string $date): array
     // {
     //     return DB::transaction(function () use ($operations, $date) {
@@ -2829,31 +2966,14 @@ class LoadingPlanEntryService
      * @param array<int, string> $allowedPackages
      * @return Collection<int, LoadingPlanEntry>
      */
-    public static function getTodayLeaked(string $previousDate, array $allowedPackages): Collection
+    public static function getTodayLeaked(string $previousDate, array $allowedPackages): Collection // allowedPackages is deprecated
     {
-        // logger()->debug('DB check', [
-        //     'db' => DB::connection()->getDatabaseName(),
-        //     'host' => DB::connection()->getConfig('host'),
-        //     'port' => DB::connection()->getConfig('port'),
-        // ]);
-
-        $leakedCalc = DB::table('loading_plan_entries')
-            ->select('id')
-            ->selectRaw('SUM(accu_time) OVER (PARTITION BY machine_id ORDER BY sequence_order) AS running_total')
-            ->where('loading_plan_entries.scheduled_date', $previousDate)
-            ->whereNotNull('machine_id');
-
-        $leakedIds = DB::query()
-            ->fromSub($leakedCalc, 'leaked_calc')
-            ->where('running_total', '>', 1440)
-            ->pluck('id');
-
-        if ($leakedIds->isEmpty()) {
-            return collect();
-        }
+        $cutoff = Carbon::parse($previousDate)->addDay()->startOfDay();
 
         return LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry'])
-            ->whereKey($leakedIds)
+            ->where('scheduled_date', $previousDate)
+            ->whereNotNull('machine_id')
+            ->where('time_end', '>', $cutoff)
             ->get();
     }
 
@@ -3050,7 +3170,7 @@ class LoadingPlanEntryService
         $overrideFor = function (array $row) use ($existingOverrides) {
             $ov = $existingOverrides->get($row['lot_id']);
             if (!$ov) return null;
-            $unchanged = (int) $ov->qty_base === (int) ($row['qty'] ?? 0)
+            $unchanged = (int) $ov->qty_base === (int) ($row['qty_base'] ?? $row['qty'] ?? 0)
                 && (int) $ov->commit_override_qty === $ov->effectiveQty();
             return $unchanged ? $ov->commit_override : null;
         };
@@ -3060,16 +3180,18 @@ class LoadingPlanEntryService
         // machine count, not lot count) ---
         $dayStartByMachine = [];
         foreach (array_keys($plan) as $machineId) {
-            $frozenToday = LoadingPlanEntry::where('machine_id', $machineId)
+            // With open lots and blocks already deleted by the rebuild, the last remaining row
+            // today is a frozen row (or an open rework/unhydratable row left in place).
+            $lastRemainingToday = LoadingPlanEntry::where('machine_id', $machineId)
                 ->where('scheduled_date', $date)
                 ->orderByDesc('sequence_order')
                 ->first();
 
-            if ($frozenToday && $frozenToday->getRawOriginal('time_end') !== null) {
+            if ($lastRemainingToday && $lastRemainingToday->getRawOriginal('time_end') !== null) {
                 $dayStartByMachine[$machineId] = [
-                    'cursor' => $clamp(Carbon::parse($frozenToday->getRawOriginal('time_end'))),
+                    'cursor' => $clamp(Carbon::parse($lastRemainingToday->getRawOriginal('time_end'))),
                     'isBootstrap' => false,
-                    'seqStart' => $frozenToday->sequence_order + self::GAP_SEED,
+                    'seqStart' => $lastRemainingToday->sequence_order + self::GAP_SEED,
                 ];
                 continue;
             }
@@ -3092,7 +3214,7 @@ class LoadingPlanEntryService
             $row = DB::table('machine_day_starts')
                 ->where('machine_id', $machineId)
                 ->where('scheduled_date', $date)
-                ->first();
+                ->first(); // what if the scheduled date time of the machine is stale?
 
             $dayStartByMachine[$machineId] = $row
                 ? ['cursor' => $clamp(Carbon::parse("{$date} {$row->day_start_time}")), 'isBootstrap' => false, 'seqStart' => self::GAP_SEED]
@@ -3125,6 +3247,9 @@ class LoadingPlanEntryService
                         'machine_id' => $machineId,
                         'sequence_order' => $seq,
                         'status' => null,
+                        'remarks' => null,
+                        'tag' => null,
+                        'is_scm' => false,
                         'is_manual_expedite' => false,
                         'block_label' => $row['label'],
                         'is_pickup' => false,
@@ -3149,7 +3274,10 @@ class LoadingPlanEntryService
                         'scheduled_date' => $date,
                         'machine_id' => $machineId,
                         'sequence_order' => $seq,
-                        'status' => 'NONE',
+                        'status'  => $row['status'] ?? 'NONE',
+                        'remarks' => $row['remarks'] ?? null,
+                        'tag'     => $row['tag'] ?? null,
+                        'is_scm'  => $row['is_scm'] ?? false,
                         'block_label' => null,
                         'is_pickup' => $row['is_pickup'] ?? false,
                         'accu_time' => $metrics['accu_time'],
@@ -3167,7 +3295,7 @@ class LoadingPlanEntryService
                         'scheduled_date' => $date,
                         'part_name' => $row['part_name'],
                         'rework_seq' => 0,
-                        'qty_base' => $row['qty'] ?? 0,
+                        'qty_base' => $row['qty_base'] ?? $row['qty'] ?? 0,
                         'recipe_used' => $metrics['recipe_used'],
                         'recipe_source_id' => $metrics['recipe_source_id'],
                         'commit' => $metrics['commit'],
@@ -3183,6 +3311,8 @@ class LoadingPlanEntryService
             }
         }
 
+        $existingIds = LoadingPlanEntry::whereIn('machine_id', array_keys($plan))
+            ->where('scheduled_date', $date)->pluck('id')->all();
         // --- pass 3: bulk write ---
         LoadingPlanEntry::insert($entryInsertRows);
 
@@ -3218,7 +3348,7 @@ class LoadingPlanEntryService
         $lotQuantityHistoryRows = [];
         $ignoredEntryColumns = ['updated_at', 'lock_version'];
 
-        foreach ($freshEntries as $entry) {
+        foreach ($freshEntries->whereNotIn('id', $existingIds) as $entry) {
             // keys come from getAttributes(), not a literal branch — keep it that way
             $attrs = collect($entry->getAttributes())->except($ignoredEntryColumns)->toArray();
             $entryHistoryRows[] = [
@@ -3231,7 +3361,10 @@ class LoadingPlanEntryService
                 'changed_at' => $now,
             ];
         }
-        LoadingPlanEntryHistory::insert($entryHistoryRows);
+
+        if ($entryHistoryRows) {
+            LoadingPlanEntryHistory::insert($entryHistoryRows);
+        }
 
         if (!empty($lotQuantityRows)) {
             $lotIds = collect($lotQuantityRows)->pluck('lot_id');
@@ -3272,15 +3405,25 @@ class LoadingPlanEntryService
                 ->whereIn('lot_id', $lotIds)
                 ->get();
 
-            $invalid = $entries->filter(
-                fn($entry) => PackageLocation::for($entry->package_name) !== $location
-            );
+            $wipByLot = CustomerDataWip::forDate($date)
+                ->whereIn('Lot_Id', $lotIds)
+                ->get(['Lot_Id', 'Package_Name', 'Focus_Group', 'Lead_Count'])
+                ->keyBy('Lot_Id');
+            $entryByLot = $entries->keyBy('lot_id');
+
+            $invalid = collect($lotIds)->unique()->filter(function ($lotId) use ($wipByLot, $entryByLot, $location) {
+                $wip = $wipByLot->get($lotId);
+                $entry = $entryByLot->get($lotId);
+                if (!$wip && !$entry) return true;   // unknown lot: reject
+                return PackageLocation::resolve(
+                    $wip?->Package_Name ?? $entry?->package_name,
+                    $wip?->Focus_Group,
+                    $wip?->Lead_Count,
+                ) !== $location;
+            });
 
             if ($invalid->isNotEmpty()) {
-                $list = $invalid
-                    ->map(fn($e) => "{$e->lot_id} ({$e->package_name})")
-                    ->implode(', ');
-
+                $list = $invalid->map(fn($id) => "{$id} (" . ($wipByLot->get($id)?->Package_Name ?? $entryByLot->get($id)?->package_name ?? 'unknown') . ")")->implode(', ');
                 abort(422, "Package location mismatch for bucket location {$location}: {$list}");
             }
 

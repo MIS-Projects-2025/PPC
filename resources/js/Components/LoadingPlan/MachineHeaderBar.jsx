@@ -1,7 +1,7 @@
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { Deferred } from "@inertiajs/react";
-import { createContext, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useId, useMemo, useRef, useState } from "react";
 import HoverCell from "./HoverCell";
 
 export const TableInteractionContext = createContext({
@@ -52,14 +52,21 @@ export function MachineHeaderBar({
 		expandedLocations, 
 		onToggleExpandLocations,
 		onRenameNonMachine, 
+        onAddLot,
+        onAddBlock,
 		onDeleteNonMachine,
     } = useContext(TableInteractionContext);
 
+    const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
+	const menuKey = String(toggleKey).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const popoverId = `mhb-menu-${menuKey}-${uid}`;
+    const anchorName = `--mhb-anchor-${menuKey}-${uid}`;
+    
     const machine = row?.machine;
 	const machineID = row?.machineId;
 	const machineLabel = row?.machineLabel;
-    const isUnassigned = (String (machineLabel)).toLowerCase() === "Unassigned" || machine === null;
+    const isUnassigned = machine === null || String(machineLabel ?? "").toLowerCase() === "unassigned";
     const isManual = machine === MACHINE_MANUAL;
     const isPseudo = isUnassigned || isManual;
 	const isNonMachine = row?.isNonMachine === true;
@@ -68,7 +75,6 @@ export function MachineHeaderBar({
 
 	const cancelRef = useRef(false);
 	// "nm:5" is not a valid CSS dashed-ident or safe popover id, so sanitize it
-	const menuKey = String(toggleKey).replace(/[^a-zA-Z0-9_-]/g, "_");
 
 	const commitName = (value) => {
 		const v = value.trim();
@@ -166,20 +172,34 @@ export function MachineHeaderBar({
                     
                     <button
                         className="btn"
-                        popoverTarget={`--${toggleKey}-machine-header-bar-menu-popover`}
-                        style={{
-                            anchorName: `--${toggleKey}-machine-header-bar-menu-anchor`
-                        }}
+                        popoverTarget={popoverId}
+                        style={{ anchorName }}
                     >
                         ⋮
                     </button>
 
-                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={`--${toggleKey}-machine-header-bar-menu-popover`} style={{ positionAnchor: `--${toggleKey}-machine-header-bar-menu-anchor` } /* as React.CSSProperties */ }>
+                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={popoverId} style={{ positionAnchor: anchorName }}>
                         {onAddBucket && machine !== null && (
                             <li>
                                 <button type="button" className="btn btn-sm"
                                     onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
                                     + Group
+                                </button>
+                            </li>
+                        )}
+                        {onAddLot && !isPseudo && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddLot(machine); }}>
+                                    + Lot
+                                </button>
+                            </li>
+                        )}
+                        {onAddBlock && !isPseudo && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddBlock(machine); }}>
+                                    + Block
                                 </button>
                             </li>
                         )}
@@ -194,7 +214,7 @@ export function MachineHeaderBar({
 						{canRename && (
 							<li>
 								<button type="button" className="btn btn-sm"
-									onClick={(e) => { e.stopPropagation(); document.getElementById(`--${menuKey}-machine-header-bar-menu-popover`)?.hidePopover?.(); setEditing(true); }}>
+									onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); setEditing(true); }}>
 									Rename
 								</button>
 							</li>

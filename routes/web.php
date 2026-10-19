@@ -179,7 +179,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
     Route::get('deemo', [LoadingPlanController::class, 'deemo'])->name('deemo');
-    Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine');
+    // Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine'); // deprecated
 
     Route::prefix('splits')->name('splits.')->group(function () {
         Route::post('/', [LoadingPlanSplitController::class, 'store'])->name('store');
@@ -356,7 +356,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     });
 
     // Package Capacity
-    Route::prefix('package-capacity')->name('api.package.capacity')->group(function () {
+    Route::prefix('package-capacity')->name('api.package.capacity.')->group(function () {
         Route::get('/get-trend', [PackageCapacityController::class, 'getTrend'])->name('getTrend');
         Route::middleware(ApiPermissionMiddleware::class . ':capacity_upload')->group(function () {
             Route::get('/insert',    [PackageCapacityController::class, 'storeCapacity'])->name('insert');

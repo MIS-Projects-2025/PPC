@@ -357,7 +357,6 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                 }
 
                 if (row?.is_scm === true) {
-                    console.log("LOG ~ columns.jsx:268 ~ getDynamicCellClass ~ row?.is_scm:", row?.is_scm);
                     classes.push("bg-red");
                 }
 

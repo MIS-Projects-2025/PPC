@@ -384,7 +384,7 @@ export default function SelectionToolbar({
                             aria-disabled={!!reasons.rework}
                             onClick={guard(reasons.rework, () => onRework(selectedRow))}
                         >
-                            Rework <kbd className="kbd rounded-sm kbd-xs">k</kbd>
+                            Rework <kbd className="kbd rounded-sm kbd-xs">r</kbd>
                         </button>
                     </div>
 
@@ -524,7 +524,7 @@ export default function SelectionToolbar({
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
                 parentLotId={selectedRow?.lot_id}
-                rootLotId={selectedRow?.split_info?.root_lot_id ?? selectedRow?.lot_id}
+                rootLotId={selectedRow?.split_info?.rootLotId ?? selectedRow?.lot_id}
                 totalQty={selectedRow?.qty}
                 takenLotIds={allData.map((r) => r.lot_id)}
                 onConfirm={({

@@ -137,38 +137,49 @@ export function useBucketOperations({
         [unparkRows, dataRows, selectedRows],
     );
 
-    const createBucket = useCallback(
-        async ({ label, machine = null }) => {
-            if (!beginWrite()) return false;
-
+    const createBucket = useCallback(async ({ label, machine = null }) => {
+        if (!beginWrite()) return false;
+        try {
             const bucket = await withUpdating(
                 mutate(route("loading-plan.buckets.store"), { body: { location: selectedLocation, label, machine } }),
             );
             setBucketList((prev) => [...prev, bucket]);
-        },
-        [withUpdating, beginWrite, mutate, selectedLocation, setBucketList],
-    );
+            return true;
+        } catch (err) {
+            console.error("Create group failed:", err);
+            toast?.error?.(err?.data?.message ?? "Couldn't create the group.");
+            return false;
+        }
+    }, [withUpdating, beginWrite, mutate, selectedLocation, setBucketList, toast]);
 
-    const renameBucket = useCallback(
-        async (id, label) => {
-            if (!beginWrite()) return;
-
-            const bucket = await withUpdating(mutate(route("loading-plan.buckets.update", { bucket: id }), { method: "PATCH", body: { label } }));
+    const renameBucket = useCallback(async (id, label) => {
+        if (!beginWrite()) return false;
+        try {
+            const bucket = await withUpdating(
+                mutate(route("loading-plan.buckets.update", { bucket: id }), { method: "PATCH", body: { label } }),
+            );
             setBucketList((prev) => prev.map((b) => (b.id === id ? bucket : b)));
-        },
-        [withUpdating, beginWrite, mutate, setBucketList],
-    );
+            return true;
+        } catch (err) {
+            console.error("Rename group failed:", err);
+            toast?.error?.(err?.data?.message ?? "Couldn't rename the group.");
+            return false;
+        }
+    }, [withUpdating, beginWrite, mutate, setBucketList, toast]);
 
-    const deleteBucket = useCallback(
-        async (id) => {
-            if (!beginWrite()) return;
-
+    const deleteBucket = useCallback(async (id) => {
+        if (!beginWrite()) return false;
+        try {
             await withUpdating(mutate(route("loading-plan.buckets.destroy", { bucket: id }), { method: "DELETE" }));
             setBucketList((prev) => prev.filter((b) => b.id !== id));
             update((prev) => prev.map((r) => (r.bucket_id === id ? { ...r, bucket_id: null, bucket_position: null } : r)), true);
-        },
-        [withUpdating, beginWrite, mutate, setBucketList, update],
-    );
+            return true;
+        } catch (err) {
+            console.error("Delete group failed:", err);
+            toast?.error?.(err?.data?.message ?? "Couldn't delete the group.");
+            return false;
+        }
+    }, [withUpdating, beginWrite, mutate, setBucketList, update, toast]);
 
     return { parkRows, unparkRows, handleBulkPark, handleBulkUnpark, createBucket, renameBucket, deleteBucket };
 }

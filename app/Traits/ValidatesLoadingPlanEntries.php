@@ -85,17 +85,21 @@ trait ValidatesLoadingPlanEntries
         return $dates->first();
     }
 
+    protected function editableEntryFields(): array
+    {
+        return ['status', 'remarks', 'tag', 'accu_time', 'is_manual_expedite', 'is_scm', 'block_label', 'qty', 'part_name'];
+    }
+
     /**
      * Prevents editing critical fields directly via editField.
      */
     protected function assertSupportedEditField(array $fields): void
     {
-        $unsupported = array_intersect(array_keys($fields), ['machine_id', 'lot_id', 'sequence_order']);
+        $unsupported = array_diff(array_keys($fields), $this->editableEntryFields());
 
         if (!empty($unsupported)) {
             throw new \InvalidArgumentException(
-                'editField cannot update ' . implode(', ', $unsupported)
-                    . ' — use moveEntry/transferEntry, which handle locking, reordering, and recalculation correctly.'
+                'Cannot edit field(s): ' . implode(', ', $unsupported)
             );
         }
     }

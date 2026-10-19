@@ -60,7 +60,7 @@ export function useCellEditPersistence({
                         withUpdating(
                             mutate(route("loading-plan.non-machines.start", { nonMachine: nonMachineId }), {
                                 method: "PATCH",
-                                body: { time_start: timeStart },
+                                body: { time_start: timeStart, scheduled_date: date },
                             }),
                         )
                             .then(({ affected_timings }) => applyAffectedTimings(update, affected_timings, date))
@@ -98,6 +98,11 @@ export function useCellEditPersistence({
             setIsDirty(true);
 
             const backendField = toSnakeCase(field);
+            const prevValue = prevRow[field];
+
+            const revertField = () =>
+                update((prev) => prev.map((r) => (r.id === changedRow.id ? { ...r, [field]: prevValue } : r)), true);
+
             withUpdating(
                 mutate(
                     route("loading-plan.entries.update", { id: prevRow.entry_id ?? 0 }),
@@ -130,13 +135,15 @@ export function useCellEditPersistence({
                             },
                         ]);
                         toast?.error?.("Someone else updated this lot — showing their latest value.");
-                    } else if (err.status === 422) {
-                        const firstError = Object.values(err.data?.errors ?? {})[0]?.[0];
-                        toast?.error?.(firstError ?? "That value isn't valid.");
-                    } else {
-                        console.error("Failed to save field edit:", err);
-                        toast?.error?.(err.data?.message ?? "Failed to save your change. Please try again.");
-                    }
+                        } else if (err.status === 422) {
+                            revertField();
+                            const firstError = Object.values(err.data?.errors ?? {})[0]?.[0];
+                            toast?.error?.(firstError ?? "That value isn't valid.");
+                        } else {
+                            revertField();
+                            console.error("Failed to save field edit:", err);
+                            toast?.error?.(err.data?.message ?? "Failed to save your change. Please try again.");
+                        }
                 });
         },
         [dataRows, displayRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],

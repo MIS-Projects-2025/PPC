@@ -84,10 +84,9 @@ export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTi
     const editedRow = machineRows[idx];
     const rowAbove = idxOfAbove >= 0 ? machineRows[idxOfAbove] : null;
 
-    console.log(
-        "LOG ~ loadingPlanSchedule.js:22 ~ applyTimeStartEdit ~ rowAbove:",
-        rowAbove,
-    );
+    if (rowAbove && !rowAbove.time_end) {
+        return { rows: null, error: "The previous row has no end time yet. Refresh and try again." };
+    }
 
     const referencePoint = rowAbove
         ? dayjs(referenceDate)
@@ -100,9 +99,15 @@ export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTi
     // row's own time_start currently falls on — not the page's viewed date.
     // This is what makes editing a leaked (yesterday) row interpret "22:00"
     // as yesterday's 22:00, not today's.
+    // const referenceDayOffset = rowAbove
+    //     ? (rowAbove.time_end_day_offset ?? 0)
+    //     : dayjs(baseTimes[machine]).startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+
     const referenceDayOffset = rowAbove
         ? (rowAbove.time_end_day_offset ?? 0)
-        : dayjs(baseTimes[machine]).startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+        : machineBaseDateTime(baseTimes, machine, referenceDate)
+            .startOf("day")
+            .diff(dayjs(referenceDate).startOf("day"), "day");
 
     const editedRowDayOffset =
         dayOffsetOverride ?? editedRow.time_start_day_offset ?? referenceDayOffset;
@@ -163,8 +168,10 @@ export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTi
         );
     } else {
         // First row on the machine: nothing above to stretch, so create the gap block.
+        const tempId = `entry-${generateId()}`;
         const newBlock = {
-            _dndId: `entry-${generateId()}`,
+            id: tempId,
+            _dndId: tempId,
             is_block: true,
             entry_type: "block",
             block_label: GAP_LABEL,

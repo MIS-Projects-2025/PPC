@@ -59,10 +59,11 @@ class NonMachineController extends Controller
     {
         $data = $request->validate([
             'time_start' => 'required|date_format:Y-m-d H:i:s',
+            'scheduled_date'      => ['required', 'date'],
         ]);
 
         try {
-            return response()->json($this->service->setNonMachineStart($nonMachine->id, $data['time_start']));
+            return response()->json($this->service->setNonMachineStart($nonMachine->id, $data['time_start'], $data['scheduled_date']));
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         }

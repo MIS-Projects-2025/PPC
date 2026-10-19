@@ -33,10 +33,16 @@ use Illuminate\Support\Facades\Cache;
 
 class LoadingPlanController extends Controller
 {
+    private const SCHEDULER_LOCK_TTL = 600; // expects that this is higher than the slowest run of the scheduler
+
+    private function schedulerLock(string $date)
+    {
+        return Cache::lock("scheduler-run-lock:{$date}", self::SCHEDULER_LOCK_TTL);
+    }
 
     public function deemo()
     {
-        return Inertia::render('Deemo', []);
+        return redirect()->route('loading-plan.index'); // renders with no props today and crashes
     }
 
     /**
@@ -105,7 +111,7 @@ class LoadingPlanController extends Controller
             'is_expedite'  => $row['isExpedite'] ?? false,
         ]);
 
-        $lock = Cache::lock("scheduler-run-lock:{$date}", 300);
+        $lock = $this->schedulerLock($date);
         if (!$lock->get()) {
             return response()->json(['error' => 'busy', 'message' => 'The scheduler is already running for this date.'], 423);
         }
@@ -134,14 +140,20 @@ class LoadingPlanController extends Controller
      */
     private function buildLoadingPlanProps(Request $request, bool $withBaseTimes = false): array
     {
+        $validated = $request->validate([
+            'date'     => ['nullable', 'date_format:Y-m-d'],
+            'location' => ['nullable', 'string', 'max:10'],
+        ]);
+
+        $date             = $validated['date'] ?? ShiftDay::current();
+        $selectedLocation = $validated['location'] ?? 'PL1';
+
         $isPartial = $request->header('X-Inertia-Partial-Data') !== null
             && $request->header('X-Inertia-Partial-Component') === 'Deemo';
 
         Probe::start('buildLoadingPlanProps ' . ($isPartial ? 'PARTIAL' : 'FULL'));
         $mark = fn($label) => Probe::mark($label);
 
-        $date             = $request->get('date', ShiftDay::current());
-        $selectedLocation = $request->get('location', 'PL1');
         $previousDate     = Carbon::parse($date)->subDay()->toDateString();
 
         // Needed by both the full load and the deferred follow-up
@@ -295,34 +307,39 @@ class LoadingPlanController extends Controller
 
     private function getBaseTimes($activeMachines, string $date): array
     {
-        return Cache::remember("lp:base-times:{$date}", 30, function () use ($activeMachines, $date) {
-            $targetDate = Carbon::parse($date)->toDateString();
-            $prevDate   = Carbon::parse($targetDate)->subDay()->toDateString();
-            $ids        = $activeMachines->pluck('id');
+        $targetDate = Carbon::parse($date)->toDateString();
+        $prevDate   = Carbon::parse($targetDate)->subDay()->toDateString();
+        $ids        = $activeMachines->pluck('id');
 
-            $leaked = LoadingPlanEntry::whereIn('machine_id', $ids)
-                ->where('scheduled_date', $prevDate)
-                ->where('time_end', '>=', $targetDate)
-                ->whereNotNull('time_start')
-                ->orderBy('sequence_order')
-                ->get()->groupBy('machine_id')->map->first();
+        $leaked = LoadingPlanEntry::whereIn('machine_id', $ids)
+            ->where('scheduled_date', $prevDate)
+            ->where('time_end', '>', $targetDate)
+            ->whereNotNull('time_start')
+            ->orderBy('sequence_order')
+            ->get()->groupBy('machine_id')->map->first();
 
-            $dayStarts = MachineDayStart::whereIn('machine_id', $ids)
-                ->where('scheduled_date', $targetDate)
-                ->pluck('day_start_time', 'machine_id');
+        $dayStarts = MachineDayStart::whereIn('machine_id', $ids)
+            ->where('scheduled_date', $targetDate)
+            ->pluck('day_start_time', 'machine_id');
 
-            return $activeMachines->mapWithKeys(function ($m) use ($leaked, $dayStarts, $targetDate) {
-                if ($l = $leaked->get($m['id'])) {
-                    return [$m['name'] => $l->time_start->format('Y-m-d H:i:s')];
-                }
-                // Still 1 query per machine. Send me findFirstRemainingRow and I'll batch it.
-                $first = LoadingPlanEntryService::findFirstRemainingRow($m['id'], $targetDate);
-                if ($first?->time_start) {
-                    return [$m['name'] => $first->time_start->format('Y-m-d H:i:s')];
-                }
-                return [$m['name'] => $targetDate . ' ' . ($dayStarts[$m['id']] ?? '00:00:00')];
-            })->all();
-        });
+        $firstToday = LoadingPlanEntry::whereIn('machine_id', $ids)
+            ->where('scheduled_date', $targetDate)
+            ->orderBy('machine_id')->orderBy('sequence_order')
+            ->get(['machine_id', 'sequence_order', 'time_start'])
+            ->groupBy('machine_id')->map->first();
+
+        $default = \App\Services\LotScheduleCalculator::MACHINE_DEFAULT_START;
+
+        return $activeMachines->mapWithKeys(function ($m) use ($leaked, $dayStarts, $firstToday, $targetDate, $default) {
+            if ($l = $leaked->get($m['id'])) {
+                return [$m['name'] => $l->time_start->format('Y-m-d H:i:s')];
+            }
+            $first = $firstToday->get($m['id']);
+            if ($first?->time_start) {
+                return [$m['name'] => $first->time_start->format('Y-m-d H:i:s')];
+            }
+            return [$m['name'] => $targetDate . ' ' . ($dayStarts[$m['id']] ?? $default)];
+        })->all();
     }
 
     public function transferCandidates(Request $request, SchedulerService $scheduler)
@@ -340,9 +357,8 @@ class LoadingPlanController extends Controller
         $allMachineIds = $compatibility->keys();
 
         $committedByMachine = $scheduler->getCommittedDoableByMachine($allMachineIds, $targetDate);
-        $capacityByMachine = $allMachineIds->mapWithKeys(
-            fn($id) => [$id => MachineCapacity::effectiveFor($id, $targetDate)?->capacity]
-        );
+        $capacityRows = MachineCapacity::effectiveForMany($allMachineIds, $targetDate);
+        $capacityByMachine = $allMachineIds->mapWithKeys(fn($id) => [$id => $capacityRows->get($id)?->capacity]);
         $machineNumById = QdnMachine::whereIn('id', $allMachineIds)->pluck('machine_num', 'id');
 
         $addedDoable = $lots->sum(fn($lot) => $scheduler->estimateCommit($lot) ?? 0);
@@ -408,14 +424,8 @@ class LoadingPlanController extends Controller
     {
         $date = $request->get('date', ShiftDay::current());
         $previousDate = Carbon::parse($date)->subDay()->toDateString();
-        $isVisitingYesterday = $date === ShiftDay::yesterday();
 
-        // if ($isVisitingYesterday) {
-        //     return back()->with('error', 'Cannot run scheduler on a past date.');
-        // }
-
-        $lockKey = "scheduler-run-lock:{$date}";
-        $lock = Cache::lock($lockKey, 60); // hold for max 60s
+        $lock = $this->schedulerLock($date);
 
         if (!$lock->get()) {
             return back()->with('error', 'Scheduler is already running for this location/date.');
@@ -432,11 +442,6 @@ class LoadingPlanController extends Controller
                     && $row['bucket_id'] === null   // <- new
                     && ($row['entry_id'] === null || $row['machine'] === null)
             )->values();
-
-            $unassignedWipOnly = $unassignedRows->filter(
-                fn($row) => $row['entry_id'] === null
-                    && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION
-            );
 
             $unassignedWipOnly = $unassignedRows->filter(
                 fn($row) => ($row['station'] ?? null) !== CustomerDataWip::RES_STATION
@@ -474,18 +479,25 @@ class LoadingPlanController extends Controller
 
             $schedulerService = app(\App\Services\SchedulerService::class);
             $schedulerResult = $schedulerService->rebuildForPickupArrival($pickup, Carbon::parse($date));
+            $pickupLotIds = collect($pickup)->pluck('lot_id')->filter()->unique()->values();
+
+            $assigned = LoadingPlanEntry::where('scheduled_date', $date)
+                ->where('entry_type', 'lot')
+                ->where('rework_seq', 0)
+                ->whereNotNull('machine_id')
+                ->whereIn('lot_id', $pickupLotIds)
+                ->distinct()
+                ->count('lot_id');
 
             SchedulerRun::create([
-                // 'location'          => $selectedLocation,
-                'location'          => "All",
-                'date'              => $date,
-                // 'user_id'           => auth()->id(),
-                'user_id'           => null,
-                'status'            => 'ok',
-                'pickup_count'      => count($pickup),
-                'assigned_count'    => count($pickup) - $schedulerResult['unassigned']->count(),
-                'unassigned_count'  => $schedulerResult['unassigned']->count(),
-                'unmatched_parts'   => $schedulerResult['unmatched_part_names']->values()->all(),
+                'location'         => 'All',
+                'date'             => $date,
+                'user_id'          => null,
+                'status'           => 'ok',
+                'pickup_count'     => count($pickup),
+                'assigned_count'   => $assigned,
+                'unassigned_count' => count($pickup) - $assigned,
+                'unmatched_parts'  => $schedulerResult['unmatched_part_names']->values()->all(),
             ]);
 
             if ($schedulerResult['unmatched_part_names']->isNotEmpty()) {

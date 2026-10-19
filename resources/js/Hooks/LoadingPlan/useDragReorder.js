@@ -166,7 +166,7 @@ export function useDragReorder({
 
             clearSelection();
 
-            update((prev) => {
+            const build = (prev) => {
                 const order = new Map(group.map((r, i) => [r.id, i]));
                 const next = prev.map((r) => ({ ...r }));
                 const idxOf = (id) => next.findIndex((r) => String(r.id) === String(id));
@@ -202,7 +202,12 @@ export function useDragReorder({
                 beforeEntryId = findMachineNeighbors(rest, moved[0]._dndId, toMachine).beforeEntryId;
                 afterEntryId = findMachineNeighbors(rest, moved[moved.length - 1]._dndId, toMachine).afterEntryId;
                 return rest;
-            });
+            };
+
+            const base = store.getState().present.rows;
+            const next = build(base);
+            if (next === base) return;
+            update(() => next);
 
             if (movedRows.length === 0) return;
             setIsDirty(true);
@@ -210,7 +215,9 @@ export function useDragReorder({
             withUpdating(
                 mutate(route("loading-plan.bulk-move"), {
                     body: {
-                        items: movedRows.map((r) => (r.entry_id ? { entry_id: r.entry_id } : { lot_id: r.lot_id })),
+                        items: movedRows.map((r) => (r.entry_id
+                            ? { entry_id: r.entry_id, lock_version: r.lock_version ?? null }
+                            : { lot_id: r.lot_id })),
                         target_machine: toMachine,
                         before_entry_id: beforeEntryId,
                         after_entry_id: afterEntryId,
@@ -263,8 +270,6 @@ export function useDragReorder({
 
             const overId = String(over.id);
 
-            console.log("LOG ~ useDragReorder.js:56 ~ useDragReorder ~ overId:", overId);
-            
             const draggedRowId = active.id;
 
             if (String(draggedRowId) === overId.replace("row-", "")) return;
@@ -320,7 +325,7 @@ export function useDragReorder({
 
             let pending = null;
 
-            update((prev) => {
+            const build = (prev) => {
                 const next = prev.map((r) => ({ ...r }));
                 const fromIndex = next.findIndex((r) => r.id === draggedRowId);
                 if (fromIndex === -1) return prev;
@@ -398,7 +403,12 @@ export function useDragReorder({
 
                 pending = { toMachine, isTransfer, moved, finalRows: next, leftBucket };
                 return next;
-            });
+            };
+
+            const base = store.getState().present.rows;
+            const next = build(base);
+            if (next === base) return;     // no-op drop
+            update(() => next);
 
             setIsDirty(true);
             if (!pending) return;
@@ -427,6 +437,7 @@ export function useDragReorder({
                             target_machine: toMachine,
                             before_entry_id: beforeEntryId,
                             after_entry_id: afterEntryId,
+                            lock_version: moved.lock_version ?? null,
                         },
                     })
                     : mutate(route("loading-plan.move"), {
@@ -436,6 +447,7 @@ export function useDragReorder({
                             before_entry_id: beforeEntryId,
                             after_entry_id: afterEntryId,
                             machine: toMachine,
+                            lock_version: moved.lock_version ?? null,
                         },
                     }),
             );

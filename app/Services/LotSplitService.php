@@ -126,6 +126,7 @@ class LotSplitService
                 'root_lot_id'      => $rootLotId,
                 'scheduled_date'   => $date,
                 'child_qty'        => $childQty,
+                'parent_qty_before' => $totalQty,
                 'split_percentage' => $percentage,
                 'target_machine'   => $targetMachine,
                 'source_machine'   => $parentEntry->getPlacementKey(),
@@ -341,7 +342,7 @@ class LotSplitService
 
             $loadingPlanService = new LoadingPlanService($date);
 
-            $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
+            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
 
             $childQuantity = LotQuantity::where('lot_id', $childEntry['lot_id'])
                 ->where('scheduled_date', $split->scheduled_date)

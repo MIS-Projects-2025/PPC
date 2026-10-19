@@ -17,6 +17,17 @@ class LotMergeService
 
     public function __construct() {}
 
+    private function lockedQuantities(string $date, array $lotIds): \Illuminate\Support\Collection
+    {
+        return LotQuantity::where('scheduled_date', $date)
+            ->where('rework_seq', 0)
+            ->whereIn('lot_id', $lotIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('lot_id');
+    }
+
     public function merge(int $entryIdA, int $entryIdB, ?string $createdBy): array
     {
         return DB::transaction(function () use ($entryIdA, $entryIdB, $createdBy) {
@@ -42,8 +53,9 @@ class LotMergeService
             }
 
             // Fetch LotQuantity records via LoadingPlanEntry attributes
-            $quantityA = $entryA->getQuantityRow();
-            $quantityB = $entryB->getQuantityRow();
+            $locked = $this->lockedQuantities($date, [$entryA->lot_id, $entryB->lot_id]);
+            $quantityA = $locked->get($entryA->lot_id);
+            $quantityB = $locked->get($entryB->lot_id);
 
             if (!$quantityA || !$quantityB) {
                 throw new InvalidMergeException("Both lots must have a resolvable quantity to merge.");
@@ -105,8 +117,8 @@ class LotMergeService
                 $sourceEntry->resolveRootLotId()
             );
 
-            $targetEnriched['merge_info'] = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $sourceLotId];
-            $sourceEnriched['merge_info'] = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $targetLotId];
+            $targetEnriched['merge_info'] = self::buildMergeMeta($targetLotId, null, null, $date);
+            $sourceEnriched['merge_info'] = self::buildMergeMeta($sourceLotId, null, null, $date);
 
             return [
                 'merge'  => $merge->fresh(),
@@ -126,10 +138,9 @@ class LotMergeService
 
             $this->assertDateNotFinalized($date);
 
-            $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)
-                ->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
-            $sourceQuantity = LotQuantity::where('lot_id', $merge->source_lot_id)
-                ->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $locked = $this->lockedQuantities($date, [$merge->target_lot_id, $merge->source_lot_id]);
+            $targetQuantity = $locked->get($merge->target_lot_id);
+            $sourceQuantity = $locked->get($merge->source_lot_id);
 
             if ($targetQuantity) {
                 $targetQuantity->update([
@@ -169,7 +180,7 @@ class LotMergeService
                     $targetEntry->fresh(),
                     $targetEntry->resolveRootLotId()
                 );
-                $targetEntry['merge_info'] = null;
+                $targetEntry['merge_info'] = self::buildMergeMeta($merge->target_lot_id, null, null, $date);
             }
 
             if ($sourceEntry) {
@@ -178,7 +189,7 @@ class LotMergeService
                     $sourceEntry->fresh(),
                     $sourceEntry->resolveRootLotId()
                 );
-                $sourceEntry['merge_info'] = null;
+                $sourceEntry['merge_info'] = self::buildMergeMeta($merge->source_lot_id, null, null, $date);
             }
 
             return [
@@ -199,8 +210,9 @@ class LotMergeService
             $this->assertDateNotFinalized($date);
 
             // re-apply the same qty transfer revert() undid
-            $targetQuantity = LotQuantity::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
-            $sourceQuantity = LotQuantity::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $locked = $this->lockedQuantities($date, [$merge->target_lot_id, $merge->source_lot_id]);
+            $targetQuantity = $locked->get($merge->target_lot_id);
+            $sourceQuantity = $locked->get($merge->source_lot_id);
 
             if (!$targetQuantity || !$sourceQuantity) {
                 throw new InvalidMergeException("Missing quantity record for one of these lots — can't restore merge.");
@@ -239,7 +251,7 @@ class LotMergeService
                     $targetEntry->fresh(),
                     $targetEntry->resolveRootLotId()
                 );
-                $targetEntry['merge_info'] = ['isTarget' => true, 'isSource' => false, 'mergeId' => $merge->id, 'mergedFrom' => $merge->source_lot_id];
+                $targetEntry['merge_info'] = self::buildMergeMeta($merge->target_lot_id, null, null, $date);
             }
 
             if ($sourceEntry) {
@@ -248,7 +260,7 @@ class LotMergeService
                     $sourceEntry->fresh(),
                     $sourceEntry->resolveRootLotId()
                 );
-                $sourceEntry['merge_info'] = ['isTarget' => false, 'isSource' => true, 'mergeId' => $merge->id, 'mergedInto' => $merge->target_lot_id];
+                $sourceEntry['merge_info'] = self::buildMergeMeta($merge->source_lot_id, null, null, $date);
             }
 
             return [
@@ -300,7 +312,7 @@ class LotMergeService
             'isSource'   => $asSource !== null,
             'mergeId'    => $asSource?->id ?? $mergesByTarget->get($lotId)?->first()?->id,
             'mergedInto' => $asSource?->target_lot_id ?? null,
-            'mergedFrom' => $asSource ?? $mergesByTarget->get($lotId)?->first()?->source_lot_id,
+            'mergedFrom' => $mergesByTarget->get($lotId)?->first()?->source_lot_id,
         ];
     }
 

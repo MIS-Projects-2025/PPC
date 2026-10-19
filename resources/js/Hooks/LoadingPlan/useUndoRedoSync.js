@@ -17,7 +17,7 @@ export function useUndoRedoSync({ store, withUpdating, isLocked, dataRows, date,
 
     const isSyncingRef = useRef(false);
 
-    const applyRowStep = useCallback(async (stepFn) => {
+    const applyRowStep = useCallback(async (stepFn, inverseFn) => {
         const prevSnapshot = dataRowsRef.current;
         stepFn(); // store's undo() or redo()
 
@@ -26,7 +26,8 @@ export function useUndoRedoSync({ store, withUpdating, isLocked, dataRows, date,
         const nextIds = new Set(nextSnapshot.map((r) => r._dndId));
         const deletedEntryIds = prevSnapshot.filter((r) => r.entry_id && !nextIds.has(r._dndId)).map((r) => r.entry_id);
 
-        await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast, deletedEntryIds, store.getState().syncServerFields);
+        const ok = await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast, deletedEntryIds, store.getState().syncServerFields);
+        if (ok === false) inverseFn();
     }, [store, date, update, mutate, toast]);
 
     const applyCompoundStep = useCallback(async (action, direction) => {
@@ -57,7 +58,7 @@ export function useUndoRedoSync({ store, withUpdating, isLocked, dataRows, date,
             console.error(`${action.type} ${targetState} failed:`, err);
             toast?.error?.(`Couldn't ${direction} that ${action.type}.`);
         }
-    }, [store, mutate, update, toast]);
+    }, [store, date, mutate, update, toast]);
 
     const applyHistoryStep = useCallback(async (direction) => {
         if (isSyncingRef.current || isLocked()) return;
@@ -71,7 +72,10 @@ export function useUndoRedoSync({ store, withUpdating, isLocked, dataRows, date,
             if (action?.type === "split" || action?.type === "merge") {
                 await withUpdating(applyCompoundStep(action, direction));
             } else {
-                await withUpdating(applyRowStep(direction === "undo" ? undo : redo));
+                await withUpdating(applyRowStep(
+                    direction === "undo" ? undo : redo,
+                    direction === "undo" ? redo : undo,
+                ));
             }
         } finally {
             isSyncingRef.current = false;

@@ -44,6 +44,18 @@ class LoadingPlanService
         return $r;
     }
 
+    private function ensureSplitsAndMerges(): void
+    {
+        if (!isset($this->splitsByParent)) {
+            $this->initSplitsAndMerges();
+        }
+    }
+
+    private function rootLotId(?string $lotId): ?string
+    {
+        return $lotId === null ? null : ($this->splitsByChild->get($lotId)?->root_lot_id ?? $lotId);
+    }
+
     /**
      * Keys createPlannedLot needs to find when $entry is passed as an array,
      * matching this method's own return shape (not the raw LoadingPlanEntry model).
@@ -182,7 +194,8 @@ class LoadingPlanService
         $this->todayWipRows = $this->getWipRowsForToday($this->selectedPackages);
         $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
         $this->todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot(
-            $this->todayLeakedPlannedLotEntries->pluck('lot_id')->all()
+            $this->todayLeakedPlannedLotEntries->pluck('lot_id')
+                ->map(fn($id) => $this->rootLotId($id))->unique()->values()->all()
         );
     }
 
@@ -191,7 +204,8 @@ class LoadingPlanService
         $this->todayPlannedLotEntries = LoadingPlanEntryService::getToday($this->date, $this->selectedPackages);
 
         $missingLotIds = $this->todayPlannedLotEntries
-            ->where('entry_type', 'lot')->pluck('lot_id')->filter()->unique()
+            ->where('entry_type', 'lot')->pluck('lot_id')->filter()
+            ->map(fn($id) => $this->rootLotId($id))->unique()
             ->reject(fn($id) => $this->todayWipRows->has($id))->values()->all();
 
         $this->extraTodayWipRows = empty($missingLotIds) ? collect() : CustomerDataWip::query()
@@ -229,25 +243,27 @@ class LoadingPlanService
 
         $allTodayWip = $this->todayWipRows->toBase()->union($this->extraTodayWipRows->toBase());
 
+        $wipFor = fn($lotId, $rows) => $rows->get($lotId) ?? $rows->get($this->rootLotId($lotId));
+
         $todayPlannedBlockEntries = $this->todayPlannedLotEntries->where('entry_type', 'block'); // remove filterLocation
         $todayLeakedPlannedBlockEntries = $this->todayLeakedPlannedLotEntries->where('entry_type', 'block'); // remove filterLocation
 
         // 3. Separate WIP-backed vs Manual Lot Entries via O(1) Lookups
         $todayWipPlannedEntries = $this->todayPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->filter(fn($e) => $allTodayWip->has($e->lot_id));
+            ->filter(fn($e) => $wipFor($e->lot_id, $allTodayWip) !== null);
 
         $todayManualPlannedEntries = $this->todayPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->reject(fn($e) => $allTodayWip->has($e->lot_id));
+            ->reject(fn($e) => $wipFor($e->lot_id, $allTodayWip) !== null);
 
         $todayLeakedWipPlannedEntries = $this->todayLeakedPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->filter(fn($entry) => $this->todayLeakedWipRows->has($entry->lot_id));
+            ->filter(fn($e) => $wipFor($e->lot_id, $this->todayLeakedWipRows) !== null);
 
         $todayLeakedManualPlannedEntries = $this->todayLeakedPlannedLotEntries
             ->where('entry_type', 'lot')
-            ->reject(fn($entry) => $this->todayLeakedWipRows->has($entry->lot_id));
+            ->reject(fn($e) => $wipFor($e->lot_id, $this->todayLeakedWipRows) !== null);
 
         $buildLotPayload = function (
             ?LoadingPlanEntry $entry = null,
@@ -288,11 +304,11 @@ class LoadingPlanService
 
         // 5. Transform All Groups via createPlannedLot
         $lotResults = $todayWipPlannedEntries
-            ->map(fn($entry) => $buildLotPayload($entry, $allTodayWip->get($entry->lot_id)));
+            ->map(fn($entry) => $buildLotPayload($entry, $wipFor($entry->lot_id, $allTodayWip)));
         Probe::mark('  lotResults createPlannedLot loop');
 
         $leakedLotResults = $todayLeakedWipPlannedEntries
-            ->map(fn($entry) => $buildLotPayload($entry, $this->todayLeakedWipRows->get($entry->lot_id)));
+            ->map(fn($entry) => $buildLotPayload($entry, $wipFor($entry->lot_id, $this->todayLeakedWipRows)));
         Probe::mark('  leakedLotResults loop');
 
         $manualLotResults = $todayLeakedManualPlannedEntries
@@ -437,6 +453,7 @@ class LoadingPlanService
         LoadingPlanEntry|array|null $entry,
         ?LotQuantity $quantity = null,
     ): array {
+        $this->ensureSplitsAndMerges();
         /*
         * Normalize $entry into an object so the rest of this method can
         * consistently use ->property regardless of whether the caller
@@ -479,6 +496,7 @@ class LoadingPlanService
             $entry = (object) $entryArray;
         }
 
+        $entryId = $entryIsArray ? ($entry->entry_id ?? null) : $entry?->id;
         $effectiveQty = $quantity?->effectiveQty() ?? $wipRow?->Qty ?? 0;
         $doable = $quantity?->commit;
         $doableStatus = $quantity?->recipe_status ?? 'unknown';
@@ -562,8 +580,14 @@ class LoadingPlanService
         * Array-shaped entries already contain H:i strings.
         * LoadingPlanEntry models may contain Carbon values.
         */
-        $startTime = $entry?->time_start ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_start)) : null;
-        $endTime   = $entry?->time_end   ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_end))   : null;
+        $startTime = $entryIsArray
+            ? ($entry->time_start_at ? Carbon::parse($entry->time_start_at) : null)
+            : ($entry?->time_start ? Carbon::parse($entry->time_start) : null);
+        $endTime = $entryIsArray
+            ? ($entry->time_end_at ? Carbon::parse($entry->time_end_at) : null)
+            : ($entry?->time_end ? Carbon::parse($entry->time_end) : null);
+        // $startTime = $entry?->time_start ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_start)) : null;
+        // $endTime   = $entry?->time_end   ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_end))   : null;
 
         $isLeaked = $scheduledDate === $this->previousDate;
 
@@ -572,7 +596,7 @@ class LoadingPlanService
             'package_group' => $packageGroup,
 
             // Entry Metadata
-            'entry_id'                   => $entry?->id,
+            'entry_id'                   => $entryId,
             'entry_type'                 => $entry?->entry_type,
 
             'is_block'                   => $isBlocked,
@@ -592,9 +616,9 @@ class LoadingPlanService
             'scheduled_date'             => $scheduledDate,
 
             // Lot & WIP Identifiers/Specs
-            'id'                         => $entry
-                ? 'entry-' . $entry->id
-                : 'wip-' . $wipRow->customer_data_id,
+            'id'                         => $entryId !== null
+                ? 'entry-' . $entryId
+                : 'wip-' . $wipRow?->customer_data_id,
 
             'part_name'                  => $wipRow?->Part_Name
                 ?? $quantity?->part_name

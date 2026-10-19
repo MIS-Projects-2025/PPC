@@ -86,7 +86,7 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
                                                 </span>
                                             )}
 
-                                            {!merge.revertedAt && (
+                                            {!merge.revertedAt && onRevert  && (
                                                 <button
                                                     type="button"
                                                     onClick={() => {

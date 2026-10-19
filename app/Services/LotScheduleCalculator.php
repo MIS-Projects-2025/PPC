@@ -14,14 +14,15 @@ use Carbon\Carbon;
 
 class LotScheduleCalculator
 {
-    private Collection $machinePlatforms; // machine_num => machine_platform
-    private Collection $machineNumById;
-    private Collection $capacityBands;    // platform => [ {qty_min, qty_max, capacity_uph}, ... ]
     private ?Collection $packageListByDeviceName = null;
     private array $dates;
     private array $lotIds;
     public const NON_MACHINE_DEFAULT_START = '06:00:00';
     public const MACHINE_DEFAULT_START = '06:00:00';
+
+    private ?Collection $machinePlatforms = null;
+    private ?Collection $machineNumById = null;
+    private ?Collection $capacityBands = null;
 
     public function nonMachineLaneStart(int $nonMachineId, string $date): Carbon
     {
@@ -40,6 +41,11 @@ class LotScheduleCalculator
      */
     public function recomputeNonMachineTimes(int $nonMachineId, string $date, ?Carbon $anchor = null): void
     {
+        // recomputeNonMachineTimes gets the same write path. Inside its loop, 
+        // replace the $current->time_start = …; $current->save(); 
+        // block with $changes[$current->id] = [$newStart->format('Y-m-d H:i:s'), 
+        // $newEnd->format('Y-m-d H:i:s')];, and call $this->writeTimings($changes); after the loop.
+
         $chain = LoadingPlanEntry::where('non_machine_id', $nonMachineId)
             ->where('scheduled_date', $date)
             ->orderBy('sequence_order')
@@ -55,6 +61,8 @@ class LotScheduleCalculator
             ?? $chain->first()->time_start
             ?? Carbon::parse("{$date} " . self::NON_MACHINE_DEFAULT_START))->copy();
 
+        $changes = [];
+
         foreach ($chain as $current) {
             $newStart = $cursor->copy();
             $newEnd = $cursor->copy()->addMinutes($current->accu_time ?? 0);
@@ -65,23 +73,33 @@ class LotScheduleCalculator
                 && $current->time_end->eq($newEnd);
 
             if (!$unchanged) {
-                $current->time_start = $newStart;
-                $current->time_end = $newEnd;
-                $current->save();
+                $changes[$current->id] = [$newStart->format('Y-m-d H:i:s'), $newEnd->format('Y-m-d H:i:s')];
             }
 
             $cursor = $newEnd;
         }
+
+        $this->writeTimings($changes);
+    }
+
+    private function platforms(): Collection
+    {
+        return $this->machinePlatforms ??= QdnMachine::pluck('machine_platform', 'machine_num');
+    }
+    private function machineNums(): Collection
+    {
+        return $this->machineNumById ??= QdnMachine::pluck('machine_num', 'id');
+    }
+    private function bands(): Collection
+    {
+        return $this->capacityBands ??= MachinePlatformCapacityBand::orderByDesc('qty_min')->get()->groupBy('platform');
     }
 
     public function __construct(array|Collection $dates = [], array|Collection $lotIds = [])
     {
-        $this->machinePlatforms = QdnMachine::pluck('machine_platform', 'machine_num');
-        $this->machineNumById = QdnMachine::pluck('machine_num', 'id');
-
-        $this->capacityBands = MachinePlatformCapacityBand::orderByDesc('qty_min')
-            ->get()
-            ->groupBy('platform');
+        $this->platforms();
+        $this->machineNums();
+        $this->bands();
 
         // Converts Collection or array into a plain array
         $this->dates = collect($dates)->all();
@@ -134,6 +152,11 @@ class LotScheduleCalculator
             ->unique()
             ->all();
 
+        if (empty($derivedPartNames) && !empty($this->lotIds) && !empty($this->dates)) {
+            $this->packageListByDeviceName = collect(); // nothing to look up; don't load the whole table
+            return $this;
+        }
+
         $query = PartName::query()->select('id', 'devicename', 'recipe', 'allocation');
 
         if (! empty($derivedPartNames)) {
@@ -163,7 +186,7 @@ class LotScheduleCalculator
             ? $lotEntryId
             : LoadingPlanEntry::findOrFail($lotEntryId);
 
-        $machineName = $machineId !== null ? $this->machineNumById->get($machineId) : null;
+        $machineName = $machineId !== null ? $this->machineNums()->get($machineId) : null;
 
         $this->recalculate($entry, $machineName, $newPartName);
 
@@ -180,12 +203,12 @@ class LotScheduleCalculator
             return;
         }
 
-        $this->recomputeTimeStartAndEnd($entry, $machineId, $anchor);
+        $this->recomputeTimeStartAndEnd($entry, $machineId, $anchor, true);
     }
 
     public function machineNumFor(int $id): string
     {
-        return $this->machineNumById->get($id) ?? null;
+        return $this->machineNums()->get($id);
     }
 
     /**
@@ -201,34 +224,19 @@ class LotScheduleCalculator
      * 
      * TODO: we can even just make affectedEntry into just all the entry starting from firts anchor towards the end
      */
-    public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, ?int $machineId, ?Carbon $anchor = null): void
-    {
+    public function recomputeTimeStartAndEnd(
+        LoadingPlanEntry $affectedEntry,
+        ?int $machineId,
+        ?Carbon $anchor = null,
+        bool $stopWhenStable = false,
+    ): void {
         if ($affectedEntry->non_machine_id !== null) {
             $this->recomputeNonMachineTimes($affectedEntry->non_machine_id, $affectedEntry->scheduled_date->toDateString());
             return;
         }
-
-        if ($machineId === null) {
-            return;
-        }
+        if ($machineId === null) return;
 
         $date = $affectedEntry->scheduled_date->toDateString();
-
-        $chain = LoadingPlanEntry::where('machine_id', $machineId)
-            ->where('scheduled_date', '>=', $affectedEntry->scheduled_date)
-            ->orderBy('scheduled_date')
-            ->orderBy('sequence_order')
-            ->orderBy('id') // tiebreaker
-            ->lockForUpdate()
-            ->get();
-
-        // Start from the affected entry; skip same-day rows that sort before it
-        $startIdx = $chain->search(fn($e) => $e->id === $affectedEntry->id);
-        if ($startIdx === false) {
-            return;
-        }
-        $chain = $chain->slice($startIdx)->values();
-
         $predecessor = $this->findPredecessor($affectedEntry);
         $dayStart = Carbon::parse($date)->startOfDay();
         $predecessorEnd = $predecessor?->time_end;
@@ -237,22 +245,67 @@ class LotScheduleCalculator
             ? $predecessorEnd->copy()
             : $this->resolveLaneStart($machineId, $date, $anchor);
 
-        foreach ($chain as $current) {
-            $newStart = $cursor;
-            $newEnd = (clone $cursor)->addMinutes($current->accu_time ?? 0);
+        $changes = [];
+        $currentDate = $date;
+        $fromSeq = $affectedEntry->sequence_order;
 
-            $unchanged = $current->time_start !== null
-                && $current->time_end !== null
-                && $current->time_start->eq($newStart)
-                && $current->time_end->eq($newEnd);
+        for ($daysWalked = 0; $daysWalked < 7; $daysWalked++) {
+            $chain = LoadingPlanEntry::where('machine_id', $machineId)
+                ->where('scheduled_date', $currentDate)
+                ->when($fromSeq !== null, fn($q) => $q->where('sequence_order', '>=', $fromSeq))
+                ->orderBy('sequence_order')->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id', 'scheduled_date', 'sequence_order', 'accu_time', 'time_start', 'time_end']);
 
-            if (!$unchanged) {
-                $current->time_start = $newStart;
-                $current->time_end = $newEnd;
-                $current->save();
+            foreach ($chain as $current) {
+                $newStart = $cursor->copy();
+                $newEnd = $cursor->copy()->addMinutes($current->accu_time ?? 0);
+
+                $unchanged = $current->time_start !== null && $current->time_end !== null
+                    && $current->time_start->eq($newStart) && $current->time_end->eq($newEnd);
+
+                if ($unchanged && $stopWhenStable) {
+                    break 2;
+                }
+                if (!$unchanged) {
+                    $changes[$current->id] = [$newStart->format('Y-m-d H:i:s'), $newEnd->format('Y-m-d H:i:s')];
+                }
+                $cursor = $newEnd;
             }
 
-            $cursor = $newEnd;
+            // the next day's rows only depend on this day if it ran past midnight
+            $nextDate = Carbon::parse($currentDate)->addDay();
+            if ($cursor->lt($nextDate->copy()->startOfDay())) break;
+
+            $currentDate = $nextDate->toDateString();
+            $fromSeq = null;
+        }
+
+        $this->writeTimings($changes);
+    }
+
+    private function writeTimings(array $changes): void   // [entry_id => [start, end]]
+    {
+        foreach (array_chunk($changes, 500, true) as $chunk) {
+            $startCases = $endCases = '';
+            $startBind = $endBind = [];
+            foreach ($chunk as $id => [$start, $end]) {
+                $startCases .= ' WHEN ? THEN ?';
+                array_push($startBind, $id, $start);
+                $endCases   .= ' WHEN ? THEN ?';
+                array_push($endBind, $id, $end);
+            }
+            $ids = array_keys($chunk);
+            $in = implode(',', array_fill(0, count($ids), '?'));
+
+            DB::update(
+                "UPDATE loading_plan_entries
+             SET time_start = CASE id{$startCases} END,
+                 time_end = CASE id{$endCases} END,
+                 updated_at = ?
+             WHERE id IN ({$in})",
+                [...$startBind, ...$endBind, now(), ...$ids]
+            );
         }
     }
 
@@ -285,10 +338,13 @@ class LotScheduleCalculator
             ?? $storedStart
             ?? Carbon::parse("{$date} " . self::MACHINE_DEFAULT_START);
 
-        DB::table('machine_day_starts')->updateOrInsert(
-            ['machine_id' => $machineId, 'scheduled_date' => $date],
-            ['day_start_time' => $start->format('H:i:s'), 'updated_at' => now()]
-        );
+        $formatted = $start->format('H:i:s');
+        if ($stored === null || substr((string) $stored, 0, 8) !== $formatted) {
+            DB::table('machine_day_starts')->updateOrInsert(
+                ['machine_id' => $machineId, 'scheduled_date' => $date],
+                ['day_start_time' => $formatted, 'updated_at' => now()]
+            );
+        }
 
         return $start;
     }
@@ -421,7 +477,7 @@ class LotScheduleCalculator
      * call in a tight loop (bulk placement). Requires loadPackageList()
      * already called.
      */
-    public function computeMetrics(string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null): array
+    public function computeMetrics(?string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null): array
     {
         if ($this->packageListByDeviceName === null) {
             throw new \LogicException(
@@ -429,7 +485,7 @@ class LotScheduleCalculator
             );
         }
 
-        $packageListRow = $this->packageListByDeviceName->get($partName);
+        $packageListRow = $partName === null ? null : $this->packageListByDeviceName->get($partName);
         $recipe = $packageListRow?->recipe;
         $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
 
@@ -518,7 +574,7 @@ class LotScheduleCalculator
             return null;
         }
 
-        $band = $this->capacityBands->get($platform, collect())
+        $band = $this->bands()->get($platform, collect())
             ->first(fn($b) => $qty >= $b->qty_min && ($b->qty_max === null || $qty <= $b->qty_max));
 
         if (!$band) {

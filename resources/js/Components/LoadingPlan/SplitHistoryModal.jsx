@@ -89,7 +89,7 @@ const SplitHistoryModal = forwardRef(function SplitHistoryModal(
                                                 </span>
                                             )}
 
-                                            {!split.revertedAt && (
+                                            {!split.revertedAt && onRevert && (
                                                 <button
                                                     type="button"
                                                     onClick={() => {

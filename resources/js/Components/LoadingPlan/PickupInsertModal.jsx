@@ -475,6 +475,9 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
     const lookupCacheRef = useRef({}); // partname -> details | null
     const inFlightRef = useRef(new Set());
 
+    const rowsRef = useRef(rows);
+    rowsRef.current = rows;
+
     const handleAddRowAtBottom = () => {
         const newId = nextRowIndex.current++;
         setRows((prevRows) => [
@@ -578,7 +581,7 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
 
             const startRow = Math.max(0, selectedPositionRef.current.rowIdx);
             const startCol = Math.max(0, selectedPositionRef.current.colIdx);
-            const pasteWidth = Math.max(...pasteGrid.map((line) => line.length));
+            const pasteWidth = pasteGrid.reduce((m, line) => Math.max(m, line.length), 0);
             const neededColumnCount = startCol + pasteWidth;
 
             const newColumns =
@@ -647,6 +650,17 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
                 [keyB]: row[keyA],
             })),
         );
+
+        setApiFilledCells((prev) => {
+            const next = new Set();
+            prev.forEach((entry) => {
+                const i = entry.lastIndexOf(":");
+                const rowId = entry.slice(0, i);
+                const col = entry.slice(i + 1);
+                next.add(col === keyA ? `${rowId}:${keyB}` : col === keyB ? `${rowId}:${keyA}` : entry);
+            });
+            return next;
+        });
     }, []);
 
     const handleDragEnd = useCallback(
@@ -742,46 +756,31 @@ const PickupInsertModal = forwardRef(function PickupInsertModal(
         [mapping],
     );
 
-    const applyLookupResults = useCallback(
-        (rowIds) => {
-            if (!partnameColKey) return;
-            const fieldColKeys = API_FILLABLE_FIELDS.map((field) => [
-                field,
-                findColKeyForField(field),
-            ]).filter(([, colKey]) => colKey);
+    const applyLookupResults = useCallback((rowIds) => {
+        if (!partnameColKey) return;
+        const fieldColKeys = API_FILLABLE_FIELDS
+            .map((field) => [field, findColKeyForField(field)])
+            .filter(([, colKey]) => colKey);
+        if (!fieldColKeys.length) return;
 
-            if (!fieldColKeys.length) return;
-
-            setRows((prevRows) =>
-                prevRows.map((row) => {
-                    if (!rowIds.includes(row.id)) return row;
-                    const pn = String(row[partnameColKey] || "").trim();
-                    const details = lookupCacheRef.current[pn];
-                    if (!details) return row;
-
-                    const updated = { ...row };
-                    const filledKeys = [];
-                    fieldColKeys.forEach(([field, colKey]) => {
-                        const current = String(updated[colKey] ?? "").trim();
-                        if (current === "" && details[field]) {
-                            updated[colKey] = String(details[field]);
-                            filledKeys.push(colKey);
-                        }
-                    });
-
-                    if (filledKeys.length) {
-                        setApiFilledCells((prevSet) => {
-                            const next = new Set(prevSet);
-                            filledKeys.forEach((colKey) => next.add(`${row.id}:${colKey}`));
-                            return next;
-                        });
-                    }
-                    return updated;
-                }),
-            );
-        },
-        [partnameColKey, findColKeyForField],
-    );
+        const filled = [];
+        const nextRows = rowsRef.current.map((row) => {
+            if (!rowIds.includes(row.id)) return row;
+            const details = lookupCacheRef.current[String(row[partnameColKey] || "").trim()];
+            if (!details) return row;
+            const updated = { ...row };
+            fieldColKeys.forEach(([field, colKey]) => {
+                if (String(updated[colKey] ?? "").trim() === "" && details[field]) {
+                    updated[colKey] = String(details[field]);
+                    filled.push(`${row.id}:${colKey}`);
+                }
+            });
+            return updated;
+        });
+        if (!filled.length) return;
+        setRows(nextRows);
+        setApiFilledCells((prev) => new Set([...prev, ...filled]));
+    }, [partnameColKey, findColKeyForField]);
 
     const lookupPartNames = useCallback(
         async (partNames, rowIds) => {

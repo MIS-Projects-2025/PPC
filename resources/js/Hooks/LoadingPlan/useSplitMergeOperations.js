@@ -129,7 +129,7 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
     );
 
     const revertMerge = useCallback(
-        ({ targetLotId, sourceLotId }, { onDone } = {}) => {
+        ({ mergeId: requestedMergeId, targetLotId, sourceLotId }, { onDone } = {}) => {
             if (!beginWrite()) return;
 
             const targetRow = dataRows.find((r) => r.lot_id === targetLotId);
@@ -138,7 +138,7 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
                 toast?.error?.("Couldn't find the lots to revert — please refresh.");
                 return;
             }
-            const mergeId = targetRow.merge_info?.mergeId;
+            const mergeId = requestedMergeId ?? targetRow.merge_info?.mergeId;
             if (!mergeId) {
                 toast?.error?.(`Couldn't find merge record for lot ${targetLotId} — please refresh.`);
                 return;
@@ -152,44 +152,22 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
             )
                 .then((result) => {
                     const { target, source } = result;
-                    update(
-                        (prev) => {
-                            const next = prev.map((row) => {
-                                if (row.lot_id === target.lot_id) {
-                                    return {
-                                        ...row,
-                                        qty: target.qty,
-                                        lock_version: target.lock_version,
-                                        merge_info: null,
-                                        doable: target.doable,
-                                        doable_status: target.doable_status,
-                                        capacity_uph: target.capacity_uph,
-                                    };
-                                }
-                                if (row.lot_id === source.lot_id) {
-                                    return {
-                                        ...row,
-                                        qty: source.qty,
-                                        lock_version: source.lock_version,
-                                        merge_info: null,
-                                        doable: source.doable,
-                                        doable_status: source.doable_status,
-                                        capacity_uph: source.capacity_uph,
-                                    };
-                                }
-                                return row;
-                            });
-                           
-                            return next;
-                        },
-                        false,
-                        { type: "merge", mergeId, resultingState: "reverted" },
-                    );
+                    update((prev) => prev.map((row) => {
+                        if (target && row.lot_id === target.lot_id) {
+                            return { ...row, qty: target.qty, lock_version: target.lock_version, merge_info: target.merge_info ?? null,
+                                doable: target.doable, doable_status: target.doable_status, capacity_uph: target.capacity_uph };
+                        }
+                        if (source && row.lot_id === source.lot_id) {
+                            return { ...row, qty: source.qty, lock_version: source.lock_version, merge_info: source.merge_info ?? null,
+                                doable: source.doable, doable_status: source.doable_status, capacity_uph: source.capacity_uph };
+                        }
+                        return row;
+                    }), false, { type: "merge", mergeId, resultingState: "reverted" });
                     applyAffectedTimings(update, result.affected_timings, date);
                     syncServerFields?.([
-                        { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },
-                        { dndId: `entry-${source.entry_id}`, fields: { lock_version: source.lock_version } },
-                    ]);
+                        target && { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },
+                        source && { dndId: `entry-${source.entry_id}`, fields: { lock_version: source.lock_version } },
+                    ].filter(Boolean));
                     setIsDirty(true);
                 })
                 .catch((err) => {
