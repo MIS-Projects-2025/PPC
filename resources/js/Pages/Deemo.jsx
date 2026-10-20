@@ -426,6 +426,12 @@ export default function Deemo({
         [dataRows, isOrphanRow],
     );
 
+    const tabItems = useMemo(() => [
+        "Unassigned", ALL_PACKAGES_TAB, RES_TAB, FOR_BAKE_TAB, PICKUP_TAB,
+        ...(orphanMachines.length ? [ORPHAN_TAB] : []),
+        ...(packageGroupNames ?? []),
+    ], [orphanMachines.length, packageGroupNames]);
+
     // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
     // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
 
@@ -434,7 +440,8 @@ export default function Deemo({
     const [isRunningScheduler, setIsRunningScheduler] = useState(false);
     const [highlightedMatch, setHighlightedMatch] = useState(null); // { rowId, columnKey }
 
-    const [activePackage, setActivePackage] = useState("LGA");
+    const [activePackage, setActivePackage] = useState(() =>
+        (packageGroupNames ?? []).includes("LGA") ? "LGA" : ALL_PACKAGES_TAB);
     const [selectedRows, setSelectedRows] = useState(() => new Set());
     const [selectedBakeRows, setSelectedBakeRows] = useState(() => new Set());
     // console.log("🚀 ~ Deemo ~ selectedRows:", selectedRows)
@@ -906,12 +913,11 @@ export default function Deemo({
             const trimmedPart = (partName ?? "").trim();
             if (!trimmedPart) return Promise.reject(new Error("Part name is required"));
 
-            const groupPkgs = packagesInGroup(activePackage, packageGroups);
-            const resolvedPackage = packageName || groupPkgs[0] || activePackage;
-
-            if ([ALL_PACKAGES_TAB, FOR_BAKE_TAB, PICKUP_TAB, ORPHAN_TAB].includes(activePackage) && !packageName) {
-                return Promise.reject(new Error("Pick a package for the new lot"));
-            }
+            const NON_PACKAGE_TABS = [ALL_PACKAGES_TAB, RES_TAB, FOR_BAKE_TAB, PICKUP_TAB, ORPHAN_TAB, "Unassigned"];
+            const onRealTab = !NON_PACKAGE_TABS.includes(activePackage);
+            const resolvedPackage =
+                packageName || (onRealTab ? (packagesInGroup(activePackage, packageGroups)[0] ?? activePackage) : null);
+            if (!resolvedPackage) return Promise.reject(new Error("Pick a package for the new lot"));
 
             return withUpdating(
                 mutate(route("loading-plan.manual-lots.store"), {
@@ -1636,6 +1642,38 @@ export default function Deemo({
         [displayRows],
     );
 
+    // ── Collapse / expand all machine sections on the current tab ────────
+    // Only real machines + non-machines + orphans. Unassigned and MANUAL are
+    // left alone (they're the working areas), and bucket headers are
+    // untouched since they're hidden along with their parent machine anyway.
+    const collapsibleMachineKeys = useMemo(
+        () =>
+            displayRows
+                .filter(
+                    (r) =>
+                        r.__type === "header" &&
+                        r.__headerKind !== "bucket" &&
+                        r.machine !== null &&
+                        r.machine !== MACHINE_MANUAL,
+                )
+                .map((r) => r.machine),
+        [displayRows],
+    );
+
+    const allMachinesCollapsed =
+        collapsibleMachineKeys.length > 0 &&
+        collapsibleMachineKeys.every((k) => collapsedMachines.has(k));
+
+    const toggleAllMachines = useCallback(() => {
+        setCollapsedMachines((prev) => {
+            const next = new Set(prev);
+            if (allMachinesCollapsed) collapsibleMachineKeys.forEach((k) => next.delete(k));
+            else collapsibleMachineKeys.forEach((k) => next.add(k));
+            return next;
+        });
+        setSelectedRows(new Set());
+    }, [allMachinesCollapsed, collapsibleMachineKeys, setCollapsedMachines]);
+
     const historyModalRef = useRef(null);
     const [historyEntryId, setHistoryEntryId] = useState(null);
 
@@ -2073,8 +2111,10 @@ export default function Deemo({
     }, [beginWrite, holdLock, mutate, date, toast, reportError]);
 
     useEffect(() => {
-        if (activePackage === ORPHAN_TAB && orphanMachines.length === 0) setActivePackage(ALL_PACKAGES_TAB);
-    }, [activePackage, orphanMachines.length]);
+        if (!tabItems.includes(activePackage)) goToTab(ALL_PACKAGES_TAB);
+    }, [tabItems, activePackage, goToTab]);
+
+    useEffect(() => { setSelectedDate(dayjs(date).toDate()); }, [date]);
 
     return (
         <div
@@ -2221,6 +2261,15 @@ export default function Deemo({
 
                                 <button
                                     className="btn btn-sm"
+                                    onClick={toggleAllMachines}
+                                    disabled={collapsibleMachineKeys.length === 0}
+                                    title={allMachinesCollapsed ? "Expand all machines" : "Collapse all machines"}
+                                >
+                                    {allMachinesCollapsed ? "▼ Expand all" : "► Collapse all"}
+                                </button>
+
+                                <button
+                                    className="btn btn-sm"
                                     onClick={() => document.getElementById("capacity_overview_modal")?.showModal()}
                                     title="Commit vs capacity for all machines"
                                 >
@@ -2288,16 +2337,7 @@ export default function Deemo({
                     {/* Row 2: package tabs (left) — dissemination / production line / idle machines (right) */}
                     <div className="flex flex-wrap justify-between gap-2">
                         <ScrollableTabs
-                            items={[
-                                "Unassigned",
-                                ALL_PACKAGES_TAB,
-                                RES_TAB,
-                                FOR_BAKE_TAB,
-                                PICKUP_TAB,
-                                ...(orphanMachines.length ? [ORPHAN_TAB] : []),
-                                ...packageGroupNames,
-                                // { value: "Bake", label: "Bake", icon: <PiOvenDuotone size={20} /> }, // might be deprecated
-                            ]}
+                            items={tabItems}
                             active={activePackage}
                             onChange={(pkg) => goToTab(pkg)}
                             storageKey="loadingPlan:packageTabs:active"

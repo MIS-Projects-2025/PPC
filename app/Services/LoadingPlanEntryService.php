@@ -119,11 +119,16 @@ class LoadingPlanEntryService
 
     private function resolveTarget(int|string|null $target): array
     {
-        $nonMachineId = NonMachine::idFromKey($target);
+        if ($target === null || $target === '') return [null, null];
 
-        return $nonMachineId !== null
-            ? [null, $nonMachineId]
-            : [$this->resolveMachineId($target), null];
+        $nonMachineId = NonMachine::idFromKey($target);
+        if ($nonMachineId !== null) return [null, $nonMachineId];
+
+        $machineId = $this->resolveMachineId($target);
+        if ($machineId === null || !in_array($machineId, array_map('intval', $this->machineIdByNum), true)) {
+            throw new \InvalidArgumentException("Target [{$target}] does not exist.");
+        }
+        return [$machineId, null];
     }
 
     private function assertNonMachineExists(int $nonMachineId): void

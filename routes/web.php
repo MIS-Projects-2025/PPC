@@ -25,6 +25,7 @@ use App\Http\Controllers\{
     LoadingPlanSettingsController,
     LoadingPlanPackageGroupController,
     MachineCapacityController,
+    MachinePlatformCapacityBandController,
     PartNameController,
     NonMachineController,
     PickupController,
@@ -151,6 +152,10 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::apiResource('machine-capacities', MachineCapacityController::class)
         ->parameters(['machine-capacities' => 'id'])
         ->names('machine-capacities');
+
+    Route::apiResource('capacity-bands', MachinePlatformCapacityBandController::class)
+        ->except(['show'])
+        ->parameters(['capacity-bands' => 'capacityBand']);
 
     Route::post('run-scheduler', [LoadingPlanController::class, 'runScheduler'])
         ->name('run-scheduler');

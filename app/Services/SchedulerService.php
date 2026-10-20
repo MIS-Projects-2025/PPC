@@ -2459,9 +2459,6 @@ class SchedulerService
      * NOTE: no reoptimization_runs/audit trail — accepted as-is per
      * current instructions, open entries are deleted outright.
      * 
-     * NOTE: on OCT 10, 2026, i might not use this at all. pickup arrival will be for user decision.
-     * so this might go stale for long
-     *
      * POTENTIAL BUG: rebuildForPickupArrival deletes every open hydrated entry and recreates only the placed ones. 
      * A manual is_pickup lot with no WIP row that ends up unassigned would lose its entry. Worth a test.
      * 

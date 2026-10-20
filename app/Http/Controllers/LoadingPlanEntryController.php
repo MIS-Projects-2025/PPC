@@ -558,6 +558,8 @@ class LoadingPlanEntryController extends Controller
                 'message'        => $e->getMessage(),
                 'scheduled_date' => $e->scheduledDate,
             ], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (\Throwable $e) {
             Log::error('batchSync failed', ['exception' => $e]);
             return response()->json([

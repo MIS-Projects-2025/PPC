@@ -32,7 +32,7 @@
 // ---------------------------------------------------------------------
 
 $targetDate = \Carbon\Carbon::parse('2026-09-01');
-$csvPath    = storage_path('app/ftproot/2026-10-12_08-30-01/daily_backend_wip.csv');
+$csvPath    = storage_path('app/ftproot/2026-10-19_12-00-03/daily_backend_wip.csv');
 
 $limit = null;   // max lots to schedule from the csv. null = all (slow!)
 
