@@ -20,6 +20,7 @@ class LotScheduleCalculator
     public const NON_MACHINE_DEFAULT_START = '06:00:00';
     public const MACHINE_DEFAULT_START = '06:00:00';
 
+    private ?Collection $travelerRecipes = null;
     private ?Collection $machinePlatforms = null;
     private ?Collection $machineNumById = null;
     private ?Collection $capacityBands = null;
@@ -125,6 +126,8 @@ class LotScheduleCalculator
      */
     public function loadPackageList(?array $partNames = null): static
     {
+        $this->travelerRecipes ??= app(RecipeService::class)->forLots($this->lotIds, $this->dates);
+
         if ($this->packageListByDeviceName !== null) {
             return $this; // already loaded, no-op
         }
@@ -166,6 +169,17 @@ class LotScheduleCalculator
         $this->packageListByDeviceName = $query->get()->keyBy('devicename');
 
         return $this;
+    }
+
+    private function travelerRecipeFor(LoadingPlanEntry $e): RecipeInfo
+    {
+        $this->travelerRecipes ??= collect();
+        if (!$this->travelerRecipes->has($e->lot_id)) {            // lazy fallback for lots added later
+            $this->travelerRecipes = $this->travelerRecipes->union(
+                app(RecipeService::class)->forLots([$e->lot_id], [$e->scheduled_date->toDateString()])
+            );
+        }
+        return $this->travelerRecipes->get($e->lot_id) ?? RecipeInfo::none(RecipeInfo::PROCESS_TRAVELER);
     }
 
     /**
@@ -477,7 +491,7 @@ class LotScheduleCalculator
      * call in a tight loop (bulk placement). Requires loadPackageList()
      * already called.
      */
-    public function computeMetrics(?string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null): array
+    public function computeMetrics(?string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null, ?RecipeInfo $recipeInfo = null): array
     {
         if ($this->packageListByDeviceName === null) {
             throw new \LogicException(
@@ -485,8 +499,14 @@ class LotScheduleCalculator
             );
         }
 
-        $packageListRow = $partName === null ? null : $this->packageListByDeviceName->get($partName);
-        $recipe = $packageListRow?->recipe;
+        if ($recipeInfo === null) {                      // F1/F2: unchanged behaviour
+            $row = $partName === null ? null : $this->packageListByDeviceName->get($partName);
+            $recipeInfo = $row
+                ? new RecipeInfo($row->recipe, $row->allocation, RecipeInfo::PACKAGE_LIST, $row->id)
+                : RecipeInfo::none();
+        }
+
+        $recipe = $recipeInfo->recipe;
         $commit = ($recipe && $recipe > 0) ? (int) floor($effectiveQty / $recipe) * $recipe : null;
 
         $recipeStatus = match (true) {
@@ -497,7 +517,7 @@ class LotScheduleCalculator
 
         // get the ramp time from customer data wip
 
-        if ($this->isTubeOrTrayAllocation($packageListRow?->allocation)) {
+        if ($this->isTubeOrTrayAllocation($recipeInfo->allocation)) {
             $commit = (int) floor($effectiveQty * 0.95);
             $recipeStatus = 'ok';
         }
@@ -510,7 +530,7 @@ class LotScheduleCalculator
 
         return [
             'recipe_used' => $recipe,
-            'recipe_source_id' => $packageListRow?->id,
+            'recipe_source_id'   => $recipeInfo->sourceId,
             'commit' => $commit,
             'recipe_status' => $recipeStatus,
             'capacity_uph_snapshot' => $capacityUph,
@@ -544,11 +564,13 @@ class LotScheduleCalculator
             $lotQuantity->commit_override_qty = null;
         }
 
+        $recipeInfo = ($entry->source ?? 'wip') === 'f3' ? $this->travelerRecipeFor($entry) : null;
         $metrics = $this->computeMetrics(
             $lotQuantity->part_name,
             $effectiveQty,
             $machineName,
-            $lotQuantity->commit_override
+            $lotQuantity->commit_override,
+            $recipeInfo
         );
 
         $lotQuantity->recipe_used = $metrics['recipe_used'];
@@ -556,6 +578,7 @@ class LotScheduleCalculator
         $lotQuantity->commit = $metrics['commit'];
         $lotQuantity->recipe_status = $metrics['recipe_status'];
         $lotQuantity->capacity_uph_snapshot = $metrics['capacity_uph_snapshot'];
+        $lotQuantity->recipe_source_type = $metrics['recipe_source_type'];
         $lotQuantity->save();
 
         if ($entry->non_machine_id === null) {

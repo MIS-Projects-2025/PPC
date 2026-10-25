@@ -1725,6 +1725,8 @@ class SchedulerService
      */
     protected function hydrateLotForTransfer(LoadingPlanEntry $entry, ?CustomerDataWip $wip): ?object
     {
+        if (($entry->source ?? 'wip') === 'f3') return null;
+
         if ($wip) {
             return $this->hydrateLotFromEntry($entry, $wip);
         }
@@ -1851,6 +1853,8 @@ class SchedulerService
 
     protected function hydrateLotFromEntry(LoadingPlanEntry $entry, ?CustomerDataWip $wip): ?object
     {
+        if (($entry->source ?? 'wip') === 'f3') return null;
+
         $lotQty = $entry->lotQuantity;
         $formulas = LoadingPlanFormulas::make($wip);
 

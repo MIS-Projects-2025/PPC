@@ -78,8 +78,8 @@ class LotSplitService
                 ) {
                     throw new InvalidSplitException("Child lot ID must start with {$rootLotId} and add a suffix.");
                 }
-                if (CustomerDataWip::where('Lot_Id', $customChildLotId)->exists()) {
-                    throw new InvalidSplitException("[{$customChildLotId}] already exists in WIP.");
+                if (app(LotSourceService::class)->lotIdTaken($customChildLotId)) {
+                    throw new InvalidSplitException("[{$customChildLotId}] already exists in WIP or travelers.");
                 }
             }
 
@@ -97,6 +97,7 @@ class LotSplitService
             // uses — no duplicated logic, no risk of drifting behavior.
             $childEntry = LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
+                'source'         => $parentEntry->source ?? 'wip',
                 'lot_id'         => $childLotId,
                 'package_name'   => $parentAttrs['package_name'],
                 'scheduled_date' => $date,
@@ -111,6 +112,21 @@ class LotSplitService
             );
 
             $childEntryId = $childEntry->getKey();
+
+            $split = LotSplit::create([
+                'parent_lot_id' => $parentEntry->lot_id,
+                'child_lot_id' => $childLotId,
+                'root_lot_id' => $rootLotId,
+                'scheduled_date' => $date,
+                'child_qty' => $childQty,
+                'parent_qty_before' => $totalQty,
+                'split_percentage' => $percentage,
+                'target_machine' => $targetMachine,
+                'source_machine' => $parentEntry->getPlacementKey(),
+                'sequence_order_at_split' => 0,
+                'created_by' => $createdBy,
+            ]);
+
             $childEntry = $this->entryService->transferEntry(
                 'lot',
                 $childEntryId,
@@ -118,21 +134,10 @@ class LotSplitService
                 $beforeEntryId,
                 $afterEntryId,
             );
+
             unset($childEntry['affected_timings']);
 
-            $split = LotSplit::create([
-                'parent_lot_id'    => $parentEntry->lot_id,
-                'child_lot_id'     => $childLotId,
-                'root_lot_id'      => $rootLotId,
-                'scheduled_date'   => $date,
-                'child_qty'        => $childQty,
-                'parent_qty_before' => $totalQty,
-                'split_percentage' => $percentage,
-                'target_machine'   => $targetMachine,
-                'source_machine'   => $parentEntry->getPlacementKey(),
-                'sequence_order_at_split' => $childEntry['sequence_order'],
-                'created_by'       => $createdBy,
-            ]);
+            $split->update(['sequence_order_at_split' => $childEntry['sequence_order']]);
 
             $loadingPlanService = new LoadingPlanService($date);
 
@@ -312,6 +317,7 @@ class LotSplitService
 
             $childEntry = LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
+                'source'         => $parentEntry->source ?? 'wip',
                 'lot_id'         => $split->child_lot_id,
                 'package_name'   => $parentEntry->package_name,
                 'scheduled_date' => $split->scheduled_date,
@@ -331,6 +337,8 @@ class LotSplitService
                 $split->sequence_order_at_split,
             );
 
+            $split->update(['reverted_at' => null, 'reverted_by' => null]);
+
             $childEntry = $this->entryService->transferEntry(
                 'lot',
                 $childEntry->getKey(),
@@ -348,8 +356,6 @@ class LotSplitService
                 ->where('scheduled_date', $split->scheduled_date)
                 ->where('rework_seq', 0)
                 ->first();
-
-            $split->update(['reverted_at' => null, 'reverted_by' => null]);
 
             $this->recalculateParentQty($parentEntry);
 
@@ -569,10 +575,7 @@ class LotSplitService
         $wip = null;
 
         if (!$packageName || !$quantity) {
-            $wip = CustomerDataWip::query()
-                ->where('Lot_Id', $lotId)
-                ->whereDate('import_date', $date)
-                ->first();
+            $wip = app(LotSourceService::class)->forEntry($entry);
 
             log_entities($wip);
 
@@ -619,10 +622,7 @@ class LotSplitService
     {
         log_entities($entry);
 
-        $qty = CustomerDataWip::query()
-            ->forDate($entry->scheduled_date)
-            ->where('Lot_Id', $entry->lot_id)
-            ->value('Qty');
+        $qty = app(LotSourceService::class)->forEntry($entry)?->Qty;
 
         // TOOD: check if you need the entry->schedule_date instead of just taking the lates
         // $qty = CustomerDataWip::query()

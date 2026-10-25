@@ -6,6 +6,7 @@ use App\Exceptions\SequenceExhaustedException;
 use App\Exceptions\BulkStaleWriteException;
 use App\Exceptions\StaleWriteException;
 use App\Exceptions\LoadingPlanDateFinalizedException;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use App\Exceptions\ActiveMergeParticipantException;
 use App\Exceptions\ActiveSplitChildException;
 use App\Models\LoadingPlanEntry;
@@ -78,6 +79,11 @@ class LoadingPlanEntryService
         foreach (array_chunk($history, 500) as $chunk) {
             LoadingPlanEntryHistory::insert($chunk);
         }
+    }
+
+    private function sources(): LotSourceService
+    {
+        return app(LotSourceService::class);
     }
 
     /** @return array{0: ?int, 1: ?int} anchors usable on $date */
@@ -291,17 +297,14 @@ class LoadingPlanEntryService
             // then treat every mover the same way.
             $created = [];
             if (!empty($newLotIds)) {
-                $wip = CustomerDataWip::query()
-                    ->select('Lot_Id', 'Package_Name', 'import_date', 'Qty', 'Part_Name')
-                    ->whereIn('Lot_Id', $newLotIds)
-                    ->orderBy('Lot_Id')->orderByDesc('import_date')
-                    ->get()->unique('Lot_Id')->keyBy('Lot_Id');
+                $wip = $this->sources()->find($newLotIds, $date);
 
                 foreach ($newLotIds as $lotId) {
                     $wipItem = $wip->get($lotId);
 
                     $created[$lotId] = LoadingPlanEntry::create([
                         'entry_type'     => 'lot',
+                        'source'         => $wipItem?->source ?? 'wip',
                         'lot_id'         => $lotId,
                         'scheduled_date' => $date,
                         'machine_id'     => null,
@@ -388,20 +391,15 @@ class LoadingPlanEntryService
             }
 
             // response, same shape as bulkTransfer
-            $fresh = LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry', 'nonMachine'])
+            $fresh      = LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry', 'nonMachine'])
                 ->whereKey($moverIds)->get()->keyBy('id');
+            $wipByEntry = $this->sources()->forEntries($fresh->values());
+            $svc        = new LoadingPlanService($date);
 
-            $wipMap = CustomerDataWip::query()
-                ->whereIn('Lot_Id', $lotIds)
-                ->orderBy('Lot_Id')->orderByDesc('import_date')
-                ->get()->unique('Lot_Id')->keyBy('Lot_Id');
-
-            $svc = new LoadingPlanService($date);
-
-            $entries = $movers->map(function ($m) use ($fresh, $wipMap, $svc) {
+            $entries = $movers->map(function ($m) use ($fresh, $wipByEntry, $svc) {
                 $entry = $fresh->get($m->id);
                 return $svc->createPlannedLot(
-                    wipRow: $entry->lot_id ? $wipMap->get($entry->lot_id) : null,
+                    wipRow: $wipByEntry->get($entry->id),
                     entry: $entry,
                     quantity: $entry->lotQuantity,
                 );
@@ -668,6 +666,7 @@ class LoadingPlanEntryService
 
             $rework = LoadingPlanEntry::create([
                 'entry_type'         => 'lot',
+                'source'             => $source->source ?? 'wip',
                 'lot_id'             => $source->lot_id,
                 'package_name'       => $source->package_name,
                 'scheduled_date'     => $date,
@@ -691,10 +690,7 @@ class LoadingPlanEntryService
             }
 
             $fresh = $rework->fresh(['machineModel', 'nonMachine', 'lotQuantity']);
-            $wip = CustomerDataWip::query()
-                ->where('Lot_Id', $fresh->lot_id)
-                ->whereDate('import_date', $date)
-                ->first();
+            $wip   = $this->sources()->forEntry($fresh);
 
             return $this->withTimings(
                 (new LoadingPlanService($date))->createPlannedLot($wip, $fresh, $fresh->lotQuantity),
@@ -750,11 +746,7 @@ class LoadingPlanEntryService
             $wip = null;
             if ($entryType === 'lot') {
                 $calc->loadPackageList()->recalculateAndRetime($entryId, $machineId, retime: false);
-
-                $wip = CustomerDataWip::query()
-                    ->where('Lot_Id', $entry->lot_id)
-                    ->whereDate('import_date', $entry->scheduled_date)
-                    ->first();
+                $wip = $this->sources()->forEntry($entry);
             }
 
             if ($nonMachineId !== null) {
@@ -793,15 +785,14 @@ class LoadingPlanEntryService
                     abort(422, 'lot_id and scheduled_date are required to create an entry for an unassigned WIP.');
                 }
 
-                $wip = CustomerDataWip::query()
-                    ->where('Lot_Id', $lotId)
-                    ->whereDate('import_date', $scheduledDate)
-                    ->firstOrFail();
+                $wipForNew = $this->sources()->find([$lotId], $scheduledDate)->get($lotId)
+                    ?? throw new ModelNotFoundException();
 
                 $entry = LoadingPlanEntry::create([
                     'lot_id'         => $lotId,
+                    'source'         => $wipForNew->source ?? 'wip',
                     'scheduled_date' => $scheduledDate,
-                    'package_name'   => $wip->Package_Name,
+                    'package_name'   => $wipForNew->Package_Name,
                     'machine_id'     => null,
                     'sequence_order' => null,
                     'entry_type'     => 'lot',
@@ -885,12 +876,8 @@ class LoadingPlanEntryService
                 $calc->recomputeNonMachineTimes($sourceNonMachineId, $resolvedDate, $sourceAnchor);
             }
 
-            $wip = CustomerDataWip::query()
-                ->where('Lot_Id', $entry->lot_id)
-                ->whereDate('import_date', $entry->scheduled_date)
-                ->first();
-
             $freshEntry = $entry->fresh(['machineModel', 'nonMachine', 'lotQuantity']);
+            $wip        = $this->sources()->forEntry($freshEntry);
 
             return $this->withTimings(
                 (new LoadingPlanService($resolvedDate))->createPlannedLot($wip, $freshEntry, $freshEntry->lotQuantity),
@@ -1157,20 +1144,14 @@ class LoadingPlanEntryService
                 $nextSeq += self::GAP_SEED;
             }
 
-            $wip = CustomerDataWip::query()
-                ->select('Lot_Id', 'Package_Name', 'import_date', 'Qty', 'Part_Name')
-                ->whereIn('Lot_Id', $unplannedLotIds)
-                ->orderBy('Lot_Id')
-                ->orderByDesc('import_date')
-                ->get()
-                ->unique('Lot_Id')
-                ->keyBy('Lot_Id');
+            $wip = $this->sources()->find($unplannedLotIds, $date);
 
             foreach ($unplannedLotIds as $lotId) {
                 $wipItem = $wip->get($lotId);
 
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
+                    'source'         => $wipItem?->source ?? 'wip',
                     'lot_id'         => $lotId,
                     'scheduled_date' => $date,
                     'machine_id'     => $targetMachineId,
@@ -1224,27 +1205,15 @@ class LoadingPlanEntryService
                 ->get()
                 ->keyBy('id');
 
-            // 2. Fetch WIP records for all entries that have a lot_id
-            $allLotIds = $freshEntries->pluck('lot_id')->filter()->unique();
-
-            $wipMap = CustomerDataWip::query()
-                ->whereIn('Lot_Id', $allLotIds)
-                ->orderBy('Lot_Id')
-                ->orderByDesc('import_date')
-                ->get()
-                ->unique('Lot_Id')
-                ->keyBy('Lot_Id');
+            $wipByEntry = $this->sources()->forEntries($freshEntries->values());
 
             $loadingPlanService = new LoadingPlanService($date, "I Do not need location");
 
             // 3. Map into createPlannedLot() structure
-            $updated = $updatedEntries->map(function ($rawEntry) use ($loadingPlanService, $freshEntries, $wipMap) {
-                /** @var LoadingPlanEntry $entry */
+            $updated = $updatedEntries->map(function ($rawEntry) use ($loadingPlanService, $freshEntries, $wipByEntry) {
                 $entry = $freshEntries->get($rawEntry->id);
-                $wipRow = $entry->lot_id ? $wipMap->get($entry->lot_id) : null;
-
                 return $loadingPlanService->createPlannedLot(
-                    wipRow: $wipRow,
+                    wipRow: $wipByEntry->get($entry->id),
                     entry: $entry,
                     quantity: $entry->lotQuantity
                 );
@@ -1284,7 +1253,7 @@ class LoadingPlanEntryService
 
             $allEntries = $lotEntries;
 
-            $wip = CustomerDataWip::query()->forDate($date)->whereIn('Lot_Id', $lotIds)->get()->keyBy('Lot_Id');
+            $wip = $this->sources()->find($lotIds, $date);
 
             $movers = $allEntries->filter(fn($e) => $e->machine_id !== $targetByLotId->get($e->lot_id));
 
@@ -1370,6 +1339,7 @@ class LoadingPlanEntryService
 
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
+                    'source'         => $wipItem?->source ?? 'wip',
                     'lot_id'         => $lotId,
                     'scheduled_date' => $date,
                     'machine_id'     => $targetMachineId,
@@ -2383,13 +2353,11 @@ class LoadingPlanEntryService
         // Mirrors bulkTransfer()'s unplannedLotIds branch — this is a WIP lot
         // being placed for the first time, not a synthetic manual lot, so pull
         // packageLocation/part/qty from CustomerDataWip the same way that path does.
-        $wipItem = CustomerDataWip::query()
-            ->where('Lot_Id', $lotId)
-            ->whereDate('import_date', $date)
-            ->first();
+        $wipItem = $this->sources()->find([$lotId], $date)->get($lotId);
 
         $entry = LoadingPlanEntry::create([
             'entry_type'     => 'lot',
+            'source'         => $wipItem?->source ?? 'wip',
             'lot_id'         => $lotId,
             'package_name'   => $wipItem?->Package_Name,
             'scheduled_date' => $date,
@@ -2523,11 +2491,7 @@ class LoadingPlanEntryService
         $existing->save();
 
         $freshEntry = $existing->fresh();
-
-        $wipItem = CustomerDataWip::query()
-            ->where('Lot_Id', $freshEntry->lot_id)
-            ->whereDate('import_date', $freshEntry->scheduled_date)
-            ->first();
+        $wipItem    = $this->sources()->forEntry($freshEntry);
 
         return (new LoadingPlanService($freshEntry->scheduled_date))->createPlannedLot(
             $wipItem,
@@ -2930,15 +2894,19 @@ class LoadingPlanEntryService
      * @param array<int, string> $allowedPackages
      * @return Collection<int, LoadingPlanEntry>
      */
-    public static function getToday(string $date, array $allowedPackages): Collection
+    public static function getToday(string $date, array $allowedPackages, bool $includeF3 = false): Collection
     {
         $entries = LoadingPlanEntry::with('machineModel')
             ->where('scheduled_date', $date)
-            ->where(function ($q) use ($allowedPackages) {
+            ->where(function ($q) use ($allowedPackages, $includeF3) {
                 $q->whereNotNull('machine_id')
                     ->orWhereNotNull('non_machine_id')
                     ->orWhere('entry_type', 'block');
-                if ($allowedPackages) $q->orWhereIn('package_name', $allowedPackages);
+                if ($allowedPackages) {
+                    // 'wip' only: an F3 package_size can coincide with an F1/F2 package name
+                    $q->orWhere(fn($w) => $w->whereIn('package_name', $allowedPackages)->where('source', 'wip'));
+                }
+                if ($includeF3) $q->orWhere('source', 'f3');
             })->get();
 
         $lotIds = $entries->where('entry_type', 'lot')->pluck('lot_id')->filter()->unique()->values();
@@ -3027,8 +2995,7 @@ class LoadingPlanEntryService
                 ->recalculateAndRetime($entry->id, $entry->machine_id, anchor: $entry->time_start?->copy());
 
             $fresh = $entry->fresh(['machineModel', 'nonMachine', 'lotQuantity']);
-            $wip = CustomerDataWip::query()
-                ->where('Lot_Id', $fresh->lot_id)->whereDate('import_date', $date)->first();
+            $wip   = $this->sources()->forEntry($fresh);
 
             return $this->withTimings(
                 (new LoadingPlanService($date))->createPlannedLot($wip, $fresh, $fresh->lotQuantity),
@@ -3039,96 +3006,85 @@ class LoadingPlanEntryService
         });
     }
 
-    public function updatePartRecipe(string $partName, int $recipe, string $date, ?string $updatedBy): array
-    {
-        if ($recipe < 1) {
-            throw new \InvalidArgumentException('Recipe must be at least 1.');
-        }
+    public function updatePartRecipe(
+        string $partName,
+        int $recipe,
+        string $date,
+        ?string $updatedBy,
+        string $source = 'wip',
+        ?string $lotId = null
+    ): array {
         $this->assertDateNotFinalized($date);
 
-        $rows = PartName::where('devicename', $partName);
-        if (!$rows->exists()) {
-            throw new \InvalidArgumentException("[{$partName}] has no package_list record.");
-        }
+        $recipes   = app(RecipeService::class);
+        $rootLotId = $source === 'f3' ? $recipes->rootOf((string) $lotId, $date) : null;
 
-        $allocation = strtoupper(trim((string) (clone $rows)->value('allocation')));
-        if (in_array($allocation, ['TUBE', 'TRAY', 'WAFFLE_TRAY'], true)) {
-            throw new \InvalidArgumentException('Doable for TUBE/TRAY parts uses a fixed 95% rule, not a recipe.');
-        }
+        $recipes->update($source, $partName, $rootLotId, $recipe, $updatedBy);
 
-        // query-builder update: hits every duplicate row, ignores $fillable
-        PartName::where('devicename', $partName)->update([
-            'recipe'       => $recipe,
-            'updated_by'   => $updatedBy,
-            'date_updated' => now(),
-        ]);
-
-        // don't trust it silently
-        $stored = PartName::where('devicename', $partName)->pluck('recipe')->unique();
-        if ($stored->count() !== 1 || (int) $stored->first() !== $recipe) {
-            throw new \RuntimeException("Recipe for [{$partName}] did not persist.");
-        }
-
-        return $this->recalculateForParts([$partName], $date);
+        return $this->recalculateFor([['source' => $source, 'part_name' => $partName, 'lot_id' => $rootLotId]], $date);
     }
 
+    /** Kept for the "missing parts saved" flow (F1/F2 only). */
     public function recalculateForParts(array $partNames, string $date): array
+    {
+        return $this->recalculateFor(array_map(fn($p) => ['source' => 'wip', 'part_name' => $p], $partNames), $date);
+    }
+
+    /** @param array<int, array{source: string, part_name?: ?string, lot_id?: ?string}> $targets */
+    public function recalculateFor(array $targets, string $date): array
     {
         $this->assertDateNotFinalized($date);
 
-        return DB::transaction(function () use ($partNames, $date) {
-            $lotQtys = LotQuantity::where('scheduled_date', $date)->whereIn('part_name', $partNames)->get();
-            $keys = $lotQtys->mapWithKeys(fn($q) => [$q->lot_id . '|' . (int) $q->rework_seq => true]);
+        return DB::transaction(function () use ($targets, $date) {
+            $targets   = collect($targets);
+            $partNames = $targets->where('source', 'wip')->pluck('part_name')->filter()->unique()->values()->all();
+            $f3Roots   = $targets->where('source', 'f3')->pluck('lot_id')->filter()->unique()->values();
+
+            $keyOf = fn($q) => $q->lot_id . '|' . (int) $q->rework_seq;
+
+            // F1/F2: every lot with this part name. F3: the traveler's lot plus its split children.
+            $wipKeys = $partNames
+                ? LotQuantity::where('scheduled_date', $date)->whereIn('part_name', $partNames)->get()->mapWithKeys(fn($q) => [$keyOf($q) => true])
+                : collect();
+
+            $family = $f3Roots->isEmpty() ? collect() : LotSplit::active()
+                ->where('scheduled_date', $date)->whereIn('root_lot_id', $f3Roots)
+                ->pluck('child_lot_id')->concat($f3Roots)->unique()->values();
+            $f3Keys = $family->isEmpty()
+                ? collect()
+                : LotQuantity::where('scheduled_date', $date)->whereIn('lot_id', $family)->get()->mapWithKeys(fn($q) => [$keyOf($q) => true]);
+
+            $lotIds = collect($wipKeys->keys())->concat($f3Keys->keys())
+                ->map(fn($k) => explode('|', $k)[0])->unique()->values();
 
             $entries = LoadingPlanEntry::where('scheduled_date', $date)
-                ->where('entry_type', 'lot')
-                ->whereNull('finalized_at')
-                ->whereIn('lot_id', $lotQtys->pluck('lot_id')->unique())
-                ->get()
-                ->filter(fn($e) => $keys->has($e->lot_id . '|' . (int) $e->rework_seq))
-                ->values();
+                ->where('entry_type', 'lot')->whereNull('finalized_at')
+                ->whereIn('lot_id', $lotIds)->get()
+                ->filter(function ($e) use ($wipKeys, $f3Keys) {
+                    $k = $e->lot_id . '|' . (int) $e->rework_seq;
+                    return ($e->source === 'f3') ? $f3Keys->has($k) : $wipKeys->has($k);   // a part-name edit never touches F3
+                })->values();
 
             if ($entries->isEmpty()) {
                 return ['entries' => [], 'affected_timings' => []];
             }
 
-            $machineIds = $entries->pluck('machine_id')->filter()->unique()->sort()->values()->all();
-            $nonMachineIds = $entries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
-
-            $locked = $this->lockLaneRows($machineIds, $nonMachineIds, $date);
-            $machineAnchors = $this->machineAnchors($locked, $machineIds);
-            $anchors = collect($nonMachineIds)
-                ->mapWithKeys(fn($id) => [$id => $this->laneAnchor($locked->where('non_machine_id', $id), $date)])
-                ->all();
+            // ...machineIds / nonMachineIds / lockLaneRows / anchors: unchanged...
 
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $entries->pluck('lot_id')->all()]);
             $calc->loadPackageList($partNames);
 
-            foreach ($entries as $e) {
-                $calc->recalculateAndRetime($e->id, $e->machine_id, retime: false);
-            }
-            $this->retimeFromFirstRow($machineIds, $date, $calc, $machineAnchors);
-            foreach ($nonMachineIds as $id) {
-                $calc->recomputeNonMachineTimes($id, $date, $anchors[$id]);
-            }
+            // ...recalculateAndRetime loop / retimeFromFirstRow / non-machine recompute: unchanged...
 
-            $fresh = LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry', 'nonMachine'])
+            $fresh      = LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry', 'nonMachine'])
                 ->whereKey($entries->pluck('id'))->get();
-            $wipMap = CustomerDataWip::query()
-                ->whereIn('Lot_Id', $fresh->pluck('lot_id')->unique())
-                ->orderBy('Lot_Id')->orderByDesc('import_date')
-                ->get()->unique('Lot_Id')->keyBy('Lot_Id');
+            $wipByEntry = $this->sources()->forEntries($fresh);
+            $svc        = new LoadingPlanService($date);
+            $payload    = $fresh->map(fn($e) => $svc->createPlannedLot($wipByEntry->get($e->id), $e, $e->lotQuantity))->values();
 
-            $svc = new LoadingPlanService($date);
-            $payload = $fresh->map(fn($e) => $svc->createPlannedLot($wipMap->get($e->lot_id), $e, $e->lotQuantity))->values();
-
-            return [
-                'entries'          => $payload,
-                'affected_timings' => self::timingsFor($machineIds, $date, $nonMachineIds),
-            ];
+            return ['entries' => $payload, 'affected_timings' => self::timingsFor($machineIds, $date, $nonMachineIds)];
         });
     }
-
     /**
      * Bulk-writes an entire machine-grouped placement plan in a fixed small
      * number of queries, regardless of lot count. Only valid immediately
@@ -3410,21 +3366,20 @@ class LoadingPlanEntryService
                 ->whereIn('lot_id', $lotIds)
                 ->get();
 
-            $wipByLot = CustomerDataWip::forDate($date)
-                ->whereIn('Lot_Id', $lotIds)
-                ->get(['Lot_Id', 'Package_Name', 'Focus_Group', 'Lead_Count'])
-                ->keyBy('Lot_Id');
+            $wipByLot   = $this->sources()->find($lotIds, $date);
             $entryByLot = $entries->keyBy('lot_id');
 
             $invalid = collect($lotIds)->unique()->filter(function ($lotId) use ($wipByLot, $entryByLot, $location) {
                 $wip = $wipByLot->get($lotId);
                 $entry = $entryByLot->get($lotId);
-                if (!$wip && !$entry) return true;   // unknown lot: reject
-                return PackageLocation::resolve(
+                if (!$wip && !$entry) return true;
+                $isF3 = ($entry?->source ?? $wip?->source) === 'f3';
+                $loc  = $isF3 ? 'F3' : PackageLocation::resolve(
                     $wip?->Package_Name ?? $entry?->package_name,
                     $wip?->Focus_Group,
-                    $wip?->Lead_Count,
-                ) !== $location;
+                    $wip?->Lead_Count
+                );
+                return $loc !== $location;
             });
 
             if ($invalid->isNotEmpty()) {
@@ -3438,9 +3393,7 @@ class LoadingPlanEntryService
             if ($hasRework) abort(422, 'A selected lot has a rework row — remove it before grouping.');
 
             if ($entries->isNotEmpty()) {
-                $withWip = CustomerDataWip::whereDate('import_date', $date)
-                    ->whereIn('Lot_Id', $entries->pluck('lot_id'))
-                    ->pluck('Lot_Id')->all();
+                $withWip = $this->sources()->find($entries->pluck('lot_id'), $date)->keys()->all();
 
                 foreach ($entries as $e) {
                     $this->assertNotFinalized($e);

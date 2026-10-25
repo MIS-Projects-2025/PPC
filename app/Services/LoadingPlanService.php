@@ -28,6 +28,8 @@ class LoadingPlanService
     public readonly Collection $todayPlannedLotEntries;
     public readonly Collection $extraTodayWipRows;
     private ?PackageGroups $packageGroups = null;
+    public readonly Collection $todayF3Rows;
+    private LotSourceService $sources;
     // at the top of the class
     public static array $acc = [];
 
@@ -178,39 +180,59 @@ class LoadingPlanService
             'dates'  => [$this->previousDate, $this->date],
             'lotIds' => [],
         ]);
+
+        $this->sources = app(LotSourceService::class);
     }
 
     public function initWip(): void
     {
-        $this->selectedPackages = PpcPackageMaster::query()
+        $isF3 = $this->selectedLocation === 'F3';
+
+        $this->selectedPackages = $isF3 ? [] : PpcPackageMaster::query()
             ->activeTelford()
             ->when($this->selectedLocation !== null, fn($q) => $q->where('default_pl', $this->selectedLocation))
-            ->pluck('package')
-            ->map(fn($p) => trim((string) $p))
-            ->all();
+            ->pluck('package')->map(fn($p) => trim((string) $p))->all();
 
         $this->initSplitsAndMerges();
 
-        $this->todayWipRows = $this->getWipRowsForToday($this->selectedPackages);
+        $this->todayWipRows = $isF3 ? collect() : $this->getWipRowsForToday($this->selectedPackages);
+        $this->todayF3Rows  = $this->sources->poolFor($this->date, $this->selectedLocation);
+
         $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
+
+        $rootsOf = fn($entries) => $entries->pluck('lot_id')
+            ->map(fn($id) => $this->rootLotId($id))->unique()->values()->all();
+
+        $leaked = $this->todayLeakedPlannedLotEntries;
         $this->todayLeakedWipRows = $this->getLatestWipRowsForLeakedLot(
-            $this->todayLeakedPlannedLotEntries->pluck('lot_id')
-                ->map(fn($id) => $this->rootLotId($id))->unique()->values()->all()
-        );
+            $rootsOf($leaked->reject(fn($e) => $e->source === 'f3'))
+        )->toBase()
+            ->union($this->sources->find($rootsOf($leaked->where('source', 'f3')), $this->date, 'f3'));
     }
 
     public function initPlanned(): void
     {
-        $this->todayPlannedLotEntries = LoadingPlanEntryService::getToday($this->date, $this->selectedPackages);
+        $this->todayPlannedLotEntries = LoadingPlanEntryService::getToday(
+            $this->date,
+            $this->selectedPackages,
+            includeF3: $this->selectedLocation === 'F3'
+        );
 
-        $missingLotIds = $this->todayPlannedLotEntries
-            ->where('entry_type', 'lot')->pluck('lot_id')->filter()
-            ->map(fn($id) => $this->rootLotId($id))->unique()
-            ->reject(fn($id) => $this->todayWipRows->has($id))->values()->all();
+        $lots = $this->todayPlannedLotEntries->where('entry_type', 'lot')->filter(fn($e) => $e->lot_id);
+        $known = fn($id) => $this->todayWipRows->has($id) || $this->todayF3Rows->has($id);
 
-        $this->extraTodayWipRows = empty($missingLotIds) ? collect() : CustomerDataWip::query()
+        $missing = fn($entries) => $entries->pluck('lot_id')
+            ->map(fn($id) => $this->rootLotId($id))->unique()->reject($known)->values()->all();
+
+        $wipMissing = $missing($lots->reject(fn($e) => $e->source === 'f3'));
+        $f3Missing  = $missing($lots->where('source', 'f3'));
+
+        $wipExtras = empty($wipMissing) ? collect() : CustomerDataWip::query()
             ->forDate($this->date)->loadingPlanStations()->excludingPostTnr()
-            ->whereIn('Lot_Id', $missingLotIds)->get()->keyBy('Lot_Id');
+            ->whereIn('Lot_Id', $wipMissing)->get()->keyBy('Lot_Id');
+
+        $this->extraTodayWipRows = $wipExtras->toBase()
+            ->union($this->sources->find($f3Missing, $this->date, 'f3'));
     }
 
     // keep for runScheduler() and anything else that calls it

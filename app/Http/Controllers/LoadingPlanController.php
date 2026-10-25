@@ -147,6 +147,7 @@ class LoadingPlanController extends Controller
 
         $date             = $validated['date'] ?? ShiftDay::current();
         $selectedLocation = $validated['location'] ?? 'PL1';
+        $isF3 = $selectedLocation === 'F3';
 
         $isPartial = $request->header('X-Inertia-Partial-Data') !== null
             && $request->header('X-Inertia-Partial-Component') === 'Deemo';
@@ -161,7 +162,7 @@ class LoadingPlanController extends Controller
         $svc->initWip();
         $mark('initWip');
 
-        $wipRows = $svc->todayWipRows->concat($svc->todayLeakedWipRows);
+        $wipRows = $svc->todayWipRows->concat($svc->todayLeakedWipRows->filter(fn($w) => $w->source !== 'f3'));
 
         $partnameIntegrity  = new LoadingPlanPartnameIntegrity();
         $packageListPromise = null;
@@ -219,7 +220,7 @@ class LoadingPlanController extends Controller
 
         $groups = app(PackageGroups::class);
 
-        $packages = $result
+        $packages = $isF3 ? collect(['F3']) : $result
             ->filter(fn($row) => !$row['is_block'] && ($row['station'] ?? null) !== CustomerDataWip::RES_STATION)
             ->filter(fn($row) => PackageLocation::resolve(
                 $row['package_name'] ?? null,
@@ -243,7 +244,7 @@ class LoadingPlanController extends Controller
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
-            'status'            => $wipRows->isEmpty() ? 'not_imported' : 'ok',
+            'status'            => $isF3 ? 'ok' : ($wipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)
                 ->orderBy('sort_order')
                 ->get()

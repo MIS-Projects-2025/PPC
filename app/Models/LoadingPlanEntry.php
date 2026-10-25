@@ -19,6 +19,7 @@ class LoadingPlanEntry extends Model
 
     protected $fillable = [
         'entry_type',
+        'source',
         'lot_id',
         'package_name',
         'scheduled_date',
@@ -169,12 +170,7 @@ class LoadingPlanEntry extends Model
      */
     public function inheritedWipData(): ?CustomerDataWip
     {
-        $rootLotId = $this->resolveRootLotId();
-
-        return CustomerDataWip::query()
-            ->forDate($this->scheduled_date->toDateString())
-            ->where('Lot_Id', $rootLotId)
-            ->first();
+        return app(\App\Services\LotSourceService::class)->forEntry($this);
     }
 
     // currently not in used

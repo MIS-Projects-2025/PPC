@@ -342,6 +342,7 @@ class LoadingPlanEntryController extends Controller
             ->mapWithKeys(fn($r) => [strtoupper(trim($r->focus_group)) => $r->factory]);
 
         $names = LotQuantity::where('scheduled_date', $date)->where('rework_seq', 0)
+            ->where('recipe_source_type', 'package_list')
             ->whereNotNull('part_name')->where('part_name', '!=', '')
             ->when(
                 $data['part_name'] ?? null,
@@ -396,6 +397,8 @@ class LoadingPlanEntryController extends Controller
             'part_name'      => 'required|string',
             'recipe'         => 'required|integer|min:1',
             'scheduled_date' => 'required|date',
+            'source' => 'nullable|in:wip,f3',
+            'lot_id' => 'required_if:source,f3|nullable|string',
         ]);
 
         try {
@@ -403,7 +406,9 @@ class LoadingPlanEntryController extends Controller
                 $data['part_name'],
                 $data['recipe'],
                 $data['scheduled_date'],
-                null /* TODO auth()->user()?->name */
+                null,
+                $data['source'] ?? 'wip',
+                $data['lot_id'] ?? null,
             ));
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);

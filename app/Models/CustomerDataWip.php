@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 
 class CustomerDataWip extends Model
 {
@@ -13,6 +14,8 @@ class CustomerDataWip extends Model
 
     protected $table = 'customer_data_wip';
     public $timestamps = false;
+
+    // protected $appends = ['source', 'traveler_deleted', 'traveler_remarks'] // don't know if i need this 
 
     public const RES_STATION = 'GTTRES_T';
 
@@ -107,6 +110,23 @@ class CustomerDataWip extends Model
         return is_array($date)
             ? $q->whereIn('import_date', $date)
             : $q->where('import_date', $date);
+    }
+
+    public function getSourceAttribute(): string
+    {
+        return $this->attributes['source'] ?? 'wip';
+    }
+    public function getTravelerIdAttribute(): ?int
+    {
+        return $this->attributes['traveler_id'] ?? null;
+    }
+    public function getTravelerDeletedAttribute(): bool
+    {
+        return (bool) ($this->attributes['traveler_deleted'] ?? false);
+    }
+    public function getTravelerRemarksAttribute(): ?string
+    {
+        return $this->attributes['traveler_remarks'] ?? null;
     }
 
     // CT = Date_Loaded - BE_Starttime, in fractional days
