@@ -427,7 +427,8 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         return (
                             <div className="flex items-center gap-1">
                                 <LotIdCell 
-                                    lotId={row.lot_id} 
+                                    lotId={row.lot_id}
+                                    source={row.source} 
                                     isPickup={row.is_pickup} 
                                     splitInfo={row.split_info}
                                     mergeInfo={row.merge_info} 

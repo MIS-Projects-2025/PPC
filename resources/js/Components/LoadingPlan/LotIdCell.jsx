@@ -12,7 +12,10 @@ export function LotIdCell({
     isRework,
     reworkSeq,
     otherLocation,
+    source,
 }) {
+    const isF3 = source === "f3" && !otherLocation;
+
     const {
         handleShowHistory = noop,
         handleShowMergeHistory = noop,
@@ -51,6 +54,7 @@ export function LotIdCell({
             <span className="font-mono">
                 {otherLocationBadge}
                 <LotLabel
+                    isF3={isF3}
                     lotId={lotId}
                     isPickup={isPickup}
                     isPlannedYesterday={isPlannedYesterday}
@@ -66,6 +70,7 @@ export function LotIdCell({
             <div className="font-mono truncate min-w-0">
                 {otherLocationBadge}
                 <LotLabel
+                    isF3={isF3}
                     lotId={lotId}
                     isPickup={isPickup}
                     isPlannedYesterday={isPlannedYesterday}
@@ -82,6 +87,7 @@ export function LotIdCell({
 }
 
 function LotLabel({
+    isF3,
     lotId,
     isPickup,
     isPlannedYesterday,
@@ -100,6 +106,10 @@ function LotLabel({
                 <span className="text-xs rounded-md bg-accent/50 px-1 mr-1">
                     PICKUP
                 </span>
+            )}
+
+            {isF3 && (
+                <span className="badge badge-accent badge-xs font-mono mr-1" title="F3 traveler lot">F3</span>
             )}
 
             <span className="truncate">{lotId}</span>

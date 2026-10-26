@@ -13,9 +13,9 @@ class ShiftDay
      * the previous calendar day's shift (e.g. 2 AM on July 17 is still
      * "July 16" for scheduling purposes).
      */
-    public static function current(): string
+    public static function current(?string $location = null): string
     {
-        return self::forTimestamp(now());
+        return self::forTimestamp(now(), $location === 'F3' ? 12 : self::CUTOFF_HOUR);
     }
 
     /**
@@ -26,9 +26,9 @@ class ShiftDay
         return Carbon::parse(self::current())->subDay()->toDateString();
     }
 
-    public static function forTimestamp(Carbon $timestamp): string
+    public static function forTimestamp(Carbon $timestamp, int $cutoffHour = self::CUTOFF_HOUR): string
     {
-        return $timestamp->hour < self::CUTOFF_HOUR
+        return $timestamp->hour < $cutoffHour
             ? $timestamp->copy()->subDay()->toDateString()
             : $timestamp->toDateString();
     }

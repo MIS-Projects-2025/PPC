@@ -15,8 +15,6 @@ class CustomerDataWip extends Model
     protected $table = 'customer_data_wip';
     public $timestamps = false;
 
-    // protected $appends = ['source', 'traveler_deleted', 'traveler_remarks'] // don't know if i need this 
-
     public const RES_STATION = 'GTTRES_T';
 
     protected $fillable = [

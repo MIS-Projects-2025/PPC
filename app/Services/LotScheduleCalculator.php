@@ -531,6 +531,7 @@ class LotScheduleCalculator
         return [
             'recipe_used' => $recipe,
             'recipe_source_id'   => $recipeInfo->sourceId,
+            'recipe_source_type' => $recipeInfo->sourceType,
             'commit' => $commit,
             'recipe_status' => $recipeStatus,
             'capacity_uph_snapshot' => $capacityUph,

@@ -7,6 +7,8 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
     const [recipe, setRecipe] = useState("");
     const [doable, setDoable] = useState("");
 
+    const isF3 = row?.source === "f3";
+
     useEffect(() => {
         setRecipe(row?.doable_recipe_source?.recipe ?? "");
         setDoable(row?.doable ?? "");
@@ -27,7 +29,7 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
 
                 <section className="space-y-2">
                     <div className="font-semibold text-sm">Recipe for {row?.part_name}</div>
-                    {missing ? (
+                    {missing && !isF3 ? (
                         <div className="alert alert-warning alert-soft text-sm flex justify-between">
                             <span>This part isn't in the package list yet.</span>
                             <button className="btn btn-xs" onClick={() => { close(); onOpenPartRecord(); }}>Add it</button>
@@ -37,8 +39,21 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
                     ) : (
                         <>
                             <input type="number" min="1" className="input input-bordered w-full" value={recipe} onChange={(e) => setRecipe(e.target.value)} />
-                            <p className="text-xs opacity-60">Saved to the package list. Affects {sameCount} lot{sameCount !== 1 ? "s" : ""} on this plan.</p>
-                            <button className="btn btn-sm btn-primary" disabled={disabled || !(recipeNum >= 1)} onClick={() => run(() => onSaveRecipe(row.part_name, recipeNum))}>Save recipe</button>
+                            <p className="text-xs opacity-60">
+                                {isF3
+                                    ? "Saved to this lot's traveler. Also applies to its splits."
+                                    : `Saved to the package list. Affects ${sameCount} lot${sameCount !== 1 ? "s" : ""} on this plan.`}
+                            </p>
+                            <button
+                                className="btn btn-sm btn-primary"
+                                disabled={disabled || !(recipeNum >= 1)}
+                                onClick={() => run(() => onSaveRecipe(row.part_name, recipeNum, {
+                                    source: row.source ?? "wip",
+                                    lotId: row.lot_id,
+                                }))}
+                            >
+                                Save recipe
+                            </button>
                         </>
                     )}
                 </section>

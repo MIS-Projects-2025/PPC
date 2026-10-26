@@ -474,21 +474,16 @@ class LoadingPlanEntryService
             );
             $lap('resolve root lot ids');
 
-            $wip = CustomerDataWip::query()
-                ->where('import_date', '>=', $dayStart)
-                ->where('import_date', '<', $dayStart->copy()->addDay())
-                ->whereIn('Lot_Id', $rootLotIdByEntry->filter()->unique()->values())
-                ->get()
-                ->unique('Lot_Id')
-                ->keyBy('Lot_Id');
-            $lap('wip load + unique (rows=' . $wip->count() . ')');
+            $wipByEntry = $this->sources()->forEntries($lotEntries);
+
+            // $lap('wip load + unique (rows=' . $wipByEntry->count() . ')'); // stale
 
             $formulaMs = 0.0;
             $lookupMs  = 0.0;
 
-            $entries = $lotEntries->map(function ($entry) use ($wip, &$formulaMs, &$lookupMs) {
+            $entries = $lotEntries->map(function ($entry) use ($wipByEntry, &$formulaMs, &$lookupMs) {
                 $t = microtime(true);
-                $wipEntry = $wip->get($entry->lot_id);
+                $wipEntry = $wipByEntry->get($entry->id);
                 $lookupMs += (microtime(true) - $t) * 1000;
 
                 $t = microtime(true);
@@ -925,6 +920,7 @@ class LoadingPlanEntryService
 
             $entry = LoadingPlanEntry::create([
                 'entry_type'      => 'block',
+                'source'          => 'wip',
                 'lot_id'          => null,
                 'scheduled_date'  => $date,
                 'machine_id'      => $machineId,
@@ -1532,6 +1528,7 @@ class LoadingPlanEntryService
 
             $entry = LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
+                'source'         => 'wip',
                 'lot_id'         => $lotId,
                 'package_name'   => $fields['package_name'] ?? null,
                 'scheduled_date' => $date,
@@ -2396,6 +2393,7 @@ class LoadingPlanEntryService
 
         $entry = LoadingPlanEntry::create([
             'entry_type'     => 'block',
+            'source'         => 'wip',
             'lot_id'         => null,
             'scheduled_date' => $date,
             'machine_id'     => $machineId,
@@ -3069,12 +3067,25 @@ class LoadingPlanEntryService
                 return ['entries' => [], 'affected_timings' => []];
             }
 
-            // ...machineIds / nonMachineIds / lockLaneRows / anchors: unchanged...
+            $machineIds    = $entries->pluck('machine_id')->filter()->unique()->sort()->values()->all();
+            $nonMachineIds = $entries->pluck('non_machine_id')->filter()->unique()->sort()->values()->all();
+
+            $locked         = $this->lockLaneRows($machineIds, $nonMachineIds, $date);
+            $machineAnchors = $this->machineAnchors($locked, $machineIds);
+            $anchors        = collect($nonMachineIds)
+                ->mapWithKeys(fn($id) => [$id => $this->laneAnchor($locked->where('non_machine_id', $id), $date)])
+                ->all();
 
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $entries->pluck('lot_id')->all()]);
             $calc->loadPackageList($partNames);
 
-            // ...recalculateAndRetime loop / retimeFromFirstRow / non-machine recompute: unchanged...
+            foreach ($entries as $e) {
+                $calc->recalculateAndRetime($e->id, $e->machine_id, retime: false);
+            }
+            $this->retimeFromFirstRow($machineIds, $date, $calc, $machineAnchors);
+            foreach ($nonMachineIds as $id) {
+                $calc->recomputeNonMachineTimes($id, $date, $anchors[$id]);
+            }
 
             $fresh      = LoadingPlanEntry::with(['machineModel', 'lotQuantity.packageListEntry', 'nonMachine'])
                 ->whereKey($entries->pluck('id'))->get();

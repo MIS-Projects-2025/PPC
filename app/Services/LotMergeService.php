@@ -42,6 +42,10 @@ class LotMergeService
                 throw new InvalidMergeException('Rework rows cannot be merged.');
             }
 
+            if (($entryA->source ?? 'wip') !== ($entryB->source ?? 'wip')) {
+                throw new InvalidMergeException('Cannot merge an F3 lot with a WIP lot.');
+            }
+
             // Derive and validate that both entries share the exact same scheduled date
             $date = $this->assertConsistentDates([$entryA, $entryB]);
             $this->assertNotSplitParentAndChild($entryA->lot_id, $entryB->lot_id, $date);

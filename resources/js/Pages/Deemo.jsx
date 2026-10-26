@@ -348,6 +348,7 @@ const FOR_BAKE_TAB = "FOR BAKE";
 const PICKUP_TAB = "PICKUP";
 const ORPHAN_TAB = "OTHER MACHINE";
 const RES_STATION = "GTTRES_T";
+const F3_FLAG = "F3";
 const isResRow = (r) => r.station === RES_STATION;
 const isForBakeRow = (r) => !!r.is_for_bake;
 
@@ -413,6 +414,8 @@ export default function Deemo({
         canRedo
     } = useLoadingPlanStore();
 
+    const isF3 = selectedLocation === F3_FLAG;
+
     const isOrphanRow = useCallback(
         (r) => !!r.machine
             && r.machine !== MACHINE_MANUAL
@@ -427,10 +430,13 @@ export default function Deemo({
     );
 
     const tabItems = useMemo(() => [
-        "Unassigned", ALL_PACKAGES_TAB, RES_TAB, FOR_BAKE_TAB, PICKUP_TAB,
+        "Unassigned", ALL_PACKAGES_TAB,
+        ...(isF3 ? [] : [RES_TAB]),
+        FOR_BAKE_TAB,
+        ...(isF3 ? [] : [PICKUP_TAB]),
         ...(orphanMachines.length ? [ORPHAN_TAB] : []),
         ...(packageGroupNames ?? []),
-    ], [orphanMachines.length, packageGroupNames]);
+    ], [isF3, orphanMachines.length, packageGroupNames]);
 
     // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
     // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
@@ -583,13 +589,14 @@ export default function Deemo({
 
     const setLocation = (line) => {
         if (isSaving()) return;
-        
         if (line === selectedLocation) return;
+
+        const crossesF3 = line === "F3" || selectedLocation === "F3";
         const release = holdLock();
         router.get(
             route(readOnly ? "loading-plan.readonly" : "loading-plan.index"),
-            { date, location: line },
-            { preserveScroll: true, replace: true, onSuccess: () => setStaleInfo(null), onFinish: release }
+            crossesF3 ? { location: line } : { date, location: line },
+            { preserveScroll: true, replace: true, onSuccess: () => setStaleInfo(null), onFinish: release },
         );
     };
 
@@ -910,6 +917,7 @@ export default function Deemo({
         (machine, { partName, packageName, qty, beforeEntryId = null, afterEntryId = null } = {}) => {
             if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
             if (readOnly) return Promise.reject(new Error("Read-only view"));
+            if (isF3) return Promise.reject(new Error("F3 lots come from travelers"));
             const trimmedPart = (partName ?? "").trim();
             if (!trimmedPart) return Promise.reject(new Error("Part name is required"));
 
@@ -1026,11 +1034,11 @@ export default function Deemo({
     const [lotQty, setLotQty] = useState("");
 
     const handleAddLot = useCallback((machine) => {
-        if (readOnly) return;
+        if (readOnly || isF3) return;
         setLotModalMachine(machine);
         setLotPart(""); setLotPackage(""); setLotQty("");
         document.getElementById("deemo_add_lot_modal")?.showModal();
-    }, [readOnly]);
+    }, [readOnly, isF3]);
 
     const handleConfirmLot = useCallback(() => {
         const qty = parseInt(lotQty, 10);
@@ -1911,8 +1919,8 @@ export default function Deemo({
             machineTotalDoable,
             machineTotalQuantity,
             otherPackageCounts,
-            onAddLot: readOnly ? undefined : handleAddLot,
-            onAddRow: readOnly ? undefined : handleAddRow,
+            onAddLot: readOnly || isF3 ? undefined : handleAddLot,
+            onAddRow: readOnly || isF3 ? undefined : handleAddRow,
             onAddBlock: readOnly ? undefined : handleAddBlock,
             onAddBucket: readOnly ? undefined : handleAddBucket,
             onAutoSort: readOnly ? undefined : handleAutoSort,
@@ -2016,12 +2024,18 @@ export default function Deemo({
         setIsDirty(true);
     }, [syncServerFields, update, date, setIsDirty]);
 
-    const handleSaveRecipe = useCallback((partName, recipe) => {
+    const handleSaveRecipe = useCallback((partName, recipe, { source = "wip", lotId = null } = {}) => {
         if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
 
         return withUpdating(mutate(route("loading-plan.part-recipe.update"), {
             method: "PATCH",
-            body: { part_name: partName, recipe, scheduled_date: date },
+            body: {
+                part_name: partName,
+                recipe,
+                scheduled_date: date,
+                source,
+                ...(source === "f3" ? { lot_id: lotId } : {}),
+            },
         }))
             .then(applyRecalc)
             .catch((err) => { reportError(err, "Couldn't save recipe."); throw err; });
@@ -2030,7 +2044,9 @@ export default function Deemo({
     // ── missing part names ──
     const [missingParts, setMissingParts] = useState(null);
     const missingPartCount = useMemo(
-        () => new Set(dataRows.filter((r) => !isBlockRow(r) && r.doable_status === "no_recipe").map((r) => r.part_name)).size,
+        () => new Set(dataRows
+            .filter((r) => !isBlockRow(r) && r.source !== "f3" && r.doable_status === "no_recipe")
+            .map((r) => r.part_name)).size,
         [dataRows],
     );
 
@@ -2129,7 +2145,7 @@ export default function Deemo({
                 onClose={() => historyModalRef.current?.close()}
             />
 
-            {!readOnly && (
+            {!readOnly && !isF3 && (
                 <PickupInsertModal
                     ref={pickupInsertModalRef}
                     // lotA={selectedRows[0]}
@@ -2349,7 +2365,7 @@ export default function Deemo({
                                     Production Line
                                 </legend>
                                 <div className="join h-2 items-center">
-                                    {["PL1", "PL6"].map((line) => (
+                                    {["PL1", "PL6", "F3"].map((line) => (
                                         <button
                                             key={line}
                                             type="button"
@@ -2389,13 +2405,8 @@ export default function Deemo({
                                 <BsSearch size={16} />
                             </button>
                             
-                            {!readOnly && (
-                                <button
-                                    className="btn btn-sm z-50"
-                                    onClick={() => {
-                                        pickupInsertModalRef.current?.showModal();
-                                    }}
-                                >
+                            {!readOnly && !isF3 && (
+                                <button className="btn btn-sm z-50" onClick={() => pickupInsertModalRef.current?.showModal()}>
                                     Schedule Pickups
                                 </button>
                             )}
@@ -2683,7 +2694,8 @@ export default function Deemo({
                             date={date}
                             packageGroups={packageGroups}
                             activePackage={activePackage}
-                            handleAddRow={handleAddRow}
+                            handleAddRow={isF3 ? undefined : handleAddRow}
+                            allowLots={!isF3}
                             saveBlock={saveBlock}
                         />
                     )}

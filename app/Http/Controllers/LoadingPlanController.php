@@ -145,8 +145,8 @@ class LoadingPlanController extends Controller
             'location' => ['nullable', 'string', 'max:10'],
         ]);
 
-        $date             = $validated['date'] ?? ShiftDay::current();
         $selectedLocation = $validated['location'] ?? 'PL1';
+        $date = $validated['date'] ?? ShiftDay::current($selectedLocation);
         $isF3 = $selectedLocation === 'F3';
 
         $isPartial = $request->header('X-Inertia-Partial-Data') !== null
