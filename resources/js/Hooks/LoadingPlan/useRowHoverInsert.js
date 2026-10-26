@@ -6,6 +6,8 @@ export function useRowHoverInsert(displayRows) {
     const historyButtonRef = useRef(null);
     const hoveredRowRef = useRef(null);
     const rowIdxByElement = useRef(new WeakMap()).current;
+    const scrollingRef = useRef(false);
+    const scrollTimer = useRef(0);
 
     const [hoveredRow, setHoveredRow] = useState(null);
     const [lastHoveredRow, setLastHoveredRow] = useState(null);
@@ -15,6 +17,8 @@ export function useRowHoverInsert(displayRows) {
         if (!container) return;
 
         function handlePointerOver(e) {
+            if (scrollingRef.current) return;
+
             const rowEl = e.target.closest(".rdg-row");
             if (!rowEl || rowEl === hoveredRowRef.current) return;
             const rowIdx = rowIdxByElement.get(rowEl);
@@ -95,9 +99,12 @@ export function useRowHoverInsert(displayRows) {
     // from the grid's onScroll so we bail out if the anchor got ripped
     // out of the DOM.
     function handleGridScroll() {
-        if (hoveredRowRef.current && !hoveredRowRef.current.isConnected) {
+        scrollingRef.current = true;
+        clearTimeout(scrollTimer.current);
+        scrollTimer.current = setTimeout(() => { scrollingRef.current = false; }, 120);
+        if (hoveredRowRef.current) {
             hoveredRowRef.current = null;
-            setHoveredRow(null);
+            setHoveredRow(null);   // unmounts the buttons, so autoUpdate stops
         }
     }
 

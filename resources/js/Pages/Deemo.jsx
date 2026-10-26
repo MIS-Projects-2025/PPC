@@ -329,10 +329,11 @@ function RowHistoryButton({ isHidden, anchorElement, onViewHistory, buttonsRef }
             style={{
                 position: "fixed",
                 top: y ?? 0,
+                height: ROW_HEIGHT,
                 right: 8, // sticky to the far right edge of the viewport
                 zIndex: 9999,
             }}
-            className="btn btn-xs insert-row-btn border border-opposite-100/25 rounded-l-none h-9 min-h-9 flex items-center justify-center"
+            className="btn btn-xs insert-row-btn border border-opposite-100/25 rounded-l-none flex items-center justify-center"
             onClick={onViewHistory}
             title="View history"
         >
@@ -348,6 +349,7 @@ const FOR_BAKE_TAB = "FOR BAKE";
 const PICKUP_TAB = "PICKUP";
 const ORPHAN_TAB = "OTHER MACHINE";
 const RES_STATION = "GTTRES_T";
+const DEFAULT_COL_WIDTH = 120;
 const F3_FLAG = "F3";
 const isResRow = (r) => r.station === RES_STATION;
 const isForBakeRow = (r) => !!r.is_for_bake;
@@ -1202,7 +1204,7 @@ export default function Deemo({
 
             return {
                 ...col,
-                width: width ?? col.width,
+                width: width ?? col.width ?? DEFAULT_COL_WIDTH,
                 minWidth: MIN_COLUMN_WIDTH,
                 maxWidth: isCollapsed ? MIN_COLUMN_WIDTH : col.maxWidth,
                 resizable: col.resizable ?? true,
@@ -2460,7 +2462,7 @@ export default function Deemo({
                                 <button className="btn btn-sm btn-warning" onClick={handleRefresh}>Refresh</button>
                             </div>
                         )}
-                        {activePackage === "Bake" ? (
+                        {activePackage === FOR_BAKE_TAB ? (
                             <div className="border-none" style={{ position: "relative" }}>
 
                                 <DataGrid
