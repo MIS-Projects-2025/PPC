@@ -2959,7 +2959,14 @@ class LoadingPlanEntryService
             $this->assertNotFinalized($entry);
 
             $date = $entry->scheduled_date->toDateString();
-            $lotQty = $entry->getQuantityRow();
+
+            $this->lockLaneRows(
+                array_filter([$entry->machine_id]),
+                array_filter([$entry->non_machine_id]),
+                $date,
+            );
+
+            $lotQty = $entry->getQuantityRow() ?? $this->sources()->ensureLotQuantity($entry);
             if (!$lotQty) {
                 throw new \InvalidArgumentException('This lot has no quantity record.');
             }

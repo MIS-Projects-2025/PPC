@@ -26,7 +26,7 @@ class NonMachineController extends Controller
     {
         $data = $request->validate([
             'name'           => 'required|string|max:64',
-            'location'       => 'required|in:PL1,PL6',
+            'location'       => 'required|in:PL1,PL6,F3',
         ]);
 
         return response()->json($this->present(NonMachine::create($data)), 201);
