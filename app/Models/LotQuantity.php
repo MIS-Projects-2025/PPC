@@ -25,6 +25,9 @@ class LotQuantity extends Model
         'recipe_used',
         'recipe_source_id',
         'recipe_status',
+        'commit_override',
+        'commit_override_qty',
+        'recipe_source_type',
         'capacity_uph_snapshot',
     ];
 
@@ -39,6 +42,7 @@ class LotQuantity extends Model
 
     public function packageListEntry()
     {
+        // createPlannedLot never reads it for F3, harmless
         return $this->belongsTo(PartName::class, 'recipe_source_id');
     }
 }

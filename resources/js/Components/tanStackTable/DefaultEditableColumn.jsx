@@ -6,12 +6,8 @@ const DefaultEditableColumn = {
 		const [value, setValue] = React.useState(initialValue);
 
 		const onBlur = () => {
-			// if (value === initialValue) return;
-			table.options.meta?.updateData(
-				index,
-				column?.columnDef.accessorKey,
-				value,
-			);
+			if (value === initialValue) return;
+			table.options.meta?.updateData(index, column.columnDef.accessorKey, value);
 		};
 
 		React.useEffect(() => {

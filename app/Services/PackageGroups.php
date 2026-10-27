@@ -10,7 +10,7 @@ class PackageGroups
 {
     public const CACHE_REVERSE = 'package_groups:reverse_map';
     public const CACHE_GROUPED = 'package_groups:grouped';
-
+    private ?array $reverse = null;
     public function __construct(private LoadingPlanPackageGroupRepository $repo) {}
 
     /** Backward-compatible static entry point: PackageGroups::groupOf('QSOP') */
@@ -26,19 +26,20 @@ class PackageGroups
     }
 
     /** Group for a package, or the package name itself if unmapped. */
-    public function resolve(?string $packageName): ?string
+    public function resolve(?string $packageName, ?string $focusGroup = null, $leadcount = null): ?string
     {
         if (!$packageName) {
             return $packageName;
         }
 
-        return $this->reverseMap()[$packageName] ?? $packageName;
+        return PackageLocation::groupOverride($packageName, $focusGroup, $leadcount)
+            ?? ($this->reverseMap()[$packageName] ?? $packageName);
     }
 
     /** [package_name => group_name] (cached) */
     public function reverseMap(): array
     {
-        return Cache::rememberForever(self::CACHE_REVERSE, function () {
+        return $this->reverse ??= Cache::rememberForever(self::CACHE_REVERSE, function () {
             return $this->repo->all()
                 ->sortBy('id')
                 ->pluck('group_name', 'package_name')

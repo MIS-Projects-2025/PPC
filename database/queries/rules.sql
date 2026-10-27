@@ -18,6 +18,13 @@ select * from qdn_db.machine_transition_rules where from_state_id = 32;
 select * from qdn_db.machine_capability_part_rules where setup_state_id = 32;
 select * from qdn_db.machine_capability_part_rules where setup_state_id = 32;
 
+select * from qdn_db_test.machine_list where machine_num like "%02LedCon%";
+select * from qdn_db_test.machine_transition_rules where machine_id = 230;
+select * from qdn_db_test.machine_transition_rules where machine_id = 330;
+select * from qdn_db_test.machine_group_transition_rules;
+select * from qdn_db_test.machine_setup_states where machine_id = 230;
+
+
 show create table qdn_db.package_list;
 
 select * from qdn_db.machine_transition_rules;

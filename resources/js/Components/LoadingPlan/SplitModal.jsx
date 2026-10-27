@@ -34,9 +34,12 @@ function clamp(n, min, max) {
 const SplitModal = forwardRef(function SplitModal(
     {
         parentLotId,
+        rootLotId,
+        takenLotIds,
         totalQty = 10000,
         takenSuffixes = [],
         machines = [],
+        nonMachines = [],
         machinePlatform = new Map(),
         onConfirm,
         onClose,
@@ -48,31 +51,42 @@ const SplitModal = forwardRef(function SplitModal(
         [parentLotId],
     );
 
-    const taken = useMemo(() => new Set(takenSuffixes), [takenSuffixes]);
+    const taken = useMemo(
+        () => new Set((takenLotIds ?? []).map((id) => String(id).toUpperCase())),
+        [takenLotIds],
+    );
+
+    const suggestions = useMemo(() => {
+        const out = [];
+        for (let i = 0; out.length < 4 && i < 26; i++) {
+            const s = `_${String.fromCharCode(65 + i)}`;
+            if (!taken.has(`${rootLotId}${s}`.toUpperCase())) out.push(s);
+        }
+        return out;
+    }, [rootLotId, taken]);
+
+    const [childSuffix, setChildSuffix] = useState("");
+    useEffect(() => setChildSuffix(suggestions[0] ?? ""), [suggestions]);
+    
     const defaultSuffix = useMemo(
         () => nextAvailableSuffix(parentSuffix + 1, taken),
         [parentSuffix, taken],
     );
-    const suggestions = useMemo(
-        () => suggestedSuffixes(parentSuffix + 1, taken, 4),
-        [parentSuffix, taken],
-    );
 
-    const [childSuffix, setChildSuffix] = useState(defaultSuffix);
     // The currently selected target machine for this split — highlighted in
     // the shared MachineSelectionGrid below.
     const [targetMachine, setTargetMachine] = useState(null);
-
-    useEffect(() => setChildSuffix(defaultSuffix), [defaultSuffix]);
 
     const [childQty, setChildQty] = useState(() => Math.round(totalQty / 2));
     const parentQty = totalQty - childQty;
     const percentage = (childQty / totalQty) * 100; // exact, unrounded — just for display
 
+    const isValidQty = childQty >= 1 && parentQty >= 1;
+
     const setFromChildQty = (qty) => {
         setChildQty(clamp(Math.round(qty), 1, totalQty - 1));
     };
-
+    
     const setFromParentQty = (qty) => {
         const q = clamp(Math.round(qty), 1, totalQty - 1);
         setChildQty(totalQty - q);
@@ -85,10 +99,10 @@ const SplitModal = forwardRef(function SplitModal(
         );
     };
 
-    const childLotId = `${root}.${childSuffix}`;
-    const isChildIdTaken = taken.has(childSuffix);
-    const isValidQty = childQty >= 1 && parentQty >= 1;
-    const canConfirm = isValidQty && !isChildIdTaken && !!targetMachine;
+    const childLotId = `${rootLotId}${childSuffix}`;
+    const isSuffixValid = /^[._-]?[A-Za-z0-9]+$/.test(childSuffix);
+    const isChildIdTaken = taken.has(childLotId.toUpperCase());
+    const canConfirm = isValidQty && isSuffixValid && !isChildIdTaken && !!targetMachine;
 
     const handleConfirm = () => {
         if (!canConfirm) return;
@@ -282,6 +296,7 @@ const SplitModal = forwardRef(function SplitModal(
                         </div>
                         <MachineSelectionGrid
                             machines={machines}
+                            nonMachines={nonMachines}
                             machinePlatform={machinePlatform}
                             selectedMachine={targetMachine}
                             onSelect={setTargetMachine}

@@ -115,23 +115,27 @@ export function reconcileMergeCreate(rows, result) {
 }
 
 export function reconcileMergeRevert(rows, result) {
+    const { target, source } = result;
+
     return rows.map((row) => {
-        if (row.lot_id === result.target.lot_id) {
-            return { ...row, qty: result.target.qty, lock_version: result.target.lock_version, merge_info: null,
-                doable: result.target.doable, doable_status: result.target.doable_status, capacity_uph: result.target.capacity_uph };
+        if (target && row.lot_id === target.lot_id) {
+            return { ...row, qty: target.qty, lock_version: target.lock_version, merge_info: null,
+                doable: target.doable, doable_status: target.doable_status, capacity_uph: target.capacity_uph };
         }
-        if (row.lot_id === result.source.lot_id) {
-            return { ...row, qty: result.source.qty, lock_version: result.source.lock_version, merge_info: null,
-                doable: result.source.doable, doable_status: result.source.doable_status, capacity_uph: result.source.capacity_uph };
+        if (source && row.lot_id === source.lot_id) {
+            return { ...row, qty: source.qty, lock_version: source.lock_version, merge_info: null,
+                doable: source.doable, doable_status: source.doable_status, capacity_uph: source.capacity_uph };
         }
         return row;
     });
 }
 
 export function reconcileMergeUnrevert(rows, result) {
+    const { target, source } = result;
+    
     return rows.map((row) => {
-        if (row.lot_id === result.target.lot_id) return { ...row, ...result.target };
-        if (row.lot_id === result.source.lot_id) return { ...row, ...result.source };
+        if (row.lot_id === target.lot_id) return { ...row, ...target };
+        if (row.lot_id === source.lot_id) return { ...row, ...source };
         return row;
     });
 }

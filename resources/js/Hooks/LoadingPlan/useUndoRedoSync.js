@@ -1,4 +1,5 @@
 import { mergeCompoundResponse } from "@/Lib/LoadingPlan/compoundActions";
+import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import {
     callRevertMerge,
     callRevertSplit,
@@ -9,15 +10,14 @@ import {
 } from "@/Lib/LoadingPlan/splitMergeApi";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import { useCallback, useEffect, useRef } from "react";
-import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 
-export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }) {
+export function useUndoRedoSync({ store, withUpdating, isLocked, dataRows, date, mutate, update, toast }) {
     const dataRowsRef = useRef(dataRows);
     useEffect(() => { dataRowsRef.current = dataRows; }, [dataRows]);
 
     const isSyncingRef = useRef(false);
 
-    const applyRowStep = useCallback(async (stepFn) => {
+    const applyRowStep = useCallback(async (stepFn, inverseFn) => {
         const prevSnapshot = dataRowsRef.current;
         stepFn(); // store's undo() or redo()
 
@@ -26,7 +26,8 @@ export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }
         const nextIds = new Set(nextSnapshot.map((r) => r._dndId));
         const deletedEntryIds = prevSnapshot.filter((r) => r.entry_id && !nextIds.has(r._dndId)).map((r) => r.entry_id);
 
-        await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast, deletedEntryIds, store.getState().syncServerFields);
+        const ok = await syncDeemoToServer(prevSnapshot, nextSnapshot, date, mutate, update, toast, deletedEntryIds, store.getState().syncServerFields);
+        if (ok === false) inverseFn();
     }, [store, date, update, mutate, toast]);
 
     const applyCompoundStep = useCallback(async (action, direction) => {
@@ -57,24 +58,29 @@ export function useUndoRedoSync({ store, dataRows, date, mutate, update, toast }
             console.error(`${action.type} ${targetState} failed:`, err);
             toast?.error?.(`Couldn't ${direction} that ${action.type}.`);
         }
-    }, [store, mutate, update, toast]);
+    }, [store, date, mutate, update, toast]);
 
     const applyHistoryStep = useCallback(async (direction) => {
-        if (isSyncingRef.current) return;
+        if (isSyncingRef.current || isLocked()) return;
+
         isSyncingRef.current = true;
+
         try {
             const { pendingUndoAction, pendingRedoAction, undo, redo } = store.getState();
             const action = direction === "undo" ? pendingUndoAction() : pendingRedoAction();
 
             if (action?.type === "split" || action?.type === "merge") {
-                await applyCompoundStep(action, direction);
+                await withUpdating(applyCompoundStep(action, direction));
             } else {
-                await applyRowStep(direction === "undo" ? undo : redo);
+                await withUpdating(applyRowStep(
+                    direction === "undo" ? undo : redo,
+                    direction === "undo" ? redo : undo,
+                ));
             }
         } finally {
             isSyncingRef.current = false;
         }
-    }, [store, applyRowStep, applyCompoundStep]);
+    }, [store, isLocked, withUpdating, applyRowStep, applyCompoundStep]);
 
     return {
         handleUndo: useCallback(() => applyHistoryStep("undo"), [applyHistoryStep]),

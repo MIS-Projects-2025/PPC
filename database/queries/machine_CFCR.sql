@@ -6,6 +6,7 @@ select * from qdn_db.machine_capability_part_rules;
 
 select * from ppc.machine_dedicated_parts;
 
+
 -- x_CREATE TABLE `x_machine_capability_part_rules` (
 --   `x_rule_id` bigint unsigned NOT NULL AUTO_INCREMENT,
 --   `x_setup_state_id` bigint unsigned NOT NULL,

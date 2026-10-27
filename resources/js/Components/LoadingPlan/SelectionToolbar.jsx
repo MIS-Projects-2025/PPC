@@ -7,13 +7,25 @@ import { FaTrash } from "react-icons/fa";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import MergeModal from "./MergeModal";
 import SplitModal from "./SplitModal";
+import { STATUS_OPTIONS } from "./StatusMenu.jsx";
 import TransferModal from "./TransferModal";
+
+const isTyping = (el) => {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    if (el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+    if (el.tagName === "INPUT") {
+        return !["checkbox", "radio", "button", "submit", "reset"].includes(el.type);
+    }
+    return false;
+};
 
 export default function SelectionToolbar({
     selectedIds,
     machinePlatform,
     allData,
     machines,
+    nonMachines,
     onTag,
     disabled,
     onClearTag,
@@ -48,6 +60,55 @@ export default function SelectionToolbar({
         fn?.(e);
     };
 
+    const run = (reason, fn) => {
+        if (reason) return toast.info(reason, { id: "toolbar-blocked" });
+        fn();
+    };
+
+    const shortcutsRef = useRef({});
+    shortcutsRef.current = {
+        g: () => run(reasons.group, () => document.getElementById("bucket-popover")?.togglePopover?.()),
+        b: () => run(reasons.bulk, () => document.getElementById("tag-expedite-popover")?.togglePopover?.()),
+        s: () => run(reasons.split, () => splitModalRef.current?.showModal()),
+        m: () => run(reasons.merge, () => mergeModalRef.current?.showModal()),
+        r: () => run(reasons.rework, () => onRework(selectedRow)),
+        u: () => run(busy || (isSelectedRowsUnassigned ? reasons.bulk : null), () => {
+            transferModalRef.current?.close();
+            setStatusOpen((v) => !v);
+            setTransferOpen(false);
+        }),
+        t: () => run(busy, () => {
+            setTransferOpen(true);
+            transferModalRef.current?.showModal();
+            setStatusOpen(false);
+        }),
+        // Delete: () => run(reasons.delete, onDelete),
+    };
+
+    useEffect(() => {
+        if (count === 0) return;
+
+        const onKeyDown = (e) => {
+            if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+            if (isTyping(e.target)) return;
+            if (document.querySelector("dialog[open]")) return;
+
+            const el = e.target;
+            if (el.isContentEditable || isTyping(e.target)) return;
+            if (document.querySelector("dialog[open]")) return; // a modal is open
+
+            const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+            const fn = shortcutsRef.current[key];
+            if (!fn) return;
+
+            e.preventDefault();
+            fn();
+        };
+
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [count]);
+
     const blockedCls = (reason) => (reason ? "opacity-50 cursor-not-allowed" : "");
 
     const busy = disabled ? "Another action is still in progress." : null;
@@ -72,7 +133,6 @@ export default function SelectionToolbar({
         () => allData.find((r) => selectedIds.has(r.id)),
         [allData, selectedIds],
     );
-    console.log("🚀 ~ SelectionToolbar ~ selectedRow:", selectedRow)
     
     const selectedRows = useMemo(
         () => allData.filter((r) => selectedIds.has(r.id)),
@@ -97,7 +157,6 @@ export default function SelectionToolbar({
     const canRework =
         count === 1 && selectedRow && !isBlockRow(selectedRow) && selectedRow.entry_id &&
         selectedRow.machine !== null && !selectedRow.is_leaked;
-    console.log("🚀 ~ SelectionToolbar ~ canRework:", canRework)
 
     const isSelectedRowsUnassigned = useMemo(
         () => selectedRows.some((r) => r.machine === null),
@@ -125,14 +184,11 @@ export default function SelectionToolbar({
             || (!canDelete ? "Unassigned rows cannot be deleted." : null),
     };
 
-    console.log("🚀 ~ SelectionToolbar ~ isSelectedRowsUnassigned:", isSelectedRowsUnassigned)
-
     const transferLotIds = useMemo(
         () => [...new Set(selectedRows.map((r) => r.lot_id).filter(Boolean))],
         [selectedRows],
     );
 
-    console.log("🚀 ~ SelectionToolbar ~ count:", count)
     if (count === 0) {
         return null;
     }
@@ -162,6 +218,7 @@ export default function SelectionToolbar({
                         onClick={guard(reasons.group)}
                     >
                         Move to group ▾
+                        <kbd className="kbd rounded-sm kbd-xs">g</kbd>
                     </button>
 
                     <ul className="dropdown menu w-56 rounded-box bg-base-100 p-2 shadow-lg border border-base-content/10"
@@ -192,6 +249,7 @@ export default function SelectionToolbar({
                         aria-disabled={!!reasons.bulk}
                     >
                         Bulk Actions ▾
+                        <kbd className="kbd rounded-sm kbd-xs">b</kbd>
                     </button>
 
                     {/* Popover Dropdown Menu */}
@@ -300,7 +358,7 @@ export default function SelectionToolbar({
                             aria-disabled={!!reasons.split}
                             onClick={guard(reasons.split, () => splitModalRef.current?.showModal())}
                         >
-                            <GoRepoForked size={16} /> split
+                            <GoRepoForked size={16} /> split <kbd className="kbd rounded-sm kbd-xs">s</kbd>
                         </button>
                     </div>
 
@@ -313,7 +371,7 @@ export default function SelectionToolbar({
                             aria-disabled={!!reasons.merge}
                             onClick={guard(reasons.merge, () => mergeModalRef.current?.showModal())}
                         >
-                            <GoGitMerge size={16} /> merge
+                            <GoGitMerge size={16} /> merge <kbd className="kbd rounded-sm kbd-xs">m</kbd>
                         </button>
                     </div>
 
@@ -324,16 +382,16 @@ export default function SelectionToolbar({
                         <button
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 ${blockedCls(reasons.rework)}`}
                             aria-disabled={!!reasons.rework}
-                            onClick={() => onRework(selectedRow)}
+                            onClick={guard(reasons.rework, () => onRework(selectedRow))}
                         >
-                            Rework
+                            Rework <kbd className="kbd rounded-sm kbd-xs">r</kbd>
                         </button>
                     </div>
 
                     {/* Bulk status */}
                     <div className="relative">
                         <button
-                            onClick={guard(reasons.group, () => {
+                            onClick={guard(reasons.bulk, () => {
                                 transferModalRef.current?.close();
                                 setStatusOpen((v) => !v);
                                 setTransferOpen(false);
@@ -341,7 +399,7 @@ export default function SelectionToolbar({
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.bulk)}`}
                             disabled={disabled || isSelectedRowsUnassigned}
                         >
-                            Set status
+                            Set status <kbd className="kbd rounded-sm kbd-xs">u</kbd>
                             <svg
                                 width="10"
                                 height="10"
@@ -355,15 +413,7 @@ export default function SelectionToolbar({
                         </button>
                         {statusOpen && (
                             <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36 z-50">
-                                {[
-                                    "DONE",
-                                    "RUNNING",
-                                    "FOR PROCESS",
-                                    "FVI",
-                                    "BOXING",
-                                    "LWAIT",
-                                    "NONE",
-                                ].map((s) => (
+                                {STATUS_OPTIONS.map((s) => (
                                     <button
                                         key={s}
                                         className="btn btn-ghost w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
@@ -393,7 +443,7 @@ export default function SelectionToolbar({
                             disabled={disabled}
                             className="btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1"
                         >
-                            Transfer to…
+                            Transfer to… <kbd className="kbd rounded-sm kbd-xs">t</kbd>
                             <svg
                                 width="10"
                                 height="10"
@@ -444,6 +494,7 @@ export default function SelectionToolbar({
             <TransferModal
                 ref={transferModalRef}
                 machines={machines}
+                nonMachines={nonMachines}
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
                 transferLotIds={transferLotIds}
@@ -469,10 +520,13 @@ export default function SelectionToolbar({
             <SplitModal
                 ref={splitModalRef}
                 machines={machines}
+                nonMachines={nonMachines}
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
                 parentLotId={selectedRow?.lot_id}
+                rootLotId={selectedRow?.split_info?.rootLotId ?? selectedRow?.lot_id}
                 totalQty={selectedRow?.qty}
+                takenLotIds={allData.map((r) => r.lot_id)}
                 onConfirm={({
                     childLotId,
                     childQty,

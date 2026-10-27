@@ -1,6 +1,8 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import React, { useContext } from "react";
 
+const noop = () => {};
+
 export function LotIdCell({
     lotId,
     isPickup,
@@ -10,7 +12,10 @@ export function LotIdCell({
     isRework,
     reworkSeq,
     otherLocation,
+    source,
 }) {
+    const isF3 = source === "f3" && !otherLocation;
+
     const {
         handleShowHistory = noop,
         handleShowMergeHistory = noop,
@@ -21,12 +26,14 @@ export function LotIdCell({
             {splitInfo && (
                 <SplitBadge
                     splitInfo={splitInfo}
+                    lotId={lotId}
                     handleShowHistory={handleShowHistory}
                 />
             )}
             {mergeInfo && (
                 <MergeBadge
                     mergeInfo={mergeInfo}
+                    lotId={lotId}
                     handleShowMergeHistory={handleShowMergeHistory}
                 />
             )}
@@ -47,6 +54,7 @@ export function LotIdCell({
             <span className="font-mono">
                 {otherLocationBadge}
                 <LotLabel
+                    isF3={isF3}
                     lotId={lotId}
                     isPickup={isPickup}
                     isPlannedYesterday={isPlannedYesterday}
@@ -62,6 +70,7 @@ export function LotIdCell({
             <div className="font-mono truncate min-w-0">
                 {otherLocationBadge}
                 <LotLabel
+                    isF3={isF3}
                     lotId={lotId}
                     isPickup={isPickup}
                     isPlannedYesterday={isPlannedYesterday}
@@ -78,6 +87,7 @@ export function LotIdCell({
 }
 
 function LotLabel({
+    isF3,
     lotId,
     isPickup,
     isPlannedYesterday,
@@ -98,6 +108,10 @@ function LotLabel({
                 </span>
             )}
 
+            {isF3 && (
+                <span className="text-xl px-1 bg-accent font-mono font-extrabold mr-1" title="F3 traveler lot">F3</span>
+            )}
+
             <span className="truncate">{lotId}</span>
 
             {isRework && (
@@ -109,7 +123,7 @@ function LotLabel({
     );
 }
 
-function SplitBadge({ splitInfo, handleShowHistory }) {
+function SplitBadge({ splitInfo, lotId, handleShowHistory }) {
     const { isParent, isChild, rootLotId } = splitInfo;
 
     return (
@@ -117,7 +131,7 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
             type="button"
             onClick={(e) => {
                 e.stopPropagation();
-                handleShowHistory(rootLotId, isParent, isChild);
+                handleShowHistory(rootLotId, isParent, isChild, lotId);
             }}
             title={
                 isParent
@@ -131,7 +145,7 @@ function SplitBadge({ splitInfo, handleShowHistory }) {
     );
 }
 
-function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
+function MergeBadge({ mergeInfo, lotId, handleShowMergeHistory }) {
     const { isTarget, isSource, mergedInto, mergedFrom } = mergeInfo;
     const relatedLotId = mergedInto ?? mergedFrom;
 
@@ -144,6 +158,7 @@ function MergeBadge({ mergeInfo, handleShowMergeHistory }) {
                     relatedLotId,
                     isTarget,
                     isSource,
+                    lotId
                 );
             }}
             title={

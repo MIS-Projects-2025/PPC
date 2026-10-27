@@ -27,6 +27,25 @@ class MachineCapacity extends Model
     ];
 
     /**
+     * Capacity rows effective on $date for many machines, in one query.
+     * Keyed by machine_id. Same predicate as effectiveFor().
+     */
+    public static function effectiveForMany(iterable $machineIds, \Carbon\Carbon $date): \Illuminate\Support\Collection
+    {
+        $day = $date->toDateString();
+
+        return static::query()
+            ->whereIn('machine_id', collect($machineIds)->values())
+            ->where('effective_from', '<=', $day)
+            ->where(function ($q) use ($day) {
+                $q->whereNull('effective_to')->orWhere('effective_to', '>=', $day);
+            })
+            ->orderBy('effective_from')   // see note below
+            ->get()
+            ->keyBy('machine_id');
+    }
+
+    /**
      * Get the machine that owns this capacity record.
      */
     public function machine(): BelongsTo

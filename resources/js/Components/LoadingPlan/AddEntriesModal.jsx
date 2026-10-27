@@ -19,6 +19,7 @@ const AddEntryModal = forwardRef(function AddEntryModal(
         date,
         packageGroups,
         activePackage,
+        allowLots = true,
         handleAddRow,
         saveBlock,
         blockPresets = DEFAULT_BLOCK_PRESETS,
@@ -28,7 +29,7 @@ const AddEntryModal = forwardRef(function AddEntryModal(
     const { isUpdating = null } = useContext(TableActionsContext);
 
     // "lot" | "block"
-    const [entryType, setEntryType] = useState("lot");
+    const [entryType, setEntryType] = useState(allowLots ? "lot" : "block");
     // "above" | "below" relative to anchorRow
     const [placement, setPlacement] = useState(initialPlacement);
 
@@ -162,7 +163,7 @@ const AddEntryModal = forwardRef(function AddEntryModal(
         if (!anchorRow) return;
 
         setPlacement(initialPlacement);
-        setEntryType("lot");
+        setEntryType(allowLots ? "lot" : "block");
         setError(null);
 
         setPartName("");
@@ -211,20 +212,21 @@ const AddEntryModal = forwardRef(function AddEntryModal(
                                 Entry type
                             </legend>
                             <div className="join">
-                                <button
-                                    type="button"
-                                    className={`btn join-item btn-sm ${
-                                        entryType === "lot"
-                                            ? "btn-primary"
-                                            : "btn-ghost"
-                                    }`}
-                                    onClick={() => {
-                                        setEntryType("lot");
-                                        resetError();
-                                    }}
-                                >
-                                    Lot
-                                </button>
+                                {allowLots && (
+                                    <button
+                                        type="button"
+                                        className={`btn join-item btn-sm ${
+                                            entryType === "lot" ? "btn-primary" : "btn-ghost"
+                                        }`}
+                                        onClick={() => {
+                                            setEntryType("lot");
+                                            resetError();
+                                        }}
+                                    >
+                                        Lot
+                                    </button>
+                                )}
+
                                 <button
                                     type="button"
                                     className={`btn join-item btn-sm ${

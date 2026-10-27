@@ -8,6 +8,7 @@ class MachineTransitionAxisRule extends Model
 {
     protected $connection = 'qdn_db';
     protected $table = 'machine_transition_axis_rules';
+    public $timestamps = false;
 
     protected $fillable = [
         'machine_id',

@@ -25,13 +25,17 @@ use App\Http\Controllers\{
     LoadingPlanSettingsController,
     LoadingPlanPackageGroupController,
     MachineCapacityController,
+    MachinePlatformCapacityBandController,
     PartNameController,
+    NonMachineController,
     PickupController,
     PlPackageMasterController,
     LoadingPlanSplitController,
     RuleExplorerController,
     LoadingPlanMergeController,
     PlRuleController,
+    CapabilityMatrixController,
+    TransitionGroupController,
     WipController,
     LotController,
     RackController,
@@ -46,6 +50,24 @@ Route::redirect('/', "/$app_name");
 require __DIR__ . '/auth.php';
 
 Route::prefix('rules')->group(function () {
+    Route::get('/machine-picker', [CapabilityMatrixController::class, 'machinePicker']);
+    Route::get('/machines/{machine}', [CapabilityMatrixController::class, 'page']);
+    Route::get('/machines/{machine}/capabilities', [CapabilityMatrixController::class, 'data']);
+    Route::get('/machines/{machine}/transition-rules', [CapabilityMatrixController::class, 'transitionRules']);
+    Route::post('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkStore']);
+    Route::patch('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkUpdate']);
+    Route::delete('/setup-states/bulk', [CapabilityMatrixController::class, 'bulkDestroy']);
+
+    // groups
+    Route::get('/machines/{machine}/groups', [TransitionGroupController::class, 'data']);
+    Route::post('/machines/{machine}/groups', [TransitionGroupController::class, 'storeGroup']);
+    Route::get('/machines/{machine}/pair-cost', [TransitionGroupController::class, 'pairCost']);
+    Route::post('/machines/{machine}/group-rules', [TransitionGroupController::class, 'saveRule']);
+    Route::patch('/groups/{group}', [TransitionGroupController::class, 'updateGroup'])->whereNumber('group');
+    Route::delete('/groups/{group}', [TransitionGroupController::class, 'destroyGroup'])->whereNumber('group');
+    Route::put('/groups/{group}/members', [TransitionGroupController::class, 'syncMembers'])->whereNumber('group');
+    Route::delete('/group-rules/{rule}', [TransitionGroupController::class, 'destroyRule'])->whereNumber('rule');
+
     Route::get('/', [RuleExplorerController::class, 'index']);
     Route::get('/data', [RuleExplorerController::class, 'data']);
     Route::get('/machines', [RuleExplorerController::class, 'machineList']);
@@ -66,9 +88,12 @@ Route::prefix('rules')->group(function () {
     Route::post('/part-rules', [RuleExplorerController::class, 'storePartRule']);
     Route::delete('/part-rules/{id}', [RuleExplorerController::class, 'destroyPartRule']);
 
+    Route::get('/view', [RuleExplorerController::class, 'view']);
+
     // axis rules
     Route::post('/axis-rules', [RuleExplorerController::class, 'storeAxisRule']);
     Route::delete('/axis-rules/{id}', [RuleExplorerController::class, 'destroyAxisRule']);
+    Route::patch('/axis-rules/{id}', [CapabilityMatrixController::class, 'updateAxisRule'])->whereNumber('id');
 
     // transition exceptions
     Route::post('/transition-exceptions', [RuleExplorerController::class, 'storeTransitionException']);
@@ -88,6 +113,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
         ->whereIn('section', LoadingPlanSettingsController::SECTIONS)
         ->name('settings');
 
+
     Route::prefix('package-groups')->name('package-groups.')->group(function () {
         Route::get('grouped', [LoadingPlanPackageGroupController::class, 'grouped'])->name('grouped');
         Route::get('resolve', [LoadingPlanPackageGroupController::class, 'resolve'])->name('resolve');
@@ -99,6 +125,16 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::prefix('machine-capacities')->name('machine-capacities.')->group(function () {
         Route::get('current/{machineId}', [MachineCapacityController::class, 'current'])->name('current');
     });
+
+    Route::patch('entries/{id}/doable', [LoadingPlanEntryController::class, 'updateDoable'])->name('entries.doable');
+    Route::patch('part-recipe', [LoadingPlanEntryController::class, 'updatePartRecipe'])->name('part-recipe.update');
+    Route::get('missing-parts', [LoadingPlanEntryController::class, 'missingParts'])->name('missing-parts');
+    Route::post('parts/recalculate', [LoadingPlanEntryController::class, 'recalculateParts'])->name('parts.recalculate');
+
+    Route::post('non-machines', [NonMachineController::class, 'store'])->name('non-machines.store');
+    Route::patch('non-machines/{nonMachine}', [NonMachineController::class, 'update'])->name('non-machines.update');
+    Route::delete('non-machines/{nonMachine}', [NonMachineController::class, 'destroy'])->name('non-machines.destroy');
+    Route::patch('non-machines/{nonMachine}/start', [NonMachineController::class, 'setStart'])->name('non-machines.start');
 
     Route::post('entries/{id}/rework', [LoadingPlanEntryController::class, 'rework'])->name('entries.rework');
 
@@ -116,6 +152,10 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::apiResource('machine-capacities', MachineCapacityController::class)
         ->parameters(['machine-capacities' => 'id'])
         ->names('machine-capacities');
+
+    Route::apiResource('capacity-bands', MachinePlatformCapacityBandController::class)
+        ->except(['show'])
+        ->parameters(['capacity-bands' => 'capacityBand']);
 
     Route::post('run-scheduler', [LoadingPlanController::class, 'runScheduler'])
         ->name('run-scheduler');
@@ -144,7 +184,7 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::post('manual-lots', [LoadingPlanEntryController::class, 'createManualLot'])->name('manual-lots.store');
     Route::get('/', [LoadingPlanController::class, 'index'])->name('index');
     Route::get('deemo', [LoadingPlanController::class, 'deemo'])->name('deemo');
-    Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine');
+    // Route::get('by-machine', [LoadingPlanController::class, 'byMachine'])->name('by-machine'); // deprecated
 
     Route::prefix('splits')->name('splits.')->group(function () {
         Route::post('/', [LoadingPlanSplitController::class, 'store'])->name('store');
@@ -321,7 +361,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     });
 
     // Package Capacity
-    Route::prefix('package-capacity')->name('api.package.capacity')->group(function () {
+    Route::prefix('package-capacity')->name('api.package.capacity.')->group(function () {
         Route::get('/get-trend', [PackageCapacityController::class, 'getTrend'])->name('getTrend');
         Route::middleware(ApiPermissionMiddleware::class . ':capacity_upload')->group(function () {
             Route::get('/insert',    [PackageCapacityController::class, 'storeCapacity'])->name('insert');

@@ -6,6 +6,7 @@ export function useBulkOperations({
     dataRows,
     selectedRows,
     update,
+    beginWrite,
     withUpdating,
     mutate,
     toast,
@@ -16,6 +17,8 @@ export function useBulkOperations({
 }) {
     const runFieldUpdate = useCallback(
         ({ filter, fields, applyLocal, conflictLabel, afterSuccess }) => {
+            if (!beginWrite()) return;
+
             const targets = dataRows.filter(filter);
             if (targets.length === 0) return;
 
@@ -60,7 +63,7 @@ export function useBulkOperations({
                     }
                 });
         },
-        [dataRows, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkTag = useCallback(
@@ -104,6 +107,8 @@ export function useBulkOperations({
 
     const handleBulkTransfer = useCallback(
         (targetMachine) => {
+            if (!beginWrite()) return;
+
             const selected = dataRows.filter((r) => selectedRows.has(r.id));
             const lotEntryIds = selected.filter((r) => !isBlockRow(r) && r.entry_id).map((r) => r.entry_id);
             const unplannedLotIds = selected.filter((r) => !isBlockRow(r) && !r.entry_id && r.lot_id).map((r) => r.lot_id);
@@ -112,6 +117,9 @@ export function useBulkOperations({
             const prevSnapshot = dataRows;
 
             const affectedMachines = new Set();
+
+            if (lotEntryIds.length === 0 && unplannedLotIds.length === 0 && blockEntryIds.length === 0) return;
+
             update((prev) => {
                 const next = prev.map((r) => {
                     if (!selectedRows.has(r.id)) return { ...r };
@@ -124,11 +132,18 @@ export function useBulkOperations({
             setIsDirty(true);
             clearSelection();
 
-            if (lotEntryIds.length === 0 && unplannedLotIds.length === 0 && blockEntryIds.length === 0) return;
-
             withUpdating(
                 mutate(route("loading-plan.bulk-transfer"), {
-                    body: { lot_ids: unplannedLotIds, entry_ids: lotEntryIds, block_entry_ids: blockEntryIds, target_machine: targetMachine, scheduled_date: date },
+                    body: { 
+                        lot_ids: unplannedLotIds, 
+                        entry_ids: lotEntryIds, 
+                        block_entry_ids: blockEntryIds, 
+                        target_machine: targetMachine, 
+                        scheduled_date: date,
+                        locks: Object.fromEntries(
+                            selected.filter((r) => r.entry_id).map((r) => [r.entry_id, r.lock_version ?? null]),
+                        ),
+                    },
                 }),
             )
                 .then(({ entries, affected_timings }) => {
@@ -152,15 +167,14 @@ export function useBulkOperations({
                     toast?.error?.(err?.message ?? "Couldn't transfer the selected rows — reverted.");
                 });
         },
-        [selectedRows, update, dataRows, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [selectedRows, update, dataRows, date, clearSelection, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkDelete = useCallback(() => {
-        console.log("🚀 ~ useBulkOperations ~ selectedRows:", selectedRows)
+        if (!beginWrite()) return false;  
         const targets = dataRows.filter((r) => {
             return selectedRows.has(r.id) && r.entry_id;
         });
-        console.log("🚀 ~ useBulkOperations ~ targets:", targets)
         const entryIds = targets.map((r) => r.entry_id);
         const prevSnapshot = dataRows;
 
@@ -173,7 +187,17 @@ export function useBulkOperations({
                     if (!selectedRows.has(r.id)) return r;
                     affectedMachines.add(r.machine);
                     if (removable(r)) return r;
-                    return { ...r, machine: null, sequence_order: null };
+                    return {
+                        ...r,
+                        machine: null,
+                        sequence_order: null,
+                        time_start: null,
+                        time_end: null,
+                        time_start_day_offset: 0,
+                        time_end_day_offset: 0,
+                        time_start_at: null,
+                        time_end_at: null,
+                    };
                 })
                 .filter((r) => !(selectedRows.has(r.id) && removable(r)));
 
@@ -183,9 +207,15 @@ export function useBulkOperations({
         setIsDirty(true);
         clearSelection();
 
-        if (entryIds.length === 0) return;
+        if (entryIds.length === 0) return false;
 
-        withUpdating(mutate(route("loading-plan.bulk-delete"), { body: { ids: entryIds, scheduled_date: date } }))
+        withUpdating(mutate(route("loading-plan.bulk-delete"), { 
+            body: { 
+                ids: entryIds, 
+                locks: Object.fromEntries(targets.map((r) => [r.entry_id, r.lock_version ?? null])), 
+                scheduled_date: date
+            }, 
+        }))
             .then(({ unassigned, affected_timings }) => {
                 const patches = targets.map((r) => {
                     const m = unassigned?.find((e) => e.id === r.entry_id);
@@ -199,10 +229,14 @@ export function useBulkOperations({
                 update(() => prevSnapshot, true);
                 toast?.error?.("Couldn't delete/unassign — reverted.");
             });
-    }, [selectedRows, update, dataRows, date, clearSelection, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
+
+        return true;
+    }, [selectedRows, update, dataRows, date, clearSelection, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields]);
 
     const handleRework = useCallback(
         (row) => {
+            if (!beginWrite()) return false;
+
             if (!row || isBlockRow(row) || !row.entry_id || row.machine === null) return;
 
             withUpdating(
@@ -221,8 +255,10 @@ export function useBulkOperations({
                     console.error("Rework failed:", err);
                     toast?.error?.(err?.data?.message ?? "Couldn't create the rework row.");
                 });
+
+            return true;
         },
-        [withUpdating, mutate, update, date, setIsDirty, clearSelection, toast],
+        [beginWrite, withUpdating, mutate, update, date, setIsDirty, clearSelection, toast],
     );
 
     return {

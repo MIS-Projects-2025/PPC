@@ -1,7 +1,9 @@
+import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { applyAffectedTimings, applyTimeStartEdit } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { syncDeemoToServer } from "@/Lib/LoadingPlan/sync";
 import toSnakeCase from "@/Utils/toSnakeCase";
+import dayjs from "dayjs";
 import { useCallback } from "react";
 
 export function useCellEditPersistence({
@@ -10,6 +12,7 @@ export function useCellEditPersistence({
     baseTimes,
     date,
     update,
+    beginWrite,
     withUpdating,
     mutate,
     toast,
@@ -33,23 +36,47 @@ export function useCellEditPersistence({
             const field = column.key;
             const prevRow = dataRows.find((r) => r.id === changedRow.id);
             if (!prevRow) return;
-
+          
             const value = changedRow[field];
-            if (value === prevRow[field]) return;
+            const dayOffset = changedRow.time_start_day_offset ?? 0;
+            const dayChanged = field === "time_start" && dayOffset !== (prevRow.time_start_day_offset ?? 0);
+            if (value === prevRow[field] && !dayChanged) return;
+            if (!beginWrite()) return;
 
             if (field === "time_start") {
+                if (isNonMachineKey(prevRow.machine)) {
+                    const lane = dataRows.filter((r) => r.machine === prevRow.machine);
+
+                    // first row of a non-machine lane: its start IS the lane start
+                    if (lane[0]?._dndId === prevRow._dndId) {
+                        const [h, m] = String(value).split(":").map(Number);
+                        if (!Number.isFinite(h) || !Number.isFinite(m)) {
+                            toast?.error?.("That time isn't valid.");
+                            return;
+                        }
+                        const timeStart = dayjs(date).add(dayOffset, "day").hour(h).minute(m).format("YYYY-MM-DD HH:mm:00");
+                        const nonMachineId = Number(prevRow.machine.slice(3));
+
+                        withUpdating(
+                            mutate(route("loading-plan.non-machines.start", { nonMachine: nonMachineId }), {
+                                method: "PATCH",
+                                body: { time_start: timeStart, scheduled_date: date },
+                            }),
+                        )
+                            .then(({ affected_timings }) => applyAffectedTimings(update, affected_timings, date))
+                            .catch((err) => {
+                                console.error("Failed to set non-machine start:", err);
+                                toast?.error?.(err?.message ?? "Couldn't change the start time.");
+                            });
+                        return;
+                    }
+                }
+
                 if (!baseTimes) {
                     toast?.error?.("Can't recompute the schedule — baseTimes wasn't provided to the grid.");
                     return;
                 }
-                const { rows: withGap, error } = applyTimeStartEdit(
-                    dataRows,
-                    prevRow._dndId,
-                    prevRow.machine,
-                    value,
-                    baseTimes,
-                    date,
-                );
+                const { rows: withGap, error, laneStart } = applyTimeStartEdit(dataRows, prevRow._dndId, prevRow.machine, value, baseTimes, date, dayOffset);
 
                 if (error) {
                     toast?.error?.(error);
@@ -57,10 +84,13 @@ export function useCellEditPersistence({
                 }
 
                 const prevSnapshot = dataRows;
-                update(() => withGap);
+                update(() => withGap, !!laneStart);
                 setIsDirty(true);
 
-                withUpdating(syncDeemoToServer(prevSnapshot, withGap, date, mutate, update, toast, [], syncServerFields));
+                withUpdating(syncDeemoToServer(
+                    prevSnapshot, withGap, date, mutate, update, toast, [], syncServerFields,
+                    laneStart ? { [prevRow.machine]: laneStart } : {},
+                ));
                 return;
             }
 
@@ -68,6 +98,11 @@ export function useCellEditPersistence({
             setIsDirty(true);
 
             const backendField = toSnakeCase(field);
+            const prevValue = prevRow[field];
+
+            const revertField = () =>
+                update((prev) => prev.map((r) => (r.id === changedRow.id ? { ...r, [field]: prevValue } : r)), true);
+
             withUpdating(
                 mutate(
                     route("loading-plan.entries.update", { id: prevRow.entry_id ?? 0 }),
@@ -100,13 +135,15 @@ export function useCellEditPersistence({
                             },
                         ]);
                         toast?.error?.("Someone else updated this lot — showing their latest value.");
-                    } else if (err.status === 422) {
-                        const firstError = Object.values(err.data?.errors ?? {})[0]?.[0];
-                        toast?.error?.(firstError ?? "That value isn't valid.");
-                    } else {
-                        console.error("Failed to save field edit:", err);
-                        toast?.error?.(err.data?.message ?? "Failed to save your change. Please try again.");
-                    }
+                        } else if (err.status === 422) {
+                            revertField();
+                            const firstError = Object.values(err.data?.errors ?? {})[0]?.[0];
+                            toast?.error?.(firstError ?? "That value isn't valid.");
+                        } else {
+                            revertField();
+                            console.error("Failed to save field edit:", err);
+                            toast?.error?.(err.data?.message ?? "Failed to save your change. Please try again.");
+                        }
                 });
         },
         [dataRows, displayRows, baseTimes, date, update, withUpdating, mutate, toast, setIsDirty, syncServerFields],

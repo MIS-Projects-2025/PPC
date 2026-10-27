@@ -1,27 +1,21 @@
 import { useDroppable } from "@dnd-kit/core";
+import clsx from "clsx";
+import { useCallback } from "react";
 import { Row } from "react-data-grid";
 
-export function DroppableRow({ rowIdxByElement, props }) {
-    const { row, rowIdx } = props;
+function DroppableDataRow({ rowIdxByElement, props }) {
+    const { row, rowIdx, className } = props;
+    const { setNodeRef, isOver } = useDroppable({ id: `row-${row.id}` });
 
-    if (row.__type === "header") {
-        return <Row {...props} />;
-    }
-
-    const { setNodeRef, isOver } = useDroppable({
-        id: `row-${row.id}`,
-    });
-
-    const setRefs = (el) => {
+    const setRefs = useCallback((el) => {
         setNodeRef(el);
         if (el) rowIdxByElement.set(el, rowIdx);
-    };
+    }, [setNodeRef, rowIdxByElement, rowIdx]);
 
-    return (
-        <Row
-            ref={setRefs}
-            {...props}
-            className={isOver ? "bg-sky-500/10" : undefined}
-        />
-    );
+    return <Row ref={setRefs} {...props} className={clsx(className, isOver && "bg-sky-500/10")} />;
+}
+
+export function DroppableRow({ rowIdxByElement, props }) {
+    if (props.row.__type === "header") return <Row {...props} />;
+    return <DroppableDataRow rowIdxByElement={rowIdxByElement} props={props} />;
 }

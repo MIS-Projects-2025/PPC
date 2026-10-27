@@ -7,6 +7,7 @@ use App\Models\MachineFocusGroupRule;
 use App\Models\MachinePartExclusion;
 use App\Models\PackageGroupLoadingPlan;
 use App\Services\RuleExplorerService;
+use App\Services\RuleViewService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
@@ -18,16 +19,22 @@ use App\Models\MachineTransitionRuleException;
 
 class RuleExplorerController extends Controller
 {
-    public function __construct(protected RuleExplorerService $service) {}
+    public function __construct(protected RuleExplorerService $service, protected RuleViewService $viewService) {}
 
     /** GET /rules -- the dashboard page */
     public function index()
     {
-        // return Inertia::render('LoadingPlanRulesDashboard');
         return Inertia::render('LoadingPlanRulesDashboard', [
-            'rules' => $this->service->getAllRules(),
             'machines' => $this->machineList()->getData(true),
+            'packageOptions' => $this->viewService->packageOptions(),
         ]);
+    }
+
+    public function view(Request $request)
+    {
+        return response()->json($this->viewService->getMachineView(
+            $request->only(['machine', 'package', 'process', 'factory', 'leadcount', 'part'])
+        ));
     }
 
     public function data(Request $request)
@@ -73,13 +80,16 @@ class RuleExplorerController extends Controller
             'machine_id' => 'required|integer',
             'factory' => 'required|in:F1,F2,F3',
             'package_name' => 'nullable|string|max:50',
+            'focus_group' => 'nullable|string|max:50',
+            'lot_type' => 'nullable|string|max:20',
+            'station' => 'nullable|string|max:30',
             'body_size' => 'nullable|string|max:20',
             'thickness' => 'nullable|numeric',
             'leadcount_min' => 'nullable|integer',
             'leadcount_max' => 'nullable|integer',
             'leadcount_exclude' => 'nullable|string|max:50',
             'leadcount_include' => 'nullable|string|max:255',
-            'process_type' => 'required|in:taping,tubing,both,tray',
+            'process_type' => 'required|in:taping,tubing,both,tray,gel,header,bag',
             'remarks' => 'nullable|string|max:255',
         ]);
 
@@ -101,11 +111,14 @@ class RuleExplorerController extends Controller
             'package_name' => 'nullable|string|max:50',
             'body_size' => 'nullable|string|max:20',
             'thickness' => 'nullable|numeric',
+            'focus_group' => 'nullable|string|max:50',
+            'lot_type' => 'nullable|string|max:20',
+            'station' => 'nullable|string|max:30',
             'leadcount_min' => 'nullable|integer',
             'leadcount_max' => 'nullable|integer',
             'leadcount_exclude' => 'nullable|string|max:50',
             'leadcount_include' => 'nullable|string|max:255',
-            'process_type' => 'sometimes|in:taping,tubing,both,tray',
+            'process_type' => 'sometimes|in:taping,tubing,both,tray,gel,header,bag',
             'remarks' => 'nullable|string|max:255',
         ]);
         $state->update($data);
@@ -187,8 +200,8 @@ class RuleExplorerController extends Controller
     {
         $data = $request->validate([
             'machine_id' => 'required|integer',
-            'axis' => 'required|in:factory,package_group,leadcount',
-            'operation_type' => 'required|in:setup,conversion',
+            'axis' => 'required|in:factory,package_group,leadcount,body_size,thickness',
+            'operation_type' => 'required|in:setup,conversion,none',
             'est_duration_minutes' => 'required|integer',
             'combination_rule' => 'required|in:max,sum',
         ]);

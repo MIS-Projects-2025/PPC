@@ -1,6 +1,6 @@
 import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
-import { createContext } from 'react';
+import { createContext, useEffect, useRef, useState } from 'react';
 import { SelectColumn } from "react-data-grid";
 import { isBlockRow } from "../../Lib/LoadingPlan/helpers";
 import { BucketHeaderCell } from "./BucketHeaderBar";
@@ -18,6 +18,88 @@ export const EDITABLE_COLUMNS = {
     remarks: "string",
     time_start: "time",
 };
+
+export const fmtHours = (m) => (m == null || m === "" ? "" : (Number(m) / 60).toFixed(2));
+
+export function TimeStartEditor({ row, onRowChange, onClose }) {
+    const [t, setT] = useState(row.time_start ?? "");
+    const [day, setDay] = useState(row.time_start_day_offset ?? 0);
+    const done = useRef(false);
+    const wrap = useRef(null);
+    const timeRef = useRef(null);
+    useEffect(() => { timeRef.current?.focus(); }, []);
+
+    const commit = () => {
+        if (done.current) return;
+        done.current = true;
+        if (!t) return onClose(false);
+        if (t === row.time_start && day === (row.time_start_day_offset ?? 0)) return onClose(false);
+        onRowChange({ ...row, time_start: t, time_start_day_offset: day }, true);
+    };
+
+    return (
+        <div
+            ref={wrap}
+            className="flex w-full h-full gap-1 items-center"
+            onBlur={(e) => { if (!wrap.current?.contains(e.relatedTarget)) commit(); }}
+            onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+                if (e.key === "Escape") { done.current = true; onClose(false); }
+            }}
+        >
+            <input
+                ref={timeRef}
+                type="time"
+                value={t}
+                onChange={(e) => setT(e.target.value)}
+                className="h-full flex-1 min-w-0 border border-info rounded px-1 text-sm bg-base-100"
+            />
+            <select
+                value={day}
+                onChange={(e) => setDay(Number(e.target.value))}
+                className="h-full border border-info rounded text-xs bg-base-100"
+            >
+                <option value={-1}>Yest</option>
+                <option value={0}>Today</option>
+                <option value={1}>Tmrw</option>
+            </select>
+        </div>
+    );
+}
+
+export function AccuTimeEditor({ row, onRowChange, onClose }) {
+    const [v, setV] = useState(row.accu_time == null ? "" : String(+(row.accu_time / 60).toFixed(4)));
+    const done = useRef(false);
+    const ref = useRef(null);
+    useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
+
+    const commit = () => {
+        if (done.current) return;
+        done.current = true;
+        const h = parseFloat(v);
+        if (!Number.isFinite(h) || h < 0) return onClose(false);
+        const minutes = Math.round(h * 60);
+        if (minutes === row.accu_time) return onClose(false);
+        onRowChange({ ...row, accu_time: minutes }, true);
+    };
+
+    return (
+        <input
+            ref={ref}
+            type="number"
+            step="0.01"
+            min="0"
+            className="w-full h-full border border-info ring-2 ring-info/30 rounded px-2 text-sm outline-none bg-base-100 text-base-content"
+            value={v}
+            onChange={(e) => setV(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+                if (e.key === "Escape") { done.current = true; onClose(false); }
+            }}
+        />
+    );
+}
 
 // ---------------------------------------------------------------------
 // Bake tab — column definitions (mirrors getActiveBake()'s select list)
@@ -154,9 +236,16 @@ const PARTNAME_TO_BAKE_KEYS = new Set([
     "osl", "body_size", "ramp_time"
 ]);
 
+const compact = (c) => ({
+    ...c,
+    cellClass: (row) =>
+        [typeof c.cellClass === "function" ? c.cellClass(row) : c.cellClass, "!p-0"].filter(Boolean).join(" "),
+    headerCellClass: [c.headerCellClass, "!p-0"].filter(Boolean).join(" "),
+});
+
 export function makeBakeColumns(highlightedMatch, onToggleCollapse) {
     return [
-        SelectColumn,
+        compact(SelectColumn),
         {
             key: "ovenHeader",
             name: "",
@@ -219,9 +308,9 @@ function renderCollapsedCell(key, row) {
 // — `hoveredRowId` was never referenced in the body (the drag-over row
 // highlight is applied via `rowClass` in the parent, not per-column).
 // Dropped here; update the call site accordingly.
-export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation) {
+export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation, onEditDoable) {
     return [
-        SelectColumn,
+        compact(SelectColumn),
         {
             key: "dragHandle",
             name: "",
@@ -256,19 +345,18 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
 
                 // Rule 8 & 12: Color range from Part Name to Qty
                 if (PARTNAME_TO_QTY_KEYS.has(col.key) && !row?.is_scm) {
-                    if (row.cycle_time_exceed) {
-                        classes.push("bg-yellow-highlight");
-                    }
                     if (row.cycle_time_exceed_residual) {
                         classes.push("bg-light-yellow-highlight");
+                    } else if (row.cycle_time_exceed) {
+                        classes.push("bg-yellow-highlight");
                     }
+
                     if (row.is_manual_expedite) {
                         classes.push("bg-amber-highlight");
                     }
                 }
 
                 if (row?.is_scm === true) {
-                    console.log("LOG ~ columns.jsx:268 ~ getDynamicCellClass ~ row?.is_scm:", row?.is_scm);
                     classes.push("bg-red");
                 }
 
@@ -296,7 +384,11 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         if (row.entry_type === "block") {
-                            return row[col.key];
+                            return (
+                                <span className="font-semibold flex items-center gap-1.5 truncate">
+                                    ▨ {row.block_label}
+                                </span>
+                            );
                         }
 
                         if (row.machine === null) {
@@ -335,7 +427,8 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         return (
                             <div className="flex items-center gap-1">
                                 <LotIdCell 
-                                    lotId={row.lot_id} 
+                                    lotId={row.lot_id}
+                                    source={row.source} 
                                     isPickup={row.is_pickup} 
                                     splitInfo={row.split_info}
                                     mergeInfo={row.merge_info} 
@@ -362,7 +455,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         if (row.entry_type === "block") {
-                            return row[col.key];
+                            return null;
                         }
 
                         return (
@@ -370,13 +463,9 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                                 value={row.doable}
                                 status={row.doable_status}
                                 recipeSource={row.doable_recipe_source}
+                                overridden={row.doable_overridden}
+                                onEdit={onEditDoable && !isUpdating ? () => onEditDoable(row) : undefined}
                             />
-                            // <LotIdCell
-                            //     lotId={row.lot_id}
-                            //     splitInfo={row.split_info}
-                            //     mergeInfo={row.merge_info}
-                            //     isPlannedYesterday={row.is_leaked}
-                            // />
                         );
                     },
                 };
@@ -393,7 +482,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     if (row.__type === "header") return null;
 
                     if (isBlockRow(row)) {
-                        if (col.key === "part_name") {
+                        if (col.key === "part_name" || col.key === "package_name") {
                             return (
                                 <span className="font-semibold flex items-center gap-1.5 truncate">
                                     ▨ {row.block_label}
@@ -409,24 +498,28 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         }
 
                         if (["accu_time", "time_start", "time_end"].includes(col.key)) {
-                            return col.key === "accu_time" ? row[col.key] : <TimeCell row={row} field={col.key} />;
+                            return col.key === "accu_time" ? fmtHours(row.accu_time) : <TimeCell row={row} field={col.key} />;
                         }
 
                         return null; // blank every other cell for a block row
                     }
 
                     if (col.key === "machine") {
-                        return row.machine ?? "Unassigned";
+                        return row.machine_label ?? row.machine ?? "Unassigned";
                     }
 
                     if (col.key === "time_start" || col.key === "time_end") {
                         return <TimeCell row={row} field={col.key} />;
                     }
 
+                    if (col.key === "accu_time") return fmtHours(row.accu_time);
+
                     return row[col.key];
                 },
                 ...(EDITABLE_COLUMNS[col.key] && {
-                    renderEditCell: CellEditor,
+                    renderEditCell: col.key === "accu_time" ? AccuTimeEditor
+                        : col.key === "time_start" ? TimeStartEditor
+                        : CellEditor,
                     editable: (row) =>
                         !isUpdating &&
                         row.__type !== "collapsed" &&

@@ -2,7 +2,7 @@ import CheckBoxColumn from "@/Components/tanStackTable/CheckBoxColumn";
 import DefaultEditableColumn from "@/Components/tanStackTable/defaultEditableColumn";
 import updateNested from "@/Utils/updateNested";
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * useEditableTable - reusable hook for editable React Table
@@ -32,6 +32,7 @@ export function useEditableTable(initialData = [], columns, options = {}) {
 	const [editedRows, setEditedRows] = useState({});
 	const [originalData, setOriginalData] = useState({});
 	const [changes, setChanges] = useState([]);
+	const newIdCounter = useRef(0);
 
 	useEffect(() => {
 		const rows = initialData;
@@ -95,7 +96,7 @@ export function useEditableTable(initialData = [], columns, options = {}) {
 
 	const handleAddNewRow = useCallback(
 		(overrides = {}) => {
-			const newId = `new-${table.getRowCount() + 1}`;
+			const newId = `new-added-${++newIdCounter.current}`;
 
 			const baseRow =
 				typeof createEmptyRow === "function" ? createEmptyRow() : {};
@@ -119,21 +120,15 @@ export function useEditableTable(initialData = [], columns, options = {}) {
 
 	const handleDeleteRow = (rowIds) => {
 		if (!confirm("Are you sure you want to delete this row?")) return;
+		const ids = new Set(rowIds.map(String));
 
-		const newRows = data.filter((row) => !rowIds.includes(row.id));
-		setData(newRows);
-
-		setEditedRows((prev) => {
-			const newEditedRows = {};
-			for (const rowId in prev) {
-				if (!rowIds.includes(Number(rowId))) {
-					newEditedRows[rowId] = prev[rowId];
-				}
-			}
-			return newEditedRows;
-		});
+		setData((prev) => prev.filter((row) => !ids.has(String(row.id))));
+		setEditedRows((prev) =>
+			Object.fromEntries(Object.entries(prev).filter(([id]) => !ids.has(id))),
+		);
+		table.resetRowSelection();
 	};
-
+	
 	const handleResetChanges = () => {
 		// if (Object.keys(editedRows).length === 0) {
 		// 	alert("No changes to reset.");

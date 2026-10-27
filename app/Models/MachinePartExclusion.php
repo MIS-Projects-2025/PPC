@@ -13,5 +13,8 @@ class MachinePartExclusion extends Model
         'machine_id',
         'part_name',
         'notes',
+        'match_type',
+        'rule_type',
+        'machine_model'
     ];
 }

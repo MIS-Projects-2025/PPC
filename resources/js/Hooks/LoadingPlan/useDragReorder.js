@@ -8,6 +8,7 @@ export function useDragReorder({
     dataRows,
     update,
     withUpdating,
+    beginWrite,
     mutate,
     date,
     onReorder,
@@ -72,6 +73,8 @@ export function useDragReorder({
 
     const handleDragStart = useCallback(
         (event) => {
+            if (!beginWrite()) { refusedRef.current = true; return; }
+
             const group = groupFor(event.active.id);
             const problem = group.length > 1 ? groupProblem(group) : null;
             if (problem) {
@@ -83,7 +86,7 @@ export function useDragReorder({
             setActiveId(event.active.id);
             if (group.length <= 1) clearSelection();
         },
-        [groupFor, groupProblem, toast, clearSelection],
+        [groupFor, groupProblem, toast, beginWrite, clearSelection],
     );
 
     const draggedCount = useMemo(
@@ -163,7 +166,7 @@ export function useDragReorder({
 
             clearSelection();
 
-            update((prev) => {
+            const build = (prev) => {
                 const order = new Map(group.map((r, i) => [r.id, i]));
                 const next = prev.map((r) => ({ ...r }));
                 const idxOf = (id) => next.findIndex((r) => String(r.id) === String(id));
@@ -199,7 +202,12 @@ export function useDragReorder({
                 beforeEntryId = findMachineNeighbors(rest, moved[0]._dndId, toMachine).beforeEntryId;
                 afterEntryId = findMachineNeighbors(rest, moved[moved.length - 1]._dndId, toMachine).afterEntryId;
                 return rest;
-            });
+            };
+
+            const base = store.getState().present.rows;
+            const next = build(base);
+            if (next === base) return;
+            update(() => next);
 
             if (movedRows.length === 0) return;
             setIsDirty(true);
@@ -207,7 +215,9 @@ export function useDragReorder({
             withUpdating(
                 mutate(route("loading-plan.bulk-move"), {
                     body: {
-                        items: movedRows.map((r) => (r.entry_id ? { entry_id: r.entry_id } : { lot_id: r.lot_id })),
+                        items: movedRows.map((r) => (r.entry_id
+                            ? { entry_id: r.entry_id, lock_version: r.lock_version ?? null }
+                            : { lot_id: r.lot_id })),
                         target_machine: toMachine,
                         before_entry_id: beforeEntryId,
                         after_entry_id: afterEntryId,
@@ -256,11 +266,10 @@ export function useDragReorder({
             if (refusedRef.current) { refusedRef.current = false; return; }
             const { active, over } = event;
             if (!over) return;
+            if (!beginWrite()) return;
 
             const overId = String(over.id);
 
-            console.log("LOG ~ useDragReorder.js:56 ~ useDragReorder ~ overId:", overId);
-            
             const draggedRowId = active.id;
 
             if (String(draggedRowId) === overId.replace("row-", "")) return;
@@ -316,7 +325,7 @@ export function useDragReorder({
 
             let pending = null;
 
-            update((prev) => {
+            const build = (prev) => {
                 const next = prev.map((r) => ({ ...r }));
                 const fromIndex = next.findIndex((r) => r.id === draggedRowId);
                 if (fromIndex === -1) return prev;
@@ -394,7 +403,12 @@ export function useDragReorder({
 
                 pending = { toMachine, isTransfer, moved, finalRows: next, leftBucket };
                 return next;
-            });
+            };
+
+            const base = store.getState().present.rows;
+            const next = build(base);
+            if (next === base) return;     // no-op drop
+            update(() => next);
 
             setIsDirty(true);
             if (!pending) return;
@@ -423,6 +437,7 @@ export function useDragReorder({
                             target_machine: toMachine,
                             before_entry_id: beforeEntryId,
                             after_entry_id: afterEntryId,
+                            lock_version: moved.lock_version ?? null,
                         },
                     })
                     : mutate(route("loading-plan.move"), {
@@ -432,6 +447,7 @@ export function useDragReorder({
                             before_entry_id: beforeEntryId,
                             after_entry_id: afterEntryId,
                             machine: toMachine,
+                            lock_version: moved.lock_version ?? null,
                         },
                     }),
             );
@@ -457,21 +473,14 @@ export function useDragReorder({
                     if (leftBucket) store.getState().reset(store.getState().present.rows);
                 })
                 .catch((err) => {
-                    // NOTE (carried over): still no rollback on failure here —
-                    // preserved as-is per the original comment. Flag separately
-                    // if you want this to restore the pre-drag snapshot too;
-                    // it's the same missing-rollback pattern fixed elsewhere
-                    // in this conversation (bulk transfer, status change, etc.)
-                    // but this file's own comment suggested it might be
-                    // intentional, so left untouched pending your call.
-                    console.error("Failed to persist move/transfer:", err?.message);
+                    console.error("Failed to persist move/transfer:", err);
                     if (leftBucket) store.getState().reset(prevSnapshot);
-                    toast?.error?.(err?.message);
+                    else update(() => prevSnapshot, true);
+                    toast?.error?.(err?.message ?? "Couldn't move the row — reverted.");
                 });
         },
-        [update, date, groupFor, handleGroupDrop, onReorder, collapsedRunsById, onLotTransfer, store, dataRows, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [update, date, groupFor, handleGroupDrop, onReorder, collapsedRunsById, onLotTransfer, store, dataRows, withUpdating, beginWrite, mutate, toast, setIsDirty, syncServerFields],
     );
-
 
     const draggedRow = useMemo(
         () => dataRows.find((r) => r.id === activeId),

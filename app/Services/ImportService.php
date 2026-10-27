@@ -24,6 +24,7 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Worksheet\CellIterator;
 use Box\Spout\Reader\Common\Creator\ReaderEntityFactory;
 use App\Services\ProductionLineResolver;
+use Carbon\Carbon;
 
 class ImportService
 {
@@ -248,6 +249,9 @@ class ImportService
       throw new Exception('The import is currently running. Try again in a few minutes.');
     }
 
+    $importDateCarbon = Carbon::parse($importDate);
+    $DateLoaded = $importDateCarbon->copy()->setTime(7, 40, 0)->format('Y-m-d H:i:s');
+
     $this->resolver->preload();
 
     try {
@@ -272,6 +276,9 @@ class ImportService
           // custom formatting per type
           $rowData = $rowFormatter($rowData);
           $rowData['import_date'] = $importDate;
+          $rowData['Date_Loaded'] = $DateLoaded;
+
+          // dd($rowData);
 
           $chunk[] = $rowData;
 

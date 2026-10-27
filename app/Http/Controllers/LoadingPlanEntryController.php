@@ -11,6 +11,12 @@ use App\Services\LoadingPlanEntryService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
+use App\Services\PackageLocation;
+use App\Models\PartName;
+use App\Models\CustomerDataWip;
+use App\Models\LotQuantity;
+use App\Models\FocusGroupFactory;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class LoadingPlanEntryController extends Controller
 {
@@ -22,10 +28,11 @@ class LoadingPlanEntryController extends Controller
     {
         $data = $request->validate([
             'entry_type'      => 'required|in:lot,block',
-            'entry_id'        => 'required_if:entry_type,block|nullable|integer',
+            'lock_version'    => 'nullable|integer',
+            'entry_id'        => 'required|integer',
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
-            'machine'         => 'nullable|string',
+            'machine'         => 'required|string',
         ]);
 
         try {
@@ -35,14 +42,18 @@ class LoadingPlanEntryController extends Controller
                 $data['before_entry_id'] ?? null,
                 $data['after_entry_id'] ?? null,
                 $data['machine'],
+                $data['lock_version'] ?? null,
             );
 
             return response()->json($entry);
-        } catch (\Throwable $e) {
-            return response()->json([
-                'error'   => 'bad_request',
-                'message' => $e->getMessage(),
-            ], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
         }
     }
 
@@ -72,10 +83,11 @@ class LoadingPlanEntryController extends Controller
     {
         $data = $request->validate([
             'entry_type'      => 'required|in:lot,block',
+            'lock_version'    => 'nullable|integer',
             'entry_id'        => 'required_if:entry_type,block|nullable|integer',
             'lot_id'          => 'nullable|string',
             'scheduled_date'  => 'nullable|date',
-            'target_machine'  => 'nullable|string',
+            'target_machine'  => 'present|nullable|string',
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
         ]);
@@ -86,23 +98,27 @@ class LoadingPlanEntryController extends Controller
             }
         }
 
+        $lockVersion = $data['lock_version'] ?? null;
+
         // Unassigned isn't a real machine — order doesn't apply there, so this
         // is an unassign, not a transfer. deleteEntry() (non-force) already
         // does exactly that: clears machine/sequence_order, keeps the row.
         if ($data['target_machine'] === null) {
-            $entry = $this->service->resolveEntry(
-                $data['entry_id'] ?? null,
-            );
-
-            if ($entry->rework_seq > 0) {
-                return response()->json([
-                    'error'   => 'bad_request',
-                    'message' => 'Rework rows cannot be unassigned — delete the row instead.',
-                ], 422);
+            if (empty($data['entry_id'])) {
+                return response()->json(['error' => 'bad_request', 'message' => 'This lot has no entry to unassign.'], 422);
             }
-
-            $timings = $this->service->deleteEntry($entry->id, $entry->getMachineName());
-            return response()->json([...$entry->fresh()->toArray(), 'affected_timings' => $timings]);
+            try {
+                $entry = $this->service->resolveEntry((int) $data['entry_id']);
+                if ($entry->rework_seq > 0) {
+                    return response()->json(['error' => 'bad_request', 'message' => 'Rework rows cannot be unassigned — delete the row instead.'], 422);
+                }
+                $timings = $this->service->deleteEntry($entry->id, $entry->getMachineName(), false, $lockVersion);
+                return response()->json([...$entry->fresh()->toArray(), 'affected_timings' => $timings]);
+            } catch (ModelNotFoundException $e) {
+                return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+            } catch (LoadingPlanDateFinalizedException $e) {
+                return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+            }
         }
 
         try {
@@ -114,11 +130,18 @@ class LoadingPlanEntryController extends Controller
                 $data['after_entry_id'] ?? null,
                 $data['lot_id'] ?? null,
                 $data['scheduled_date'] ?? null,
+                $lockVersion,
             );
 
             return response()->json($entry);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
         }
     }
 
@@ -128,11 +151,13 @@ class LoadingPlanEntryController extends Controller
             'lot_ids'            => 'nullable|array',
             'lot_ids.*'          => 'string',
             'block_entry_ids'    => 'nullable|array',
-            'entry_ids' => 'nullable|array',
-            'entry_ids.*' => 'integer',
+            'entry_ids'          => 'nullable|array',
+            'entry_ids.*'        => 'integer',
             'block_entry_ids.*'  => 'integer',
             'target_machine'     => 'nullable|string',
             'scheduled_date'     => 'required|date',
+            'locks'              => 'nullable|array',
+            'locks.*'            => 'nullable|integer',
         ]);
 
         try {
@@ -142,6 +167,7 @@ class LoadingPlanEntryController extends Controller
                 $data['target_machine'],
                 $data['scheduled_date'],
                 $data['entry_ids'] ?? [],
+                $data['locks'] ?? []
             );
 
             return response()->json($updated);
@@ -153,6 +179,8 @@ class LoadingPlanEntryController extends Controller
             ], 409);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
         }
     }
 
@@ -167,16 +195,24 @@ class LoadingPlanEntryController extends Controller
             'after_entry_id'    => 'nullable|integer',
         ]);
 
-        $entry = $this->service->addBlock(
-            $data['machine'],
-            $data['scheduled_date'],
-            $data['label'],
-            $data['duration'],
-            $data['before_entry_id'] ?? null,
-            $data['after_entry_id'] ?? null,
-        );
+        try {
+            $entry = $this->service->addBlock(
+                $data['machine'],
+                $data['scheduled_date'],
+                $data['label'],
+                $data['duration'],
+                $data['before_entry_id'] ?? null,
+                $data['after_entry_id'] ?? null,
+            );
 
-        return response()->json($entry, 201);
+            return response()->json($entry, 201);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        }
     }
 
     public function createManualLot(Request $request): JsonResponse
@@ -190,16 +226,25 @@ class LoadingPlanEntryController extends Controller
             'before_entry_id' => 'nullable|integer',
             'after_entry_id'  => 'nullable|integer',
         ]);
-        // TODO: no lot ?
-        $entry = $this->service->createManualLot(
-            $data['machine'],
-            $data['scheduled_date'],
-            $data['fields'] ?? [],
-            $data['before_entry_id'] ?? null,
-            $data['after_entry_id'] ?? null,
-        );
 
-        return response()->json($entry, 201);
+        try {
+            // TODO: no lot ?
+            $entry = $this->service->createManualLot(
+                $data['machine'],
+                $data['scheduled_date'],
+                $data['fields'] ?? [],
+                $data['before_entry_id'] ?? null,
+                $data['after_entry_id'] ?? null,
+            );
+
+            return response()->json($entry, 201);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        }
     }
 
     public function bulkMove(Request $request): JsonResponse
@@ -208,6 +253,7 @@ class LoadingPlanEntryController extends Controller
             'items'            => 'required|array|min:1',
             'items.*.entry_id' => 'required_without:items.*.lot_id|nullable|integer',
             'items.*.lot_id'   => 'required_without:items.*.entry_id|nullable|string',
+            'items.*.lock_version' => 'nullable|integer',
             'target_machine'   => 'required|string',
             'before_entry_id'  => 'nullable|integer',
             'after_entry_id'   => 'nullable|integer',
@@ -226,6 +272,8 @@ class LoadingPlanEntryController extends Controller
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (LoadingPlanDateFinalizedException $e) {
             return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
         }
     }
 
@@ -246,10 +294,12 @@ class LoadingPlanEntryController extends Controller
             'ids'            => 'required|array|min:1',
             'ids.*'          => 'integer',
             'scheduled_date' => 'required|date',
+            'locks'          => 'nullable|array',
+            'locks.*'        => 'nullable|integer',
         ]);
 
         try {
-            $result = $this->service->bulkDelete($data['ids']);
+            $result = $this->service->bulkDelete($data['ids'], $data['locks'] ?? []);
 
             return response()->json($result);
         } catch (BulkStaleWriteException $e) {
@@ -260,6 +310,110 @@ class LoadingPlanEntryController extends Controller
             ], 409);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
+        }
+    }
+
+    public function updateDoable(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'doable'       => 'present|nullable|integer|min:0',  // null clears the override
+            'lock_version' => 'nullable|integer',
+        ]);
+
+        try {
+            return response()->json($this->service->setCommitOverride($id, $data['doable'], $data['lock_version'] ?? null));
+        } catch (StaleWriteException $e) {
+            return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
+    public function missingParts(Request $request): JsonResponse
+    {
+        $data = $request->validate(['date' => 'required|date', 'part_name' => 'nullable|string']);
+        $date = $data['date'];
+
+        $factoryMap = FocusGroupFactory::all()
+            ->mapWithKeys(fn($r) => [strtoupper(trim($r->focus_group)) => $r->factory]);
+
+        $names = LotQuantity::where('scheduled_date', $date)->where('rework_seq', 0)
+            ->where('recipe_source_type', 'package_list')
+            ->whereNotNull('part_name')->where('part_name', '!=', '')
+            ->when(
+                $data['part_name'] ?? null,
+                fn($q, $p) => $q->where('part_name', $p),
+                fn($q) => $q->where('recipe_status', 'no_recipe'),
+            )
+            ->distinct()->pluck('part_name');
+
+        $existing = PartName::whereIn('devicename', $names)->get()
+            ->groupBy(fn($p) => strtolower($p->devicename))->map->first();
+
+        $wip = CustomerDataWip::forDate($date)->whereIn('Part_Name', $names)
+            ->get()->unique('Part_Name')->keyBy('Part_Name');
+
+        return response()->json($names->map(function ($n) use ($existing, $wip, $factoryMap) {
+            $p = $existing->get(strtolower($n));
+            $w = $wip->get($n);
+
+            $focusGroup = $p?->focus_grp ?: $w?->Focus_Group;
+
+            return [
+                'id'           => $p?->id,
+                'devicename'   => $n,
+                'focus_grp'    => $focusGroup,
+                'areas'        => $p?->areas
+                    ?: ($focusGroup ? $factoryMap->get(strtoupper(trim($focusGroup))) : null),
+                'productline'  => $p?->productline ?: (PackageLocation::for($w?->Package_Name) ?? 'PL1'),
+                'package_type' => $p?->package_type ?: $w?->Package_Name,
+                'lead_count'   => $p?->lead_count ?: $w?->Lead_Count,
+                'dimensions'   => $p?->dimensions ?: $w?->Body_Size,
+                'allocation'   => $p?->allocation ?: $w?->Ramp_Time,
+                'generic_name' => $p?->generic_name,
+                'drypack'      => $p?->drypack ?: 'N',
+                'recipe'       => $p?->recipe,
+            ];
+        })->values());
+    }
+
+    public function recalculateParts(Request $request): JsonResponse
+    {
+        $data = $request->validate(['part_names' => 'required|array|min:1', 'part_names.*' => 'string', 'scheduled_date' => 'required|date']);
+        try {
+            return response()->json($this->service->recalculateForParts($data['part_names'], $data['scheduled_date']));
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
+    }
+
+    public function updatePartRecipe(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'part_name'      => 'required|string',
+            'recipe'         => 'required|integer|min:1',
+            'scheduled_date' => 'required|date',
+            'source' => 'nullable|in:wip,f3',
+            'lot_id' => 'required_if:source,f3|nullable|string',
+        ]);
+
+        try {
+            return response()->json($this->service->updatePartRecipe(
+                $data['part_name'],
+                $data['recipe'],
+                $data['scheduled_date'],
+                null,
+                $data['source'] ?? 'wip',
+                $data['lot_id'] ?? null,
+            ));
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         }
     }
 
@@ -267,34 +421,40 @@ class LoadingPlanEntryController extends Controller
 
     public function updateField(Request $request, int $id): JsonResponse
     {
-        Log::info('updateField raw payload', $request->all());
-
         $data = $request->validate([
-            'entry_type'        => 'required|in:lot,block',
-            'fields'            => 'required|array',
-            'fields.status'     => 'sometimes|nullable|string',
-            'fields.remarks'    => 'sometimes|nullable|string',
-            'fields.tag'        => 'sometimes|nullable|string',
-            'fields.accu_time'  => 'sometimes|nullable|integer',
-            'fields.doable'     => 'sometimes|nullable|integer',
-            'lock_version'      => 'nullable|integer',
+            'entry_type'                => 'required|in:lot,block',
+            // array: rejects any key not listed, so a stray "doable" is a 422, not a 500
+            'fields'                    => 'required|array:status,remarks,tag,accu_time,is_manual_expedite,is_scm,block_label,qty,part_name',
+            'fields.status'             => 'sometimes|nullable|string',
+            'fields.remarks'            => 'sometimes|nullable|string',
+            'fields.tag'                => 'sometimes|nullable|string',
+            'fields.accu_time'          => 'sometimes|nullable|integer',
+            'fields.is_manual_expedite' => 'sometimes|boolean',
+            'fields.is_scm'             => 'sometimes|boolean',
+            'fields.block_label'        => 'sometimes|string|max:128',
+            'fields.qty'                => 'sometimes|integer|min:0',
+            'fields.part_name'          => 'sometimes|string|max:100',
+            'lock_version'              => 'nullable|integer',
         ]);
-
-        $fields = $request->input('fields', []);
+        $fields = $request->input('fields', []); // safe: the array: rule already restricted the keys
 
         try {
             if ($data['entry_type'] === 'lot') {
                 $entry = $this->service->editLotField($id, $fields, $data['lock_version'] ?? null);
             } else {
-                $entry = $this->service->editField($id, $fields, $data['lock_version']);
+                $entry = $this->service->editField($id, $fields, $data['lock_version'] ?? null);
             }
 
             $payload = $entry->toArray();
 
-            if (array_intersect(['accu_time', 'qty'], array_keys($fields)) && $entry->machine_id !== null) {
+            if (
+                array_intersect(['accu_time', 'qty'], array_keys($fields))
+                && ($entry->machine_id !== null || $entry->non_machine_id !== null)
+            ) {
                 $payload['affected_timings'] = LoadingPlanEntryService::timingsFor(
                     [$entry->machine_id],
                     $entry->scheduled_date->toDateString(),
+                    [$entry->non_machine_id],
                 );
             }
 
@@ -305,6 +465,12 @@ class LoadingPlanEntryController extends Controller
                 'message' => $e->getMessage(),
                 'current' => $e->current,
             ], 409);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         }
     }
 
@@ -363,11 +529,15 @@ class LoadingPlanEntryController extends Controller
             'rows.*.fields'              => 'nullable|array',
             'deleted'                    => 'nullable|array',
             'deleted.*'                  => 'integer',
+            'lane_starts'   => 'nullable|array',
+            'lane_starts.*' => 'date_format:H:i:s',
             'rows.*.fields.status'       => 'nullable|string',
             'rows.*.fields.remarks'      => 'nullable|string',
             'rows.*.fields.tag'          => 'nullable|string',
             'rows.*.fields.accu_time'    => 'nullable|integer',
             'rows.*.fields.block_label'  => 'nullable|string',
+            'rows.*.fields.is_manual_expedite' => 'nullable|boolean',
+            'rows.*.fields.is_scm'             => 'nullable|boolean',
             'rows.*.lock_version'        => 'nullable|integer',
             'order'                      => 'nullable|array',
             'order.*'                    => 'array',
@@ -375,7 +545,7 @@ class LoadingPlanEntryController extends Controller
         ]);
 
         try {
-            $result = $this->service->syncRows($data['rows'], $data['order'] ?? [], $data['deleted'] ?? [], $data['scheduled_date']);
+            $result = $this->service->syncRows($data['rows'], $data['order'] ?? [], $data['deleted'] ?? [], $data['scheduled_date'], $data['lane_starts'] ?? []);
             return response()->json($result);
         } catch (ActiveSplitChildException | ActiveMergeParticipantException $e) {
             return response()->json([
@@ -393,6 +563,8 @@ class LoadingPlanEntryController extends Controller
                 'message'        => $e->getMessage(),
                 'scheduled_date' => $e->scheduledDate,
             ], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (\Throwable $e) {
             Log::error('batchSync failed', ['exception' => $e]);
             return response()->json([

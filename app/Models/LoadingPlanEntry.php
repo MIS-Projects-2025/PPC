@@ -19,10 +19,12 @@ class LoadingPlanEntry extends Model
 
     protected $fillable = [
         'entry_type',
+        'source',
         'lot_id',
         'package_name',
         'scheduled_date',
         'machine_id',
+        'non_machine_id',
         'sequence_order',
         'status',
         'tag',
@@ -57,9 +59,21 @@ class LoadingPlanEntry extends Model
         'time_end'       => 'datetime',
     ];
 
+    public function getPlacementKey(): ?string
+    {
+        return $this->non_machine_id !== null
+            ? NonMachine::keyFor($this->non_machine_id)
+            : $this->getMachineName();
+    }
+
     public function getIsReworkAttribute(): bool
     {
         return ($this->rework_seq ?? 0) > 0;
+    }
+
+    public function nonMachine(): BelongsTo
+    {
+        return $this->belongsTo(NonMachine::class, 'non_machine_id');
     }
 
     /**
@@ -156,12 +170,7 @@ class LoadingPlanEntry extends Model
      */
     public function inheritedWipData(): ?CustomerDataWip
     {
-        $rootLotId = $this->resolveRootLotId();
-
-        return CustomerDataWip::query()
-            ->forDate($this->scheduled_date->toDateString())
-            ->where('Lot_Id', $rootLotId)
-            ->first();
+        return app(\App\Services\LotSourceService::class)->forEntry($this);
     }
 
     // currently not in used

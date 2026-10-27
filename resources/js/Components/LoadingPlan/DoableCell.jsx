@@ -27,6 +27,10 @@ const DOABLE_STATUS_COPY = {
         description:
             "The quantity was below the recipe minimum, but this item's tube/tray allocation allows committing at 95% of the recipe.",
     },
+    overridden: {
+        label: "Manual override",
+        description: "Doable was set by hand for this lot only. It resets if the lot's quantity changes.",
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -39,10 +43,17 @@ const DOABLE_STATUS_COPY = {
 //   status       — one of 'ok' | 'unknown' | 'no_recipe' | 'qty_below_recipe'
 //   recipeSource — object containing recipe details or null
 // ---------------------------------------------------------------------------
-export function DoableCell({ value, status, recipeSource }) {
+export function DoableCell({ value, status, recipeSource, overridden = false, onEdit }) {
     let display;
 
-    if (status === "no_recipe") {
+    if (overridden) {
+        display = (
+            <span className="inline-flex items-center gap-1">
+                {value > 0 ? value.toLocaleString() : "—"}
+                <span className="badge badge-warning badge-xs">manual</span>
+            </span>
+        );
+    } else if (status === "no_recipe") {
         display = (
             <span className="inline-flex items-center gap-1.5 text-error font-medium">
                 <LuTriangleAlert className="w-4 h-4 text-error shrink-0" />
@@ -53,77 +64,80 @@ export function DoableCell({ value, status, recipeSource }) {
         display = value > 0 ? value.toLocaleString() : "—";
     }
 
-    const statusCopy = DOABLE_STATUS_COPY[status] ?? null;
+    const statusCopy = overridden ? DOABLE_STATUS_COPY.overridden : DOABLE_STATUS_COPY[status] ?? null;
 
     // Nothing to explain: plain "ok" with no traceable source.
     if (!statusCopy && !recipeSource) {
         return display;
     }
 
-    return (
-        <HoverCell
-            trigger={
-                <span className="inline-flex items-center gap-1 cursor-help underline decoration-dotted underline-offset-[3px] decoration-base-content/40">
-                    {display}
-                </span>
-            }
-        >
-            <div className="text-xs font-mono rounded-lg text-base-100 space-y-2 min-w-[180px] text-left">
-                {statusCopy && (
-                    <div className={recipeSource ? "mb-2" : ""}>
-                        <div className="font-semibold text-xs mb-0.5 text-base-100">
-                            {statusCopy.label}
+    const body =
+        !statusCopy && !recipeSource ? display : (
+            <HoverCell trigger={<span className="inline-flex items-center gap-1 cursor-help underline decoration-dotted underline-offset-[3px] decoration-base-content/40">{display}</span>}>
+                <div className="text-xs font-mono rounded-lg text-base-100 space-y-2 min-w-[180px] text-left">
+                    {statusCopy && (
+                        <div className={recipeSource ? "mb-2" : ""}>
+                            <div className="font-semibold text-xs mb-0.5 text-base-100">
+                                {statusCopy.label}
+                            </div>
+                            <div className="text-xs text-base-100/70">
+                                {statusCopy.description}
+                            </div>
                         </div>
-                        <div className="text-xs text-base-100/70">
-                            {statusCopy.description}
-                        </div>
-                    </div>
-                )}
+                    )}
 
-                {recipeSource && (
-                    <div
-                        className={
-                            statusCopy
-                                ? "border-t border-base-content/15 pt-2"
-                                : ""
-                        }
-                    >
-                        <div className="font-semibold text-xs mb-1 text-primary">
-                            Recipe source
-                        </div>
-                        <table className="text-xs text-base-100/80 border-separate border-spacing-y-0.5">
-                            <tbody>
-                                <tr>
-                                    <td className="pr-3 text-base-100/50 font-normal">
-                                        Device
-                                    </td>
-                                    <td className="font-medium text-base-100">
-                                        {recipeSource.devicename}
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td className="pr-3 text-base-100/50 font-normal">
-                                        Recipe qty
-                                    </td>
-                                    <td className="font-medium text-base-100">
-                                        {recipeSource.recipe}
-                                    </td>
-                                </tr>
-                                {recipeSource.packageType && (
+                    {recipeSource && (
+                        <div
+                            className={
+                                statusCopy
+                                    ? "border-t border-base-content/15 pt-2"
+                                    : ""
+                            }
+                        >
+                            <div className="font-semibold text-xs mb-1 text-primary">
+                                Recipe source
+                            </div>
+                            <table className="text-xs text-base-100/80 border-separate border-spacing-y-0.5">
+                                <tbody>
                                     <tr>
                                         <td className="pr-3 text-base-100/50 font-normal">
-                                            Package
+                                            Device
                                         </td>
                                         <td className="font-medium text-base-100">
-                                            {recipeSource.packageType}
+                                            {recipeSource.devicename}
                                         </td>
                                     </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </HoverCell>
+                                    <tr>
+                                        <td className="pr-3 text-base-100/50 font-normal">
+                                            Recipe qty
+                                        </td>
+                                        <td className="font-medium text-base-100">
+                                            {recipeSource.recipe}
+                                        </td>
+                                    </tr>
+                                    {recipeSource.packageType && (
+                                        <tr>
+                                            <td className="pr-3 text-base-100/50 font-normal">
+                                                Package
+                                            </td>
+                                            <td className="font-medium text-base-100">
+                                                {recipeSource.packageType}
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </HoverCell>
+        );
+
+    if (!onEdit) return body;
+    
+    return (
+        <div className="w-full h-full flex items-center" onDoubleClick={onEdit} title="Double-click to edit">
+            {body}
+        </div>
     );
 }

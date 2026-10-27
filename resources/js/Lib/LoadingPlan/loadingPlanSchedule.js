@@ -76,14 +76,7 @@ export function machineBaseDateTime(baseTimes, machine, referenceDate) {
         : dayjs(`${referenceDate} 06:00:00`, "YYYY-MM-DD HH:mm:ss");
 }
 
-export function applyTimeStartEdit(
-    rows,
-    dndId,
-    machine,
-    newTimeStartStr, // still bare "HH:mm" from the edit control
-    baseTimes,
-    referenceDate, // the viewed scheduled_date — only used as the base for offset math
-) {
+export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTimes, referenceDate, dayOffsetOverride = null){
     const machineRows = rows.filter((r) => r.machine === machine);
     const idx = machineRows.findIndex((r) => r._dndId === dndId);
     const idxOfAbove = idx - 1;
@@ -91,10 +84,9 @@ export function applyTimeStartEdit(
     const editedRow = machineRows[idx];
     const rowAbove = idxOfAbove >= 0 ? machineRows[idxOfAbove] : null;
 
-    console.log(
-        "LOG ~ loadingPlanSchedule.js:22 ~ applyTimeStartEdit ~ rowAbove:",
-        rowAbove,
-    );
+    if (rowAbove && !rowAbove.time_end) {
+        return { rows: null, error: "The previous row has no end time yet. Refresh and try again." };
+    }
 
     const referencePoint = rowAbove
         ? dayjs(referenceDate)
@@ -107,11 +99,18 @@ export function applyTimeStartEdit(
     // row's own time_start currently falls on — not the page's viewed date.
     // This is what makes editing a leaked (yesterday) row interpret "22:00"
     // as yesterday's 22:00, not today's.
+    // const referenceDayOffset = rowAbove
+    //     ? (rowAbove.time_end_day_offset ?? 0)
+    //     : dayjs(baseTimes[machine]).startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+
     const referenceDayOffset = rowAbove
         ? (rowAbove.time_end_day_offset ?? 0)
-        : dayjs(baseTimes[machine]).startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
+        : machineBaseDateTime(baseTimes, machine, referenceDate)
+            .startOf("day")
+            .diff(dayjs(referenceDate).startOf("day"), "day");
 
-    const editedRowDayOffset = editedRow.time_start_day_offset ?? referenceDayOffset;
+    const editedRowDayOffset =
+        dayOffsetOverride ?? editedRow.time_start_day_offset ?? referenceDayOffset;
 
     const [h, m] = newTimeStartStr.split(":").map(Number);
     const newStart = dayjs(referenceDate)
@@ -132,23 +131,47 @@ export function applyTimeStartEdit(
     }
 
     if (newStart.isBefore(referencePoint)) {
-        return {
-            rows: null,
-            error: "Time can't be earlier than the previous lot's end time.",
-        };
+        // Nothing above to shrink (first row on the machine; its floor is the base time).
+        if (!rowAbove) {
+            if (!newStart.isSame(dayjs(referenceDate), "day")) {
+                return { rows: null, error: "A lane can't start on a different day than the plan date." };
+            }
+            // First row on the machine: move the lane start, rows themselves don't change.
+            return { rows: next, error: null, laneStart: newStart.format("HH:mm:ss") };
+        }
+
+        // Pull the previous row's end back to the new start by trimming its duration.
+        const shrink = referencePoint.diff(newStart, "minute");
+        const newAccu = (Number(rowAbove.accu_time) || 0) - shrink;
+
+        if (newAccu <= 0) {
+            return {
+                rows: null,
+                error: "Time can't be earlier than the previous lot's start time.",
+            };
+        }
+
+        next = next.map((r) =>
+            r._dndId === rowAbove._dndId ? { ...r, accu_time: newAccu } : r,
+        );
+        return { rows: next, error: null };
     }
 
     const gapDuration = newStart.diff(referencePoint, "minute");
 
-    if (isGapAbove) {
+    if (rowAbove) {
+        // Lot or block above: stretch it to fill the gap, no new block.
         next = next.map((r) =>
             r._dndId === rowAbove._dndId
-                ? { ...r, accu_time: r.accu_time + gapDuration }
+                ? { ...r, accu_time: (Number(r.accu_time) || 0) + gapDuration }
                 : r,
         );
     } else {
+        // First row on the machine: nothing above to stretch, so create the gap block.
+        const tempId = `entry-${generateId()}`;
         const newBlock = {
-            _dndId: `entry-${generateId()}`,
+            id: tempId,
+            _dndId: tempId,
             is_block: true,
             entry_type: "block",
             block_label: GAP_LABEL,

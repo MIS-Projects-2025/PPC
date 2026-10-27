@@ -11,6 +11,7 @@ use App\Models\LotSplit;
 use App\Models\CustomerDataWip;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Collection;
+use App\Models\NonMachine;
 
 class LotSplitService
 {
@@ -45,7 +46,12 @@ class LotSplitService
             log_entities($parentEntry);
             $date = $parentEntry->scheduled_date;
 
-            if (!QdnMachine::where('machine_num', $targetMachine)->exists()) {
+            $nmId = NonMachine::idFromKey($targetMachine);
+            $targetExists = $nmId !== null
+                ? NonMachine::whereKey($nmId)->exists()
+                : QdnMachine::where('machine_num', $targetMachine)->exists();
+
+            if (!$targetExists) {
                 throw new InvalidSplitException("Target [{$targetMachine}] does not exist.");
             }
 
@@ -59,6 +65,23 @@ class LotSplitService
 
             $rootLotId = $parentEntry->resolveRootLotId();
             $childLotId = $customChildLotId ?? $this->nextChildLotId($rootLotId);
+
+            if ($customChildLotId !== null) {
+                $customChildLotId = trim($customChildLotId);
+
+                if (!preg_match('/^[A-Za-z0-9._-]{1,50}$/', $customChildLotId)) {
+                    throw new InvalidSplitException('Lot ID may only contain letters, digits, ".", "_" and "-".');
+                }
+                if (
+                    strcasecmp($customChildLotId, $rootLotId) === 0
+                    || !str_starts_with(strtoupper($customChildLotId), strtoupper($rootLotId))
+                ) {
+                    throw new InvalidSplitException("Child lot ID must start with {$rootLotId} and add a suffix.");
+                }
+                if (app(LotSourceService::class)->lotIdTaken($customChildLotId)) {
+                    throw new InvalidSplitException("[{$customChildLotId}] already exists in WIP or travelers.");
+                }
+            }
 
             if (
                 LoadingPlanEntry::where('lot_id', $childLotId)->where('scheduled_date', $date)->exists()
@@ -74,6 +97,7 @@ class LotSplitService
             // uses — no duplicated logic, no risk of drifting behavior.
             $childEntry = LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
+                'source'         => $parentEntry->source ?? 'wip',
                 'lot_id'         => $childLotId,
                 'package_name'   => $parentAttrs['package_name'],
                 'scheduled_date' => $date,
@@ -88,6 +112,21 @@ class LotSplitService
             );
 
             $childEntryId = $childEntry->getKey();
+
+            $split = LotSplit::create([
+                'parent_lot_id' => $parentEntry->lot_id,
+                'child_lot_id' => $childLotId,
+                'root_lot_id' => $rootLotId,
+                'scheduled_date' => $date,
+                'child_qty' => $childQty,
+                'parent_qty_before' => $totalQty,
+                'split_percentage' => $percentage,
+                'target_machine' => $targetMachine,
+                'source_machine' => $parentEntry->getPlacementKey(),
+                'sequence_order_at_split' => 0,
+                'created_by' => $createdBy,
+            ]);
+
             $childEntry = $this->entryService->transferEntry(
                 'lot',
                 $childEntryId,
@@ -95,20 +134,10 @@ class LotSplitService
                 $beforeEntryId,
                 $afterEntryId,
             );
+
             unset($childEntry['affected_timings']);
 
-            $split = LotSplit::create([
-                'parent_lot_id'    => $parentEntry->lot_id,
-                'child_lot_id'     => $childLotId,
-                'root_lot_id'      => $rootLotId,
-                'scheduled_date'   => $date,
-                'child_qty'        => $childQty,
-                'split_percentage' => $percentage,
-                'target_machine'   => $targetMachine,
-                'source_machine'   => $parentEntry->getMachineName(),
-                'sequence_order_at_split' => $childEntry['sequence_order'],
-                'created_by'       => $createdBy,
-            ]);
+            $split->update(['sequence_order_at_split' => $childEntry['sequence_order']]);
 
             $loadingPlanService = new LoadingPlanService($date);
 
@@ -141,6 +170,7 @@ class LotSplitService
                 'affected_timings' => LoadingPlanEntryService::timingsFor(
                     [$parentEntry->machine_id, $childEntry['machine_id'] ?? null],
                     $date->toDateString(),
+                    [$parentEntry->non_machine_id, NonMachine::idFromKey($targetMachine)]
                 ),
             ];
         });
@@ -173,6 +203,12 @@ class LotSplitService
             }
 
             $childMachineId = $childEntry?->machine_id;
+
+            $childNonMachineId = $childEntry?->non_machine_id;
+            $childLaneStart = $childNonMachineId
+                ? app(LotScheduleCalculator::class)->nonMachineLaneStart($childNonMachineId, $date->toDateString())
+                : null;
+
             $childEntry?->delete();
 
             if ($childMachineId) {
@@ -180,6 +216,10 @@ class LotSplitService
                 if ($restart) {
                     app(LotScheduleCalculator::class)->recomputeTimeStartAndEnd($restart, $childMachineId);
                 }
+            }
+
+            if ($childNonMachineId) {
+                app(LotScheduleCalculator::class)->recomputeNonMachineTimes($childNonMachineId, $date->toDateString(), $childLaneStart);
             }
 
             $split->update([
@@ -190,6 +230,7 @@ class LotSplitService
             $parentEntry = LoadingPlanEntry::where('lot_id', $split->parent_lot_id)
                 ->where('scheduled_date', $split->scheduled_date)
                 ->first();
+
             $parentMachineId = $parentEntry?->machine_id;
 
             $parentQuantity = null;
@@ -228,7 +269,7 @@ class LotSplitService
                 'parentCapacityUph'  => $parentQuantity?->capacity_uph_snapshot,
                 'parentSplitInfo'    => $parentSplitInfo,
                 'deleted'            => $childLotId,
-                'affected_timings' => LoadingPlanEntryService::timingsFor([$childMachineId, $parentMachineId], $date->toDateString()),
+                'affected_timings' => LoadingPlanEntryService::timingsFor([$childMachineId, $parentMachineId], $date->toDateString(), [$childNonMachineId, $parentEntry['non_machine_id'] ?? null]),
             ];
         });
     }
@@ -276,6 +317,7 @@ class LotSplitService
 
             $childEntry = LoadingPlanEntry::create([
                 'entry_type'     => 'lot',
+                'source'         => $parentEntry->source ?? 'wip',
                 'lot_id'         => $split->child_lot_id,
                 'package_name'   => $parentEntry->package_name,
                 'scheduled_date' => $split->scheduled_date,
@@ -295,6 +337,8 @@ class LotSplitService
                 $split->sequence_order_at_split,
             );
 
+            $split->update(['reverted_at' => null, 'reverted_by' => null]);
+
             $childEntry = $this->entryService->transferEntry(
                 'lot',
                 $childEntry->getKey(),
@@ -306,14 +350,12 @@ class LotSplitService
 
             $loadingPlanService = new LoadingPlanService($date);
 
-            $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
+            $childEntry = $loadingPlanService->enrichEntryForResponse($childEntry, $split->root_lot_id);
 
             $childQuantity = LotQuantity::where('lot_id', $childEntry['lot_id'])
                 ->where('scheduled_date', $split->scheduled_date)
                 ->where('rework_seq', 0)
                 ->first();
-
-            $split->update(['reverted_at' => null, 'reverted_by' => null]);
 
             $this->recalculateParentQty($parentEntry);
 
@@ -460,6 +502,8 @@ class LotSplitService
                 'createdAt'       => $split->created_at,
                 'revertedAt'      => $split->reverted_at,
                 'revertedBy'      => $split->reverted_by,
+                'parentQtyBefore' => $split->parent_qty_before,
+                'parentQtyAfter'  => $split->parent_qty_before !== null ? $split->parent_qty_before - $split->child_qty : null,
                 'parentAppearances' => $parentEntries->map(function ($e) use ($quantities) {
                     $q = $quantities->get($e->lot_id, collect())
                         ->firstWhere('scheduled_date', $e->scheduled_date);
@@ -531,10 +575,7 @@ class LotSplitService
         $wip = null;
 
         if (!$packageName || !$quantity) {
-            $wip = CustomerDataWip::query()
-                ->where('Lot_Id', $lotId)
-                ->whereDate('import_date', $date)
-                ->first();
+            $wip = app(LotSourceService::class)->forEntry($entry);
 
             log_entities($wip);
 
@@ -581,10 +622,7 @@ class LotSplitService
     {
         log_entities($entry);
 
-        $qty = CustomerDataWip::query()
-            ->forDate($entry->scheduled_date)
-            ->where('Lot_Id', $entry->lot_id)
-            ->value('Qty');
+        $qty = app(LotSourceService::class)->forEntry($entry)?->Qty;
 
         // TOOD: check if you need the entry->schedule_date instead of just taking the lates
         // $qty = CustomerDataWip::query()

@@ -115,6 +115,13 @@ class MachineCapacityController extends Controller
     public function destroy($id)
     {
         $capacityRecord = MachineCapacity::findOrFail($id);
+
+        if (is_null($capacityRecord->effective_to)) {
+            return response()->json([
+                'message' => 'The current capacity version cannot be deleted. Add a new version instead.',
+            ], 422);
+        }
+
         $capacityRecord->delete();
 
         return response()->json(['message' => 'Capacity record deleted successfully.']);

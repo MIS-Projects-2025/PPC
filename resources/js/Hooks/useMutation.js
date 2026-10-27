@@ -1,35 +1,28 @@
-import { useEffect, useRef, useState } from "react";
-import { useToast } from "./useToast";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-export function useMutation() {
-    const toast = useToast();
+export function useMutation({ track = true } = {}) {
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState(null);
     const [errorData, setErrorData] = useState(null);
     const [data, setData] = useState(null);
 
     const abortControllersRef = useRef({});
+    const inFlightRef = useRef(0);
 
-    const mutate = async (url, options = {}) => {
-        console.log(
-            `[mutate #${++window.__mutateCounter || (window.__mutateCounter = 1)}]`,
-            url,
-            options.body,
-        );
-        console.trace();
-
+    const mutate = useCallback(async (url, options = {}) => {
         const { cancelPrevious = false, mutationKey = "default" } = options;
 
-        if (cancelPrevious && abortControllersRef.current[mutationKey]) {
-            abortControllersRef.current[mutationKey].abort();
-        }
+        if (cancelPrevious) abortControllersRef.current[mutationKey]?.abort();
 
         const controller = new AbortController();
         abortControllersRef.current[mutationKey] = controller;
+        inFlightRef.current += 1;
 
-        setIsLoading(true);
-        setErrorMessage(null);
-        setErrorData(null);
+        if (track) {
+            setIsLoading(true);
+            setErrorMessage(null);
+            setErrorData(null);
+        }
 
         try {
             const {
@@ -45,68 +38,58 @@ export function useMutation() {
             const response = await fetch(url, {
                 method,
                 headers: {
-                    ...(isContentTypeInclude && {
-                        "Content-Type": "application/json",
-                    }),
+                    ...(isContentTypeInclude && { "Content-Type": "application/json" }),
                     Accept: "application/json",
-                    "X-CSRF-TOKEN": document.querySelector(
-                        'meta[name="csrf-token"]',
-                    )?.content,
+                    "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')?.content,
                     ...(token ? { Authorization: `Bearer ${token}` } : {}),
                     ...additionalHeaders,
                 },
-                body: body
-                    ? isFormData
-                        ? body
-                        : JSON.stringify(body)
-                    : undefined,
+                body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
                 signal: controller.signal,
             });
 
             let result;
             try {
                 result = await response.json();
-            } catch (jsonErr) {
+            } catch {
                 const error = new Error("Invalid JSON response from server");
                 error.status = response.status;
                 throw error;
             }
 
             if (!response.ok || (result && result.status === "error")) {
-                const error = new Error(
-                    result?.message || `HTTP error: ${response.status}`,
-                );
+                const error = new Error(result?.message || `HTTP error: ${response.status}`);
                 error.status = response.status;
                 error.data = result;
                 throw error;
             }
 
-            setData(result);
+            if (track) setData(result);
             return result;
         } catch (error) {
-            if (error.name !== "AbortError") {
+            if (track && error.name !== "AbortError") {
                 setErrorData(error.data);
                 setErrorMessage(error.message);
-                throw error;
             }
             throw error;
         } finally {
-            delete abortControllersRef.current[mutationKey];
-            setIsLoading(false);
+            // only remove our own controller; a concurrent request may own the key now
+            if (abortControllersRef.current[mutationKey] === controller) {
+                delete abortControllersRef.current[mutationKey];
+            }
+            inFlightRef.current -= 1;
+            if (track) setIsLoading(inFlightRef.current > 0);
         }
-    };
+    }, [track]);
 
     useEffect(() => {
-        return () => {
-            Object.values(abortControllersRef.current).forEach((controller) =>
-                controller.abort(),
-            );
-        };
+        const controllers = abortControllersRef.current;
+        return () => Object.values(controllers).forEach((c) => c.abort());
     }, []);
 
-    const cancel = (mutationKey = "default") => {
-        abortControllersRef.current[mutationKey]?.abort();
-    };
+    const cancel = useCallback((key = "default") => {
+        abortControllersRef.current[key]?.abort();
+    }, []);
 
     return { mutate, data, errorMessage, errorData, isLoading, cancel };
 }

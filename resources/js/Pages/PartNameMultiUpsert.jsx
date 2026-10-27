@@ -12,13 +12,15 @@ import { MdOutlineDelete } from "react-icons/md";
 
 const plOptions = ["PL1", "PL6"];
 
-const PartNameMultiInsert = () => {
-    const toast = useToast();
-    const { parts: serverParts } = usePage().props;
 
+export const PartNameMultiInsertForm = ({ parts: serverParts, onSaved }) => {
+    
+    const toast = useToast();
+    
     const initialPartnames = useMemo(() => {
         if (serverParts?.length) {
             return serverParts.map((p, index) => ({
+                id: p.id ?? `new-${index}`,
                 devicename: p.devicename || "",
                 focus_grp: p.focus_grp || "",
                 areas: p.areas || "",
@@ -30,12 +32,13 @@ const PartNameMultiInsert = () => {
                 generic_name: p.generic_name || "",
                 drypack: p.drypack || "",
                 recipe: p.recipe ?? "",
-                id: `new-${index}`,
             }));
         }
 
         return [];
     }, [serverParts]);
+
+    console.log("rows", serverParts, initialPartnames)
 
     const {
         mutate,
@@ -198,10 +201,16 @@ const PartNameMultiInsert = () => {
         const url = route("api.partname.bulkUpdate");
         const method = "PATCH";
 
+        const rowsToSave = data.filter(
+            (r) => editedRows[r.id] || String(r.id).startsWith("new"),
+        );
+
+        if (rowsToSave.length === 0) return toast.info("Nothing to save.");
+
         try {
-            await mutate(url, { method, body: data });
+            await mutate(url, { method, body: rowsToSave });
             toast.success("Parts created successfully!");
-            router.visit(route("partname.index"));
+            await onSaved?.(rowsToSave);
         } catch (err) {
             console.error("Upsert failed:", err?.message);
             toast.error(err?.message);
@@ -268,4 +277,7 @@ const PartNameMultiInsert = () => {
     );
 };
 
-export default PartNameMultiInsert;
+export default function PartNameMultiInsert() {
+    const { parts } = usePage().props;
+    return <PartNameMultiInsertForm parts={parts} onSaved={() => router.visit(route("partname.index"))} />;
+}

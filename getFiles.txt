@@ -1,0 +1,82 @@
+names=(
+  "CustomerDataWip"
+  "LoadingPlanEntry"
+  "MachineCapacity"
+  "MachineSetupState"
+  "RecipeService"
+  "RecipeInfo"
+  "LotSourceService"
+  "MachineCapabilityPartRule"
+  "MachineTransitionRule"
+  "MachineTransitionRuleException"
+  "MachineAutoPartRule"
+  "LoadingPlanFormulas"
+  "PackageLocation"
+  "LotSplit"
+  "MachineFocusGroupRule"
+  "ProcessTraveler"
+  "PackageGroupLoadingPlan"
+  "AddEntriesModal"
+  "MachineSelectionGrid"
+  "MachineTransitionAxisRule"
+  "MachinePartExclusion"
+  "PartName"
+  "MachineTransitionGroup"
+  "MachineTransitionGroupMember"
+  "MachineGroupTransitionRule"
+  "Deemo"
+  "MachineHeaderBar"
+  "columns"
+  "useSplitMergeOperations"
+  "LoadingPlanController"
+  "LoadingPlanEntryService"
+  "ShiftDay"
+  "LoadingPlanEntryController"
+  "PickupInsertModal"
+  "LotQuantity"
+  "LotScheduleCalculator"
+  "LoadingPlanService"
+  "DataIntegrityModal"
+  "LoadingPlanBucket"
+  "LoadingPlanBucketController"
+  "ValidatesLoadingPlanEntries"
+  "useDragReorder"
+  "useBulkOperations"
+  "LotMergeService"
+  "LotSplitService"
+  "useMutation"
+  "LotMerge"
+  "DoableEditModal"
+  "TransferModal"
+  "LotIdCell"
+  "helpers"
+  "sync"
+  "SelectionToolbar"
+  "useUndoRedoSync"
+  "loadingPlanSchedule"
+  "useBucketOperations"
+  "StatusBadge"
+  "CellEditor"
+  "useCellEditPersistence"
+  "SplitHistoryModal"
+  "MergeHistoryModal"
+  "LotPrioritySorter"
+  "SchedulerService"
+)
+
+for name in "${names[@]}"; do
+  find . \
+    \( -path "*/node_modules" -o -path "*/vendor" \) -prune -o \
+    -type f \( \
+      -name "$name.php" \
+      -o -name "$name.js" \
+      -o -name "$name.jsx" \
+    \) -print0
+done |
+while IFS= read -r -d '' file; do
+  echo "## FILE: $file"
+  echo '```'
+  cat "$file"
+  echo '```'
+  echo
+done | clip.exe

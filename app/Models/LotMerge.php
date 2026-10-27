@@ -15,6 +15,8 @@ class LotMerge extends Model
         'target_machine',
         'scheduled_date',
         'transferred_qty',
+        'target_qty_before',
+        'source_qty_before',
         'created_by',
         'reverted_at',
         'reverted_by',

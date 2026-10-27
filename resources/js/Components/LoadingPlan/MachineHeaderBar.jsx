@@ -1,7 +1,7 @@
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { Deferred } from "@inertiajs/react";
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useContext, useId, useMemo, useRef, useState } from "react";
 import HoverCell from "./HoverCell";
 
 export const TableInteractionContext = createContext({
@@ -34,15 +34,7 @@ export function MachineHeaderBar({
 	machineKey,
     innerRef,
 }) {
-	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
-    const machine = row?.machine;
-	const machineID = row?.machineId;
-	const machineLabel = row?.machineLabel;
-    const isUnassigned = (String (machineLabel)).toLowerCase() === "Unassigned" || machine === null;
-    const isManual = machine === MACHINE_MANUAL;
-    const isPseudo = isUnassigned || isManual;
-
-    const {
+	const {
         // disableAddRowLot,
         // disableAddRowBlock,
         // scrollParentRef,
@@ -59,7 +51,37 @@ export function MachineHeaderBar({
 		otherLocationCounts, 
 		expandedLocations, 
 		onToggleExpandLocations,
+		onRenameNonMachine, 
+        onAddLot,
+        onAddBlock,
+		onDeleteNonMachine,
     } = useContext(TableInteractionContext);
+
+    const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+	const toggleKey = machineKey !== undefined ? machineKey : row.machine;
+	const menuKey = String(toggleKey).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const popoverId = `mhb-menu-${menuKey}-${uid}`;
+    const anchorName = `--mhb-anchor-${menuKey}-${uid}`;
+    
+    const machine = row?.machine;
+	const machineID = row?.machineId;
+	const machineLabel = row?.machineLabel;
+    const isUnassigned = machine === null || String(machineLabel ?? "").toLowerCase() === "unassigned";
+    const isManual = machine === MACHINE_MANUAL;
+    const isPseudo = isUnassigned || isManual;
+	const isNonMachine = row?.isNonMachine === true;
+	const canRename = isNonMachine && !!onRenameNonMachine;
+	const [editing, setEditing] = useState(false);
+
+	const cancelRef = useRef(false);
+	// "nm:5" is not a valid CSS dashed-ident or safe popover id, so sanitize it
+
+	const commitName = (value) => {
+		const v = value.trim();
+		if (!cancelRef.current && v && v !== machineLabel) onRenameNonMachine?.(row.nonMachineId, v);
+		cancelRef.current = false;
+		setEditing(false);
+	};
 
 	const otherCount = otherPackageCounts?.[machine] ?? 0;
 	const otherLocCount = otherLocationCounts?.[machine] ?? 0;
@@ -69,8 +91,7 @@ export function MachineHeaderBar({
 	// const machineFactory = serverMachines[machineID]?.factory;
     const machineFactory = serverMachines?.find((m) => m.id === machineID)?.factory;
 
-	const factoryColor = getFactoryColor(machineFactory);
-	
+	const factoryColor = isNonMachine ? "bg-violet-200/60" : getFactoryColor(machineFactory);
 	const totalQty = machineTotalQuantity[machine];
 
     const capacityData = machineCapacity?.[machine];
@@ -110,42 +131,75 @@ export function MachineHeaderBar({
         >
 			<div className="sticky left-9 flex gap-2 h-full items-center">	
 				<div className="w-80 h-full font-extrabold whitespace-nowrap flex justify-between items-center gap-2">
-					<button
-						type="button"
-						onClick={(e) => {
-							// stop it from also triggering row-select/drag on the bar
-							e.stopPropagation();
-							onToggleCollapse?.(toggleKey);
-						}}
-						className="btn btn-ghost btn-2xs shrink-0 px-1"
-						title={isCollapsed ? "Expand section" : "Collapse section"}
-						aria-expanded={!isCollapsed}
-					>
-						<span>
-							{isCollapsed ? "►" : "▼"}
-						</span>
-						<span key={toggleKey} className="text-[20px] font-mono animate-slide-down inline-block">
-							{machineLabel}
-						</span>
-                        {row?.machineLocation && <span className="badge badge-outline badge-sm font-mono">{row.machineLocation}</span>}
-					</button>
+					{editing ? (
+						<input
+							autoFocus
+							defaultValue={machineLabel}
+							className="input input-sm w-48 text-base font-mono"
+							onClick={(e) => e.stopPropagation()}
+							onBlur={(e) => commitName(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") e.currentTarget.blur();
+								if (e.key === "Escape") { cancelRef.current = true; e.currentTarget.blur(); }
+							}}
+						/>
+					) : (
+						<button
+							type="button"
+							onClick={(e) => {
+								// stop it from also triggering row-select/drag on the bar
+								e.stopPropagation();
+								onToggleCollapse?.(toggleKey);
+							}}
+							className="btn btn-ghost btn-2xs shrink-0 px-1"
+							title={isCollapsed ? "Expand section" : "Collapse section"}
+							aria-expanded={!isCollapsed}
+						>
+							<span>
+								{isCollapsed ? "►" : "▼"}
+							</span>
+							<span 
+								key={toggleKey} 
+								className="text-[20px] font-mono animate-slide-down inline-block"
+								onDoubleClick={canRename ? (e) => { e.stopPropagation(); setEditing(true); } : undefined}
+								title={canRename ? "Double-click to rename" : undefined}
+							>
+								{machineLabel}
+							</span>
+							{row?.machineLocation && <span className="badge badge-outline badge-sm font-mono">{row.machineLocation}</span>}
+						</button>
+					)}
                     
                     <button
                         className="btn"
-                        popoverTarget={`--${toggleKey}-machine-header-bar-menu-popover`}
-                        style={{
-                            anchorName: `--${toggleKey}-machine-header-bar-menu-anchor`
-                        }}
+                        popoverTarget={popoverId}
+                        style={{ anchorName }}
                     >
                         ⋮
                     </button>
 
-                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={`--${toggleKey}-machine-header-bar-menu-popover`} style={{ positionAnchor: `--${toggleKey}-machine-header-bar-menu-anchor` } /* as React.CSSProperties */ }>
+                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={popoverId} style={{ positionAnchor: anchorName }}>
                         {onAddBucket && machine !== null && (
                             <li>
                                 <button type="button" className="btn btn-sm"
                                     onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
                                     + Group
+                                </button>
+                            </li>
+                        )}
+                        {onAddLot && !isPseudo && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddLot(machine); }}>
+                                    + Lot
+                                </button>
+                            </li>
+                        )}
+                        {onAddBlock && !isPseudo && (
+                            <li>
+                                <button type="button" className="btn btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddBlock(machine); }}>
+                                    + Block
                                 </button>
                             </li>
                         )}
@@ -157,6 +211,28 @@ export function MachineHeaderBar({
                                 </button>
                             </li>
                         )}
+						{canRename && (
+							<li>
+								<button type="button" className="btn btn-sm"
+									onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); setEditing(true); }}>
+									Rename
+								</button>
+							</li>
+						)}
+						{isNonMachine && onDeleteNonMachine && (
+							<li>
+                                {/* too dangerous */}
+								{/* <button type="button" className="btn btn-sm btn-error btn-outline"
+									onClick={(e) => {
+										e.stopPropagation();
+										if (window.confirm(`Delete "${machineLabel}"? Its lots on ALL dates go back to Unassigned and its time blocks are deleted.`)) {
+											onDeleteNonMachine(row.nonMachineId);
+										}
+									}}>
+									Delete
+								</button> */}
+							</li>
+						)}
                     </ul>
 				</div>
 
@@ -196,7 +272,7 @@ export function MachineHeaderBar({
 				)}
 
 				{/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
-				{!isUnassigned && !isManual && (
+				{!isUnassigned && !isManual && !isNonMachine && (
 					<Deferred
 						data="machineCapacity"
 						fallback={

@@ -1,5 +1,6 @@
 import { Head, Link, router } from '@inertiajs/react';
 import { BiArrowBack } from 'react-icons/bi';
+import CapacityBandSettings from './CapacityBandSettings';
 import CapacitySettings from './CapacitySettings';
 import PackageGroupSettings from './PackageGroupSettings';
 
@@ -7,6 +8,7 @@ import PackageGroupSettings from './PackageGroupSettings';
 
 const SECTIONS = [
     { key: 'capacity', label: 'Machine Capacity', href: '/loading-plan/settings/capacity' },
+    { key: 'capacity-bands', label: 'Capacity Bands', href: '/loading-plan/settings/capacity-bands' },
     { key: 'package-groups', label: 'Package Groups', href: '/loading-plan/settings/package-groups' },
 ];
 
@@ -15,7 +17,7 @@ const goBack = () => {
     else router.visit('/loading-plan'); // opened directly / in a new tab: nothing to go back to
 };
 
-export default function Index({ section = 'capacity', machines = [] }) {
+export default function Index({ section = 'capacity', machines = [], bands = [] }) {
     const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
 
     return (
@@ -44,6 +46,7 @@ export default function Index({ section = 'capacity', machines = [] }) {
                 <main className="min-w-0 flex-1 overflow-y-auto p-6">
                     <h2 className="mb-4 text-xl font-semibold">{current.label}</h2>
                     {current.key === 'capacity' && <CapacitySettings machines={machines} />}
+                    {current.key === 'capacity-bands' && <CapacityBandSettings initial={bands} />}
                     {current.key === 'package-groups' && <PackageGroupSettings />}
                 </main>
             </div>

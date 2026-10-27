@@ -18,6 +18,7 @@ class LotSplit extends Model
         'child_qty',
         'split_percentage',
         'target_machine',
+        'parent_qty_before',
         'sequence_order_at_split',
         'created_by',
         'reverted_at',
