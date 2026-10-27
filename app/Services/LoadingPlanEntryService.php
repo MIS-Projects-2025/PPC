@@ -374,10 +374,22 @@ class LoadingPlanEntryService
 
             $lotIds = $movers->pluck('lot_id')->filter()->unique()->values()->all();
             $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
-            $calc->loadPackageList(); // after the quantities exist, so new lots' part names are found
+
+            $this->sources()->ensureLotQuantities($existing, $date);
+
+            $wip = $this->sources()->forEntries($existing);
+
+            $partNames = $wip->pluck('Part_Name')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $calc->loadPackageList($partNames);
 
             foreach ($movers as $m) {
                 if ($m->entry_type === 'lot') {
+                    $this->sources()->ensureLotQuantity($m);
                     $calc->recalculateAndRetime($m->id, $targetMachineId, retime: false);
                 }
             }
@@ -740,6 +752,7 @@ class LoadingPlanEntryService
 
             $wip = null;
             if ($entryType === 'lot') {
+                $this->sources()->ensureLotQuantity($entry);
                 $calc->loadPackageList()->recalculateAndRetime($entryId, $machineId, retime: false);
                 $wip = $this->sources()->forEntry($entry);
             }
@@ -852,6 +865,7 @@ class LoadingPlanEntryService
             $calc = app(LotScheduleCalculator::class, ['dates' => [$resolvedDate], 'lotIds' => [$entry->lot_id]]);
             if ($entryType === 'lot') {
                 // into a non-machine: accu_time is kept as is (recalc never overwrites it there)
+                $this->sources()->ensureLotQuantity($entry);
                 $calc->loadPackageList()->recalculateAndRetime($entry->id, $targetMachineId, retime: false);
             }
 
@@ -1068,6 +1082,8 @@ class LoadingPlanEntryService
                 $this->assertConsistentDates($allEntries);
             }
 
+            $this->sources()->ensureLotQuantities($allEntries, $date);
+
             if ($targetNonMachineId !== null) {
                 $this->assertNonMachineExists($targetNonMachineId);
             }
@@ -1114,7 +1130,18 @@ class LoadingPlanEntryService
             $firstAffectedEntry = null;
 
             $calculator = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $allEntries->pluck('lot_id')->all()]);
-            $calculator->loadPackageList();
+
+            $this->sources()->ensureLotQuantities($allEntries, $date);
+
+            $wip = $this->sources()->forEntries($allEntries);
+
+            $partNames = $wip->pluck('Part_Name')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $calculator->loadPackageList($partNames);
 
             foreach ($movers as $entry) {
                 $this->assertNotFinalized($entry);
@@ -1140,7 +1167,6 @@ class LoadingPlanEntryService
                 $nextSeq += self::GAP_SEED;
             }
 
-            $wip = $this->sources()->find($unplannedLotIds, $date);
 
             foreach ($unplannedLotIds as $lotId) {
                 $wipItem = $wip->get($lotId);
@@ -1170,6 +1196,7 @@ class LoadingPlanEntryService
                     $lot->save();
                 }
 
+                $this->sources()->ensureLotQuantity($entry);
                 $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
 
                 $firstAffectedEntry ??= $entry;
@@ -1288,7 +1315,18 @@ class LoadingPlanEntryService
             $loadingPlanService->initSplitsAndMerges();
 
             $calculator = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds]);
-            $calculator->loadPackageList();
+
+            $this->sources()->ensureLotQuantities($lotEntries, $date);
+
+            $wip = $this->sources()->find($lotIds, $date);
+
+            $partNames = $wip->pluck('Part_Name')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $calculator->loadPackageList($partNames);
 
             $sourceMachineIds = $movers->pluck('machine_id')->filter()->unique()->values()->all();
 
@@ -1311,6 +1349,7 @@ class LoadingPlanEntryService
                 if ($entry->entry_type === 'lot') {
                     // accu_time only — the forward walk runs once per machine,
                     // after both loops below, not once per lot here.
+                    $this->sources()->ensureLotQuantity($entry);
                     $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
                 }
 
@@ -2370,6 +2409,8 @@ class LoadingPlanEntryService
             'lock_version'       => 1,
         ]);
 
+        $this->sources()->ensureLotQuantity($entry);
+
         $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
         $lot->part_name = $wipItem?->Part_Name ?? $lot->part_name ?? '';
         $lot->qty_base  = $wipItem?->Qty ?? $lot->qty_base ?? 0;
@@ -3415,6 +3456,7 @@ class LoadingPlanEntryService
 
                 foreach ($entries as $e) {
                     $this->assertNotFinalized($e);
+                    // $this->sources()->ensureLotQuantity($e);
                     if (!in_array($e->lot_id, $withWip, true)) {
                         abort(422, "Lot {$e->lot_id} has no WIP row (manual lot) and can't be grouped.");
                     }
