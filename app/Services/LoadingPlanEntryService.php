@@ -51,6 +51,59 @@ class LoadingPlanEntryService
             ->all();
     }
 
+    /**
+     * Edit status/remarks on a lot that has no entry yet (plain Unassigned WIP/F3 row).
+     * Creates the unassigned entry (same shape bulkMove() creates) then edits it.
+     */
+    public function editFieldForUnplacedLot(string $lotId, string $date, array $fields): LoadingPlanEntry
+    {
+        $this->assertSupportedEditField($fields);
+        if ($unsupported = array_diff(array_keys($fields), ['status', 'remarks'])) {
+            throw new \InvalidArgumentException('Only status and remarks can be edited on an unassigned lot.');
+        }
+
+        return DB::transaction(function () use ($lotId, $date, $fields) {
+            $this->assertDateNotFinalized($date);
+
+            if (LotBucketItem::where('scheduled_date', $date)->where('lot_id', $lotId)->exists()) {
+                throw new \InvalidArgumentException('Grouped lots can\'t be edited. Remove it from the group first.');
+            }
+
+            $entry = LoadingPlanEntry::where('lot_id', $lotId)
+                ->where('scheduled_date', $date)
+                ->where('rework_seq', 0)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$entry) {
+                $wip = $this->sources()->find([$lotId], $date)->get($lotId)
+                    ?? throw new ModelNotFoundException();
+
+                $entry = LoadingPlanEntry::create([
+                    'entry_type'     => 'lot',
+                    'source'         => $wip->source ?? 'wip',
+                    'lot_id'         => $lotId,
+                    'scheduled_date' => $date,
+                    'machine_id'     => null,
+                    'package_name'   => $wip->Package_Name,
+                    'sequence_order' => null,
+                    'status'         => 'NONE',
+                    'rework_seq'     => 0,
+                    'lock_version'   => 1,
+                ]);
+
+                $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
+                $lot->part_name = $wip->Part_Name ?? '';
+                $lot->qty_base  = $wip->Qty ?? 0;
+                if ($lot->isDirty()) {
+                    $lot->save();
+                }
+            }
+
+            return $this->editLotField($entry->id, $fields, (int) $entry->lock_version);
+        });
+    }
+
     public function deleteEntriesWithHistory(\Illuminate\Support\Collection $entries): void
     {
         if ($entries->isEmpty()) return;

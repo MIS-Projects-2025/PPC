@@ -112,6 +112,7 @@ export function useCellEditPersistence({
                             entry_type: isBlockRow(prevRow) ? "block" : "lot",
                             fields: { [backendField]: value },
                             lock_version: prevRow.lock_version ?? null,
+                            ...(prevRow.entry_id ? {} : { lot_id: prevRow.lot_id, scheduled_date: date }),
                         },
                     },
                 ),

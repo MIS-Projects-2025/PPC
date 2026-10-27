@@ -391,7 +391,11 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             );
                         }
 
-                        if (row.machine === null) {
+                        // if (row.machine === null) {
+                        //     return row[col.key];
+                        // }
+
+                        if (row.machine === null && row.bucket_id != null) {
                             return row[col.key];
                         }
 
@@ -399,7 +403,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             <button
                                 type="button"
                                 className="btn btn-ghost btn-xs px-1 btn-block flex-1"
-                                onClick={(e) => onStatusClick?.(e, row.entry_id)}
+                                onClick={(e) => onStatusClick?.(e, row.id)}
                                 disabled={isUpdating}
                             >
                                 <StatusBadge status={row.status} />
@@ -524,6 +528,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         !isUpdating &&
                         row.__type !== "collapsed" &&
                         row.__type !== "header" &&
+                        !(row.machine === null && row.bucket_id != null) &&
                         !(isBlockRow(row) && col.key === "remarks"),
                 }),
             };

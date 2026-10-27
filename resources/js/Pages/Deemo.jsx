@@ -746,12 +746,11 @@ export default function Deemo({
 
     // ── Status dropdown (ported from LoadingPlanTable.jsx) ──────────────────
     const handleStatusClick = useCallback(
-        (e, entryId) => {
+        (e, rowId) => {
             e.stopPropagation();
-            if (readOnly) return; // no status-change menu in read-only mode
+            if (readOnly) return;
             if (writesLocked) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            setStatusMenu({ entryId, anchor: e.currentTarget });
+            setStatusMenu({ rowId, anchor: e.currentTarget });
         },
         [readOnly, writesLocked],
     );
@@ -832,18 +831,16 @@ export default function Deemo({
             // the status column's onClick, which pass row.entry_id) — so
             // matching against r.entry_id is correct in this handler,
             // unlike the bulk handlers below.
-            const row = dataRows.find((r) => r.entry_id === entryId);
+            const rowId = statusMenu.rowId;
+            const row = dataRows.find((r) => r.id === rowId);
             if (!row) return;
 
-            const prevSnapshot = dataRows; // capture before mutating
+            const prevSnapshot = dataRows;
 
             update((prev) =>
-                prev.map((r) =>
-                    r.entry_id === entryId
-                        ? { ...r, status: normalizedStatus }
-                        : r,
-                ),
+                prev.map((r) => (r.id === rowId ? { ...r, status: normalizedStatus } : r)),
             );
+
             setIsDirty(true);
             setStatusMenu(null);
 
@@ -2749,7 +2746,7 @@ export default function Deemo({
             {!readOnly && statusMenu && (
                 <StatusMenu
                     anchor={statusMenu.anchor}
-                    current={dataRows.find((r) => r.entry_id === statusMenu.entryId)?.status}
+                    current={dataRows.find((r) => r.id === statusMenu.rowId)?.status}
                     disabled={writesLocked}
                     onPick={handleStatusChange}
                     onClose={() => setStatusMenu(null)}

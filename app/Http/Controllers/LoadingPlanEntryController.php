@@ -425,6 +425,8 @@ class LoadingPlanEntryController extends Controller
             'entry_type'                => 'required|in:lot,block',
             // array: rejects any key not listed, so a stray "doable" is a 422, not a 500
             'fields'                    => 'required|array:status,remarks,tag,accu_time,is_manual_expedite,is_scm,block_label,qty,part_name',
+            'lot_id'                    => 'nullable|string',
+            'scheduled_date'            => 'nullable|date',
             'fields.status'             => 'sometimes|nullable|string',
             'fields.remarks'            => 'sometimes|nullable|string',
             'fields.tag'                => 'sometimes|nullable|string',
@@ -440,7 +442,14 @@ class LoadingPlanEntryController extends Controller
 
         try {
             if ($data['entry_type'] === 'lot') {
-                $entry = $this->service->editLotField($id, $fields, $data['lock_version'] ?? null);
+                if ($id === 0) {
+                    if (empty($data['lot_id']) || empty($data['scheduled_date'])) {
+                        return response()->json(['error' => 'bad_request', 'message' => 'lot_id and scheduled_date are required for a lot with no entry.'], 422);
+                    }
+                    $entry = $this->service->editFieldForUnplacedLot($data['lot_id'], $data['scheduled_date'], $fields);
+                } else {
+                    $entry = $this->service->editLotField($id, $fields, $data['lock_version'] ?? null);
+                }
             } else {
                 $entry = $this->service->editField($id, $fields, $data['lock_version'] ?? null);
             }
