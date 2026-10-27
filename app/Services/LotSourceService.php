@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\CustomerDataWip;
 use App\Models\LoadingPlanEntry;
 use App\Models\LotSplit;
+use App\Models\LotQuantity;
 use App\Models\ProcessTraveler;
 use Illuminate\Support\Collection;
 
@@ -35,6 +36,64 @@ class LotSourceService
             ->toBase()
             ->unique('lot_number')                    // latest row wins if lot_number is duplicated
             ->mapWithKeys(fn($t) => [$t->lot_number => $t->toWip()]);
+    }
+
+    public function ensureLotQuantities(Collection $entries, string $date): void
+    {
+        $lots = $entries
+            ->filter(fn($e) => $e->entry_type === 'lot' && $e->lot_id && !(int) $e->rework_seq)
+            ->unique('lot_id');
+        if ($lots->isEmpty()) return;
+
+        $ids  = $lots->pluck('lot_id');
+        $have = LotQuantity::where('scheduled_date', $date)->where('rework_seq', 0)
+            ->whereIn('lot_id', $ids)->pluck('lot_id')->flip();
+        $kids = LotSplit::active()->where('scheduled_date', $date)
+            ->whereIn('child_lot_id', $ids)->pluck('child_lot_id')->flip();
+
+        foreach ($lots as $e) {
+            if ($have->has($e->lot_id) || $kids->has($e->lot_id)) continue;
+            $this->ensureLotQuantity($e);   // slow path only for missing rows
+        }
+    }
+
+    public function ensureLotQuantity(LoadingPlanEntry $entry): ?LotQuantity
+    {
+        if ($entry->entry_type !== 'lot' || !$entry->lot_id) return null;
+
+        $date   = $entry->scheduled_date->toDateString();
+        $rework = (int) $entry->rework_seq;
+
+        $existing = LotQuantity::where('lot_id', $entry->lot_id)
+            ->where('scheduled_date', $date)
+            ->where('rework_seq', $rework)
+            ->first();
+
+        if ($existing) return $existing;
+
+        // reworkEntry() creates its own row; never fabricate one for rework_seq > 0
+        if ($rework > 0) return null;
+
+        $isSplitChild = LotSplit::active()
+            ->where('child_lot_id', $entry->lot_id)
+            ->where('scheduled_date', $date)
+            ->exists();
+
+        // split children get their row in LotSplitService, not from the traveler
+        if ($isSplitChild) return null; // its row comes from LotSplitService
+
+        $src = $this->forEntry($entry);
+        if (!$src) return null;
+
+        return LotQuantity::firstOrCreate(
+            ['lot_id' => $entry->lot_id, 'scheduled_date' => $date, 'rework_seq' => 0],
+            [
+                'part_name'        => $src->Part_Name ?? '',
+                'qty_base'         => (int) round((float) ($src->Qty ?? 0)),
+                'split_adjustment' => 0,
+                'merge_adjustment' => 0,
+            ],
+        );
     }
 
     /**
