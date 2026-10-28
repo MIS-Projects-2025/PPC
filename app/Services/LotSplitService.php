@@ -229,6 +229,7 @@ class LotSplitService
 
             $parentEntry = LoadingPlanEntry::where('lot_id', $split->parent_lot_id)
                 ->where('scheduled_date', $split->scheduled_date)
+                ->where('rework_seq', 0)
                 ->first();
 
             $parentMachineId = $parentEntry?->machine_id;

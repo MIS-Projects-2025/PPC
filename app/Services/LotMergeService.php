@@ -162,8 +162,8 @@ class LotMergeService
 
             $merge->update(['reverted_at' => now(), 'reverted_by' => $revertedBy]);
 
-            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
-            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
 
             $targetEntryNonMachineId = $targetEntry?->non_machine_id;
             $sourceEntryNonMachineId = $sourceEntry?->non_machine_id;
@@ -233,8 +233,8 @@ class LotMergeService
 
             $merge->update(['reverted_at' => null, 'reverted_by' => null]);
 
-            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
-            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
 
             $targetEntryNonMachineId = $targetEntry?->non_machine_id;
             $sourceEntryNonMachineId = $sourceEntry?->non_machine_id;

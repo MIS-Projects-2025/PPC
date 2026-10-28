@@ -118,6 +118,8 @@ class LoadingPlanEntryController extends Controller
                 return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
             } catch (LoadingPlanDateFinalizedException $e) {
                 return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+            } catch (StaleWriteException $e) {
+                return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
             }
         }
 

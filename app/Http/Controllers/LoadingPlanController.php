@@ -244,7 +244,7 @@ class LoadingPlanController extends Controller
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
-            'status'            => $isF3 ? 'ok' : ($wipRows->isEmpty() ? 'not_imported' : 'ok'),
+            'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)
                 ->orderBy('sort_order')
                 ->get()

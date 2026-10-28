@@ -69,6 +69,11 @@ class LoadingPlanMergeController extends Controller
                 'error'   => 'server_error',
                 'message' => 'Could not revert this merge.',
             ], 500);
+        } catch (InvalidMergeException $e) {
+            return response()->json([
+                'error'   => 'invalid_merge',
+                'message' => $e->getMessage(),
+            ], 422);
         }
     }
 

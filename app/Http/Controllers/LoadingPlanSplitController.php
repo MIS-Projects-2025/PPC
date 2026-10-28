@@ -8,6 +8,7 @@ use App\Services\LotSplitService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class LoadingPlanSplitController extends Controller
 {
@@ -47,6 +48,16 @@ class LoadingPlanSplitController extends Controller
                 'message'        => $e->getMessage(),
                 'scheduled_date' => $e->scheduledDate,
             ], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'error'   => 'not_found',
+                'message' => 'That row no longer exists.',
+            ], 404);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'error'   => 'bad_request',
+                'message' => $e->getMessage(),
+            ], 422);
         }
     }
 
@@ -67,6 +78,11 @@ class LoadingPlanSplitController extends Controller
                 'error'   => 'invalid_split',
                 'message' => $e->getMessage(),
             ], 422);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'error'   => 'not_found',
+                'message' => 'That split does not exist or is not in a state where this can be done.',
+            ], 404);
         } catch (\Throwable $e) {
             Log::error('lot split revert failed', ['split_id' => $splitId, 'message' => $e->getMessage()]);
             return response()->json([

@@ -364,12 +364,13 @@ class LoadingPlanEntryService
             // Lots with no entry yet (unplanned or parked): create them unassigned first,
             // then treat every mover the same way.
             $created = [];
+
+            $newWip = collect();
             if (!empty($newLotIds)) {
-                $wip = $this->sources()->find($newLotIds, $date);
+                $newWip = $this->sources()->find($newLotIds, $date);
 
                 foreach ($newLotIds as $lotId) {
-                    $wipItem = $wip->get($lotId);
-
+                    $wipItem = $newWip->get($lotId);
                     // newlot can still be present because user edit their status/remarks/tag etc  
                     $created[$lotId] = LoadingPlanEntry::where('lot_id', $lotId)
                         ->where('scheduled_date', $date)
@@ -453,12 +454,8 @@ class LoadingPlanEntryService
 
             $wip = $this->sources()->forEntries($existing);
 
-            $partNames = $wip->pluck('Part_Name')
-                ->filter()
-                ->unique()
-                ->values()
-                ->all();
-
+            $partNames = $wip->filter()->pluck('Part_Name')
+                ->concat($newWip->pluck('Part_Name'))->filter()->unique()->values()->all();
             $calc->loadPackageList($partNames);
 
             foreach ($movers as $m) {
@@ -528,6 +525,7 @@ class LoadingPlanEntryService
         };
 
         return DB::transaction(function () use ($targetMachine, $date, $lap, $start) {
+            $this->assertDateNotFinalized($date);
             $targetMachineId = $this->resolveMachineId($targetMachine);
             if ($targetMachineId === null) {
                 throw new \InvalidArgumentException("Target machine [{$targetMachine}] does not exist.");
@@ -1162,8 +1160,6 @@ class LoadingPlanEntryService
                 $this->assertConsistentDates($allEntries);
             }
 
-            $this->sources()->ensureLotQuantities($allEntries, $date);
-
             if ($targetNonMachineId !== null) {
                 $this->assertNonMachineExists($targetNonMachineId);
             }
@@ -1214,13 +1210,10 @@ class LoadingPlanEntryService
             $this->sources()->ensureLotQuantities($allEntries, $date);
 
             $wip = $this->sources()->forEntries($allEntries);
+            $newWip = $unplannedLotIds ? $this->sources()->find($unplannedLotIds, $date) : collect();
 
-            $partNames = $wip->pluck('Part_Name')
-                ->filter()
-                ->unique()
-                ->values()
-                ->all();
-
+            $partNames = $wip->filter()->pluck('Part_Name')
+                ->concat($newWip->pluck('Part_Name'))->filter()->unique()->values()->all();
             $calculator->loadPackageList($partNames);
 
             foreach ($movers as $entry) {
@@ -1249,7 +1242,7 @@ class LoadingPlanEntryService
 
 
             foreach ($unplannedLotIds as $lotId) {
-                $wipItem = $wip->get($lotId);
+                $wipItem = $newWip->get($lotId);
 
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
@@ -1332,6 +1325,7 @@ class LoadingPlanEntryService
     /**
      * Same as bulkTransfer(), but each lot can go to a different machine.
      * $assignments: array<int, array{lot_id: string, machine: string}>
+     * NOTE: DEPRECATED
      */
     public function bulkTransferMulti(array $assignments, string $date)
     {
@@ -1465,6 +1459,7 @@ class LoadingPlanEntryService
                     'time_end'       => null,
                 ]);
 
+                $this->sources()->ensureLotQuantity($entry);
                 $calculator->recalculateAndRetime($entry->getKey(), $targetMachineId, retime: false);
 
                 $firstAffectedByMachine[$targetMachineId] ??= $entry;
@@ -1817,7 +1812,11 @@ class LoadingPlanEntryService
             $locked = $this->lockLaneRows($machineIds, $nonMachineIds, $date)->keyBy('id');
 
             $lotIds = $existingEntries->pluck('lot_id')->filter()->unique()->values()->all();
-            $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList();
+
+            $parts = collect($updates)->pluck('fields.part_name')
+                ->concat(LotQuantity::where('scheduled_date', $date)->whereIn('lot_id', $lotIds)->pluck('part_name'))
+                ->filter()->unique()->values()->all();
+            $calc = app(LotScheduleCalculator::class, ['dates' => [$date], 'lotIds' => $lotIds])->loadPackageList($parts);
 
             foreach ($updates as $u) {
                 $this->assertSupportedEditField($u['fields']);
@@ -2405,6 +2404,11 @@ class LoadingPlanEntryService
                 ->unique()
                 ->values()
                 ->all();
+
+            $allLotIds = array_values(array_unique([
+                ...$allLotIds,
+                ...collect($results)->pluck('lot_id')->filter()->all(),
+            ]));
 
             // One calculator, loaded once, reused for every machine/date-group this
             // sync touches — replaces a fresh app(LotScheduleCalculator::class, ...)
@@ -3426,6 +3430,7 @@ class LoadingPlanEntryService
                         'qty_base' => $row['qty_base'] ?? $row['qty'] ?? 0,
                         'recipe_used' => $metrics['recipe_used'],
                         'recipe_source_id' => $metrics['recipe_source_id'],
+                        'recipe_source_type' => $metrics['recipe_source_type'], // to be checked if this is necessary
                         'commit' => $metrics['commit'],
                         'recipe_status' => $metrics['recipe_status'],
                         'capacity_uph_snapshot' => $metrics['capacity_uph_snapshot'],
@@ -3448,7 +3453,7 @@ class LoadingPlanEntryService
             LotQuantity::upsert(
                 $lotQuantityRows,
                 ['lot_id', 'scheduled_date', 'rework_seq'],
-                ['part_name', 'qty_base', 'recipe_used', 'recipe_source_id', 'commit', 'recipe_status', 'capacity_uph_snapshot']
+                ['part_name', 'qty_base', 'recipe_used', 'recipe_source_id', 'recipe_source_type', 'commit', 'recipe_status', 'capacity_uph_snapshot']
             );
         }
 
