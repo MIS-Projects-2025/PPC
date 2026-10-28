@@ -1,6 +1,13 @@
 import { isBlockRow } from "./helpers";
 import { applyAffectedTimings } from "./loadingPlanSchedule";
 
+// Only identity/concurrency fields may be written into past/future snapshots.
+const HISTORY_SAFE = ["entry_id", "lock_version"];
+// Server-derived values that depend on the current arrangement: present only.
+const PRESENT_ONLY = ["doable", "doable_status", "doable_overridden", "doable_recipe_source",
+    "part_missing_from_list", "capacity_uph", "accu_time", "qty"];
+const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => k in obj).map((k) => [k, obj[k]]));
+
 /**
  * Syncs additions and field/position edits only. Deletions are a
  * separate process that runs — and completes — before this is called,
@@ -11,7 +18,11 @@ import { applyAffectedTimings } from "./loadingPlanSchedule";
  * whatever recompute/validation each row's data implies (split_info
  * conservation, doable, sequencing) on its own.
  */
-export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toast, deletedEntryIds = [], syncServerFields, laneStarts = {}) {
+export function syncDeemoToServer(
+    prevRows, nextRows, date, mutate, update, toast,
+    deletedEntryIds = [], syncServerFields, laneStarts = {},
+    { revertOnError = true } = {},
+) {
     const prevById = new Map(prevRows.map((r) => [r._dndId, r]));
 
     const added = nextRows.filter((r) => !prevById.has(r._dndId));
@@ -40,18 +51,19 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
     }
 
     const rows = affected.map((r) => {
-        // Added (no prior _dndId) but already carrying an entry_id means
-        // undo just resurrected a row whose backend row was hard-deleted.
-        // Force it through the create path instead of updating an id that
-        // no longer exists.
         const isResurrected = addedIds.has(r._dndId) && r.entry_id != null;
-
         return {
             dnd_id: r._dndId,
             entry_id: isResurrected ? null : (r.entry_id ?? null),
             machine: r.machine,
             entry_type: isBlockRow(r) ? "block" : "lot",
             lot_id: r.lot_id ?? null,
+            // needed to recreate rework / manual rows faithfully
+            rework_seq: r.rework_seq ?? 0,
+            rework_of_entry_id: r.rework_of_entry_id ?? null,
+            package_name: r.package_name ?? null,
+            part_name: r.part_name ?? null,
+            qty: r.qty ?? null,
             fields: {
                 status: r.status,
                 remarks: r.remarks,
@@ -69,29 +81,29 @@ export function syncDeemoToServer(prevRows, nextRows, date, mutate, update, toas
         body: { rows, order, deleted: deletedEntryIds, lane_starts: laneStarts, scheduled_date: date },
     })
         .then(({ results, affected_timings }) => {
-            // structural removal (deletions) still only concerns `present` —
-            // a deleted row shouldn't be resurrected by an unrelated undo either,
-            // but that's a separate, pre-existing concern from this bug
             const deletedSet = new Set(deletedEntryIds);
             update((prev) => prev.filter((row) => !row.entry_id || !deletedSet.has(row.entry_id)), true);
 
-            // server-confirmed field patch — now propagates everywhere, not just present
-            const patches = affected
-                .map((r, idx) => {
-                    const result = results[idx];
-                    if (!result) return null;
-                    const { id, time_start, time_end, time_start_at, time_end_at, sequence_order, ...stable } = result;
-                    return { dndId: r._dndId, fields: stable };
-                })
-                .filter(Boolean);
+            const idPatches = [];
+            const derived = new Map();
+            affected.forEach((r, idx) => {
+                const result = results[idx];
+                if (!result) return;
+                idPatches.push({ dndId: r._dndId, fields: pick(result, HISTORY_SAFE) });
+                derived.set(r._dndId, pick(result, PRESENT_ONLY));
+            });
 
-            syncServerFields?.(patches);
+            syncServerFields?.(idPatches); // history-wide: ids + lock_version only
+            if (derived.size) {
+                update((prev) => prev.map((row) =>
+                    derived.has(row._dndId) ? { ...row, ...derived.get(row._dndId) } : row), true);
+            }
             applyAffectedTimings(update, affected_timings, date);
         })
         .catch((err) => {
             console.error("Sync failed to persist:", err);
             const code = err?.data?.error;
-            update(() => prevRows, true); // skipHistory, so no stray undo entry
+            if (revertOnError) update(() => prevRows, true);
 
             if (code === "active_split_or_merge" || code === "stale_write") {
                 toast?.error?.(err.data?.message ?? err.message);

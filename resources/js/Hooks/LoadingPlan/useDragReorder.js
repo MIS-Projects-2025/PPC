@@ -253,6 +253,7 @@ export function useDragReorder({
                     console.error("Failed to move the selected rows:", err);
                     update(() => prevSnapshot, true);
                     if (hadBucket) store.getState().reset(prevSnapshot);
+                    else store.getState().rollback(prevSnapshot);
                     toast?.error?.(err?.message ?? "Couldn't move the selected rows — reverted.");
                 });
         },
@@ -475,7 +476,7 @@ export function useDragReorder({
                 .catch((err) => {
                     console.error("Failed to persist move/transfer:", err);
                     if (leftBucket) store.getState().reset(prevSnapshot);
-                    else update(() => prevSnapshot, true);
+                    else store.getState().rollback(prevSnapshot);
                     toast?.error?.(err?.message ?? "Couldn't move the row — reverted.");
                 });
         },

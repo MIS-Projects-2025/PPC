@@ -2479,49 +2479,60 @@ class LoadingPlanEntryService
     private function createLotRow(array $row, string $date)
     {
         $lotId = $row['lot_id'] ?? throw new \InvalidArgumentException('create row missing lot_id for entry_type lot');
-        $this->releaseFromBuckets([$lotId], $date);
+        $reworkSeq = (int) ($row['rework_seq'] ?? 0);
+        if ($reworkSeq === 0) {
+            $this->releaseFromBuckets([$lotId], $date);
+        }
         $fields = $row['fields'] ?? [];
         [$machineId, $nonMachineId] = $row['machine'] !== null ? $this->resolveTarget($row['machine']) : [null, null];
 
-        // Mirrors bulkTransfer()'s unplannedLotIds branch — this is a WIP lot
-        // being placed for the first time, not a synthetic manual lot, so pull
-        // packageLocation/part/qty from CustomerDataWip the same way that path does.
-        $wipItem = $this->sources()->find([$lotId], $date)->get($lotId);
+        $parent  = ($reworkSeq > 0 && !empty($row['rework_of_entry_id']))
+            ? LoadingPlanEntry::find($row['rework_of_entry_id']) : null;
+        $wipItem = $this->sources()->find([$lotId], $date, $parent?->source)->get($lotId);
 
         $entry = LoadingPlanEntry::create([
-            'entry_type'     => 'lot',
-            'source'         => $wipItem?->source ?? 'wip',
-            'lot_id'         => $lotId,
-            'package_name'   => $wipItem?->Package_Name,
-            'scheduled_date' => $date,
-            'machine_id'     => $machineId,
-            'non_machine_id' => $nonMachineId,
-            'sequence_order' => null, // phase 3 resequence sets the real value
-            'status'         => $fields['status'] ?? 'NONE',
-            'remarks'        => $fields['remarks'] ?? null,
-            'tag'            => $fields['tag'] ?? null,
-            'accu_time'      => $fields['accu_time'] ?? null,
+            'entry_type'         => 'lot',
+            'source'             => $parent?->source ?? $wipItem?->source ?? 'wip',
+            'lot_id'             => $lotId,
+            'package_name'       => $wipItem?->Package_Name ?? $row['package_name'] ?? null,
+            'scheduled_date'     => $date,
+            'machine_id'         => $machineId,
+            'non_machine_id'     => $nonMachineId,
+            'sequence_order'     => null,
+            'status'             => $fields['status'] ?? 'NONE',
+            'remarks'            => $fields['remarks'] ?? null,
+            'tag'                => $fields['tag'] ?? null,
+            'accu_time'          => $fields['accu_time'] ?? null,
             'is_manual_expedite' => (bool) ($fields['is_manual_expedite'] ?? false),
             'is_scm'             => (bool) ($fields['is_scm'] ?? false),
+            'rework_seq'         => $reworkSeq,
+            'rework_of_entry_id' => $parent?->id,
             'lock_version'       => 1,
         ]);
 
-        $this->sources()->ensureLotQuantity($entry);
-
-        $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
-        $lot->part_name = $wipItem?->Part_Name ?? $lot->part_name ?? '';
-        $lot->qty_base  = $wipItem?->Qty ?? $lot->qty_base ?? 0;
-        if ($lot->isDirty()) {
-            $lot->save();
+        if ($reworkSeq > 0) {
+            LotQuantity::updateOrCreate(
+                ['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => $reworkSeq],
+                [
+                    'part_name' => $row['part_name'] ?? '',
+                    'qty_base' => $row['qty'] ?? 0,
+                    'split_adjustment' => 0,
+                    'merge_adjustment' => 0
+                ],
+            );
+        } else {
+            $this->sources()->ensureLotQuantity($entry);
+            $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
+            $lot->part_name = $wipItem?->Part_Name ?? $lot->part_name ?? $row['part_name'] ?? '';
+            $lot->qty_base  = $wipItem?->Qty ?? $lot->qty_base ?? $row['qty'] ?? 0;
+            if ($lot->isDirty()) {
+                $lot->save();
+            }
         }
 
         $freshEntry = $entry->fresh(['machineModel', 'lotQuantity']);
 
-        return (new LoadingPlanService($date))->createPlannedLot(
-            $wipItem,
-            $entry,
-            $freshEntry->lotQuantity
-        );
+        return (new LoadingPlanService($date))->createPlannedLot($wipItem, $entry, $freshEntry->lotQuantity);
     }
 
     private function createBlockRow(array $row, string $date)
