@@ -31,6 +31,7 @@ const COLORS = {
     scmFill: "FFFFC7CE",     // is_scm
     redFont: "FFCC0000",     // is_for_bake
     cr3ResFill: "FFFF0000",  // cr3 === "RES"
+    dimFont: "FF7F7F7F", // row belongs to another package/location (shown for context)
     border: { style: "thin", color: { argb: "FFB7B7B7" } },
 };
 
@@ -127,6 +128,8 @@ function writeRows(sheet, rows, ctx) {
         );
         const dataRow = sheet.addRow(values);
 
+        const dim = !!ctx.isOwn && !ctx.isBlock(row) && !ctx.isOwn(row);
+
         ctx.exportColumns.forEach((col, i) => {
             const cell = dataRow.getCell(i + 1);
             styleDataCell(cell, col, row, ctx);
@@ -134,10 +137,13 @@ function writeRows(sheet, rows, ctx) {
             if (col.key === DATE_COLUMN_KEY) cell.numFmt = "mmmm d, yyyy";
             if (col.key === "accu_time") cell.numFmt = "0.00";
             if (col.key === "time_start" || col.key === "time_end") {
-				cell.numFmt = timeNumFmt(row, col.key);
-			}
+                cell.numFmt = timeNumFmt(row, col.key);
+            }
             if (ctx.isBlock(row) && ["part_name", "package_name", "status", "lot_id"].includes(col.key)) {
                 cell.font = { ...(cell.font || {}), bold: true };
+            }
+            if (dim) {
+                cell.font = { ...(cell.font || {}), italic: true, color: { argb: COLORS.dimFont } };
             }
         });
     });
@@ -246,7 +252,9 @@ export async function exportLoadingPlanToExcel({
     const bucketsFor = (m) => buckets.filter((b) => (b.machine ?? null) === m);
     const byPosition = (a, b) => (a.bucket_position ?? 0) - (b.bucket_position ?? 0);
 
-    const rows = dataRows.filter((r) => !isOtherLoc(r));
+    // Unassigned lots from another location aren't visible under this location, so they stay out.
+    // Everything else is exported: other packages, other locations, RES, all of it.
+    const rows = dataRows.filter((r) => !(r.machine === null && isOtherLoc(r)));
 
     const known = new Set(machines);
     const orphanMachines = [...new Set(rows.map((r) => r.machine).filter((m) => m != null && !known.has(m)))];
@@ -276,32 +284,47 @@ export async function exportLoadingPlanToExcel({
         const sheet = workbook.addWorksheet(sanitizeSheetName(def.name));
         sheet.columns = exportColumns.map((col) => ({ key: col.key, width: widthFromPx(col.width, col.name) }));
 
-        const sheetRows = rows.filter(def.include);
+        // "own" = what the table shows on this tab by default. Decides which machines get a section
+        // and which rows are dimmed; it never hides a row.
+        const own = (r) => def.include(r) && !isOtherLoc(r);
+        const sheetCtx = { ...ctx, isOwn: own };
         let rendered = false;
 
         for (const m of def.machines) {
-            let mine = sheetRows.filter((r) => r.machine === m && !isParked(r));
-            if (m === null && sortUnassigned) mine = [...mine].sort(sortUnassigned);
+            const onMachine = rows.filter((r) => r.machine === m && !isParked(r));
 
-            const groups = m === null ? [] : bucketsFor(m)
-                .map((b) => ({
-                    label: b.label,
-                    rows: sheetRows.filter((r) => r.bucket_id === b.id && !isBlock(r)).sort(byPosition),
-                }))
-                .filter((g) => g.rows.length > 0);
+            let mine;
+            let groups = [];
 
-            const hasLots = mine.some((r) => !isBlock(r));
-            if (!hasLots && groups.length === 0) continue; // the table hides machines with nothing on this tab
+            if (m === null) {
+                // Unassigned keeps the tab's own filter, like the table
+                mine = onMachine.filter(own);
+                if (sortUnassigned) mine = [...mine].sort(sortUnassigned);
+            } else {
+                mine = onMachine; // every row on the machine, in timeline order
+                groups = bucketsFor(m)
+                    .map((b) => ({
+                        label: b.label,
+                        rows: rows.filter((r) => r.bucket_id === b.id && !isBlock(r)).sort(byPosition),
+                    }))
+                    .filter((g) => g.rows.length > 0);
+            }
 
-            renderSection({ sheet, title: getMachineLabel(m), rows: mine, groups, ctx });
+            const hasOwnLots = onMachine.some((r) => !isBlock(r) && own(r));
+            const hasOwnParked = groups.some((g) => g.rows.some(own));
+            if (!hasOwnLots && !hasOwnParked) continue; // same rule as the table: nothing for this tab, no section
+
+            renderSection({ sheet, title: getMachineLabel(m), rows: mine, groups, ctx: sheetCtx });
             rendered = true;
         }
 
         // top-level groups (no machine) go at the end, like the table
         for (const b of bucketsFor(null)) {
-            const groupRows = sheetRows.filter((r) => r.bucket_id === b.id && !isBlock(r)).sort(byPosition);
+            const groupRows = rows
+                .filter((r) => r.bucket_id === b.id && !isBlock(r) && own(r))
+                .sort(byPosition);
             if (groupRows.length === 0) continue;
-            renderSection({ sheet, title: `Group: ${b.label}`, rows: groupRows, ctx });
+            renderSection({ sheet, title: `Group: ${b.label}`, rows: groupRows, ctx: sheetCtx });
             rendered = true;
         }
 
