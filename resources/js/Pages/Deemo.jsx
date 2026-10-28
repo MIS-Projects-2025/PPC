@@ -1686,20 +1686,27 @@ export default function Deemo({
     const [historyEntryId, setHistoryEntryId] = useState(null);
 
     async function handleExport() {
-      setIsExporting(true);
-      try {
-        const buffer = await exportLoadingPlanToExcel({
-          dataRows,
-          machines: [...machines, ...nonMachineKeys],
-          packageGroups: packageGroups,
-          columns: DATA_COLUMNS,
-          isBlockRow,
-          getMachineLabel: (m) => m === null ? "Unassigned" : m === MACHINE_MANUAL ? "MANUAL" : (nonMachineNameByKey.get(m) ?? m),
-        });
-        downloadExcelBuffer(buffer, `loading_plan_${dayjs().format("YYYY-MM-DD")}.xlsx`);
-      } finally {
-        setIsExporting(false);
-      }
+        setIsExporting(true);
+        try {
+            const buffer = await exportLoadingPlanToExcel({
+                dataRows,
+                machines: [...machines, ...nonMachineKeys],
+                groupNames: packageGroupNames ?? [],
+                buckets: bucketList,
+                selectedLocation,
+                date,
+                columns: DATA_COLUMNS,
+                isBlockRow,
+                sortUnassigned: compareUnassigned,
+                getMachineLabel: (m) => m === null ? "Unassigned" : m === MACHINE_MANUAL ? "MANUAL" : (nonMachineNameByKey.get(m) ?? m),
+            });
+            downloadExcelBuffer(buffer, `loading_plan_${date}.xlsx`);
+        } catch (err) {
+            console.error("Export failed:", err);
+            toast?.error?.("Couldn't export to Excel.");
+        } finally {
+            setIsExporting(false);
+        }
     }
     // async function handleExport() {
     //     setIsExporting(true);
