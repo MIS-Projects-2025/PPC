@@ -1,350 +1,329 @@
 /**
  * Loading Plan Excel exporter (ExcelJS)
- * ---------------------------------------------------------------------------
- * One workbook, one sheet PER package group (from `packageGroups`, e.g. the
- * backend's GROUPS constant), plus a trailing "Unassigned" sheet for rows
- * whose package_name doesn't match any group. Inside each sheet, rows are
- * split into per-machine sections (title row + own header row + data rows +
- * blank separator), mirroring the reference workbook's layout.
- *
- * Cell styling mirrors makeColumns()'s cellClass rules:
- *  	- part_name -> qty: amber if (cycle_time_exceed_residual || is_manual_expedite),
- *  	  	else yellow if cycle_time_exceed.
- *  	- part_name -> bake_time_temp: red font when row.is_for_bake.
- *  	- cr3 cell: red fill when row.cr3 === "RES".
- *  	- block rows: part_name shows "▨ {block_label}", lot_id shows
- *  	  	"{block_label} ▨", accu_time/time_start/time_end keep their real
- *  	  	values, every other cell is blank — same as the grid's renderCell.
- *
- * Assumptions / things to double check against your app:
- *  	- `isBlockRow` is passed in from the caller (same predicate the grid
- *  	  	uses) — a default guess is provided but you likely already have the
- *  	  	real one in your Deemo component.
- *  	- Block rows are treated as "always visible" context and are included
- *  	  	in every package-group sheet's machine sections (mirrors the grid,
- *  	  	where isBlockRow bypasses the active package filter). They're
- *  	  	excluded from the Unassigned sheet since they already appear
- *  	  	everywhere else.
- *  	- When both the yellow and amber conditions are true on the same row,
- *  	  	amber wins (matches the amber class being pushed after yellow in
- *  	  	makeColumns — adjust `styleDataCell` if your CSS cascade resolves
- *  	  	it the other way).
- *  	- `row.machine` is the field used to match rows to `machines` entries,
- *  	  	same as displayRows' `r.machine !== m` check.
- *  	- `row.date_loaded` fills the new leading "Date" column; only its date
- *  	  	portion is shown (numFmt hides the time, the underlying value can
- *  	  	still carry a time component).
+ * Sheets: Unassigned, RES, one per package group, Other.
+ * Each sheet is split into per-machine sections; grouped ("parked") lots are
+ * written under their group label. Rules mirror Deemo's displayRows/makeColumns.
  */
+import { PARTNAME_TO_BAKE_KEYS, PARTNAME_TO_QTY_KEYS } from "@/Components/LoadingPlan/columns";
 import ExcelJS from "exceljs";
-import { isBlockRow, isForBake } from "./helpers";
-
-// ---- Config ---------------------------------------------------------------
+import { isBlockRow as defaultIsBlockRow, isForBake } from "./helpers";
 
 const DATE_COLUMN_KEY = "__export_date_loaded";
 const ITEM_COLUMN_KEY = "__export_item";
 const MACHINE_COLUMN_KEY = "__export_machine";
+const RES_STATION = "GTTRES_T";
 
-/** Export-only header label overrides (source DATA_COLUMNS names differ). */
 const HEADER_LABEL_OVERRIDES = {
-  	accu_time: "Accu. Time",
-  	time_start: "Time_start",
-  	time_end: "Time_end",
+    accu_time: "Accu. Time (hrs)",
+    time_start: "Time_start",
+    time_end: "Time_end",
 };
-
-const TIME_ONLY_COLUMNS = new Set(["time_start", "time_end"]);
 
 const COLORS = {
-  	sectionTitleFont: "FF1F4E78", // dark blue
-  	headerFill: "C6E0B4", // pale green
-  	headerFont: "FF1F1F1F",
-  	yellowHighlight: "FFFFF2CC", // Rule 8: cycle_time_exceed
-  	amberHighlight: "FFFFD966", // Rule 12: cycle_time_exceed_residual / is_manual_expedite
-  	redFont: "FFCC0000", // Rule 11: is_for_bake
-  	cr3ResFill: "FFFF0000", // cr3 === "RES"
-  	border: { style: "thin", color: { argb: "FFB7B7B7" } },
+    sectionTitleFont: "FF1F4E78",
+    headerFill: "C6E0B4",
+    groupFill: "FFDDEBF7",
+    blockFill: "FFFDE9D9",
+    headerFont: "FF1F1F1F",
+    lightYellow: "FFFFFBE0", // cycle_time_exceed_residual
+    yellow: "FFFFF2CC",      // cycle_time_exceed
+    amber: "FFFFD966",       // is_manual_expedite
+    scmFill: "FFFFC7CE",     // is_scm
+    redFont: "FFCC0000",     // is_for_bake
+    cr3ResFill: "FFFF0000",  // cr3 === "RES"
+    border: { style: "thin", color: { argb: "FFB7B7B7" } },
 };
 
-// ---- Helpers ----------------------------------------------------------------
+// ---- helpers ----------------------------------------------------------------
 
-/** Rough px -> Excel character-width conversion (Excel's default font). */
 function widthFromPx(px, fallbackHeader) {
-  	if (px) return Math.round(((px - 5) / 7) * 100) / 100;
-  	const headerLen = (fallbackHeader || "").length;
-  	return Math.max(10, Math.min(headerLen + 4, 24));
+    if (px) return Math.round(((px - 5) / 7) * 100) / 100;
+    const headerLen = (fallbackHeader || "").length;
+    return Math.max(10, Math.min(headerLen + 4, 24));
 }
 
 function applyBorder(cell) {
-  	cell.border = {
-  	  	top: COLORS.border,
-  	  	left: COLORS.border,
-  	  	bottom: COLORS.border,
-  	  	right: COLORS.border,
-  	};
+    cell.border = { top: COLORS.border, left: COLORS.border, bottom: COLORS.border, right: COLORS.border };
 }
 
-/** Excel sheet names: <=31 chars, no \ / ? * [ ] : */
 function sanitizeSheetName(name) {
-  	const cleaned = String(name ?? "Sheet").replace(/[\\/*?:[\]]/g, " ").trim();
-  	return cleaned.slice(0, 31) || "Sheet";
+    const cleaned = String(name ?? "Sheet").replace(/[\\/*?:[\]]/g, " ").trim();
+    return cleaned.slice(0, 31) || "Sheet";
 }
 
-/** Inclusive set of column keys between fromKey and toKey, in `columns` order. */
-function keyRange(columns, fromKey, toKey) {
-  	const startIdx = columns.findIndex((c) => c.key === fromKey);
-  	const endIdx = columns.findIndex((c) => c.key === toKey);
-  	if (startIdx === -1 || endIdx === -1) return new Set();
-  	return new Set(columns.slice(startIdx, endIdx + 1).map((c) => c.key));
+const solid = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
+
+/** ExcelJS writes Dates as UTC, so shift local wall-clock values to show the same digits. */
+function toExcelDate(v) {
+    if (!v) return null;
+    const s = String(v);
+    const d = v instanceof Date ? v : new Date(/^\d{4}-\d\d-\d\d \d/.test(s) ? s.replace(" ", "T") : s);
+    if (Number.isNaN(d.getTime())) return s;
+    return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()));
 }
 
-/** Mirrors the renderCell branch for block rows in makeColumns(). */
-function resolveCellValue(col, row, isBlockRow) {
-  	if (col.key === DATE_COLUMN_KEY) {
-  	  	return row.date_loaded ? new Date(row.date_loaded) : null;
-  	}
-  	if (isBlockRow(row)) {
-  	  	if (col.key === "part_name") return `▨ ${row.block_label ?? ""}`;
-  	  	if (col.key === "lot_id") return `${row.block_label ?? ""} ▨`;
-  	  	if (["accu_time", "time_start", "time_end"].includes(col.key)) {
-  	  	  	return row[col.key] ?? null;
-  	  	}
-  	  	return null; // blank every other cell for a block row
-  	}
-  	return row[col.key] ?? null;
+const hoursOf = (m) => (m == null || m === "" ? null : Math.round((Number(m) / 60) * 100) / 100);
+
+function timeNumFmt(row, field) {
+    const base = "h:mm AM/PM";
+    const off = row[`${field}_day_offset`] ?? 0;
+    if (off === 0) return base;
+    if (off === -1) return `${base} "Yest"`;
+    if (off === 1) return `${base} "Tmrw"`;
+    return `${base} "·" mmm d`;
 }
 
-/** Mirrors getDynamicCellClass()'s highlight rules in makeColumns(). */
-function styleDataCell(cell, col, row, ranges) {
-  	applyBorder(cell);
+function resolveCellValue(col, row, ctx) {
+    if (col.key === DATE_COLUMN_KEY) return toExcelDate(row.date_loaded);
 
-  	if (ranges.partNameToQty.has(col.key)) {
-  	  	if (row.cycle_time_exceed_residual || row.is_manual_expedite) {
-  	  	  	cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.amberHighlight } };
-  	  	} else if (row.cycle_time_exceed) {
-  	  	  	cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.yellowHighlight } };
-  	  	}
-  	}
+    if (ctx.isBlock(row)) {
+        const label = row.block_label ?? "";
+        if (col.key === "part_name" || col.key === "package_name" || col.key === "status") return `▨ ${label}`;
+        if (col.key === "lot_id") return `${label} ▨`;
+        if (col.key === "accu_time") return hoursOf(row.accu_time);
+		if (col.key === "doable") {
+			if (row.doable_status === "no_recipe" && !row.doable_overridden) return "No Recipe";
+			return row.doable > 0 ? Number(row.doable) : "—";
+		}
+        if (col.key === "time_start" || col.key === "time_end") return toExcelDate(row[`${col.key}_at`]);
+        return null;
+    }
 
-  	if (ranges.partNameToBake.has(col.key) && isForBake(row)) {
-  	  	cell.font = { ...(cell.font || {}), color: { argb: COLORS.redFont } };
-  	}
-
-  	if (col.key === "cr3" && row.cr3 === "RES") {
-  	  	cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.cr3ResFill } };
-  	}
+    if (col.key === MACHINE_COLUMN_KEY) return ctx.getMachineLabel(row.machine);
+    if (col.key === "accu_time") return hoursOf(row.accu_time);
+    if (col.key === "time_start" || col.key === "time_end") return toExcelDate(row[`${col.key}_at`]);
+    return row[col.key] ?? null;
 }
 
-/** One machine's title row + header row + data rows + trailing blank row. */
-function renderMachineSection({
-  	sheet,
-  	machineLabel,
-  	rowsForMachine,
-  	exportColumns,
-  	ranges,
-  	isBlockRow,
-  	partNameIdx,
-  	timeStartIdx,
-}) {
-  	const columnCount = exportColumns.length;
+function styleDataCell(cell, col, row, ctx) {
+    applyBorder(cell);
 
-  	// Section title: machine name above the part_name column, "PPC" above time_start.
-  	const titleRow = sheet.addRow([]);
-  	titleRow.height = 24;
+    if (ctx.isBlock(row)) {
+        cell.fill = solid(COLORS.blockFill);
+        return;
+    }
 
-	for (let i = 1; i <= columnCount; i++) {
-		titleRow.getCell(i).fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.headerFill } };
-	}
+    const scm = row.is_scm === true;
 
-  	if (partNameIdx !== -1) {
-  	  	const machineCell = titleRow.getCell(partNameIdx + 1);
-  	  	machineCell.value = machineLabel;
-  	  	machineCell.font = { bold: true, size: 18, color: { argb: COLORS.sectionTitleFont } };
-  	}
-  	if (timeStartIdx !== -1) {
-  	  	const ppcCell = titleRow.getCell(timeStartIdx + 1);
-  	  	ppcCell.value = "PPC";
-  	  	ppcCell.font = { bold: true, size: 18, color: { argb: COLORS.sectionTitleFont } };
-  	}
+    if (PARTNAME_TO_QTY_KEYS.has(col.key) && !scm) {
+        if (row.cycle_time_exceed_residual) cell.fill = solid(COLORS.lightYellow);
+        else if (row.cycle_time_exceed) cell.fill = solid(COLORS.yellow);
+        if (row.is_manual_expedite) cell.fill = solid(COLORS.amber);
+    }
 
-  	// Section header row — taller than data rows.
-  	const headerRow = sheet.addRow(
-  	  	exportColumns.map((c) => HEADER_LABEL_OVERRIDES[c.key] ?? c.name)
-  	);
-  	headerRow.height = 15;
-  	for (let i = 1; i <= columnCount; i++) {
-  	  	const cell = headerRow.getCell(i);
-  	  	cell.font = { bold: true, color: { argb: COLORS.headerFont } };
-  	  	cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORS.headerFill } };
-  	  	cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-  	  	applyBorder(cell);
-  	}
+    if (scm) cell.fill = solid(COLORS.scmFill);
 
-  	// Data rows.
-  	rowsForMachine.forEach((row, idx) => {
-		const values = exportColumns.map((col) => {
-			if (col.key === ITEM_COLUMN_KEY) return idx + 1;
-			if (col.key === MACHINE_COLUMN_KEY) return row.machine ?? null;
-			return resolveCellValue(col, row, isBlockRow);
-		});
-		const dataRow = sheet.addRow(values);
-		exportColumns.forEach((col, colIdx) => {
-			const cell = dataRow.getCell(colIdx + 1);
-			styleDataCell(cell, col, row, ranges);
-			if (col.key === DATE_COLUMN_KEY) cell.numFmt = "mmmm d, yyyy";
-			if (TIME_ONLY_COLUMNS.has(col.key)) cell.numFmt = "h:mm AM/PM";
+    if (PARTNAME_TO_BAKE_KEYS.has(col.key) && isForBake(row)) {
+        cell.font = { ...(cell.font || {}), color: { argb: COLORS.redFont } };
+    }
 
-			if (isBlockRow(row) && (col.key === "part_name" || col.key === "lot_id")) {
-				cell.font = { ...(cell.font || {}), bold: true };
+    if (col.key === "cr3" && row.cr3 === "RES") cell.fill = solid(COLORS.cr3ResFill);
+}
+
+function writeRows(sheet, rows, ctx) {
+    rows.forEach((row, idx) => {
+        const values = ctx.exportColumns.map((col) =>
+            col.key === ITEM_COLUMN_KEY ? idx + 1 : resolveCellValue(col, row, ctx),
+        );
+        const dataRow = sheet.addRow(values);
+
+        ctx.exportColumns.forEach((col, i) => {
+            const cell = dataRow.getCell(i + 1);
+            styleDataCell(cell, col, row, ctx);
+
+            if (col.key === DATE_COLUMN_KEY) cell.numFmt = "mmmm d, yyyy";
+            if (col.key === "accu_time") cell.numFmt = "0.00";
+            if (col.key === "time_start" || col.key === "time_end") {
+				cell.numFmt = timeNumFmt(row, col.key);
 			}
-		});
-	});
-
-  	sheet.addRow([]); // blank separator row after this machine section
+            if (ctx.isBlock(row) && ["part_name", "package_name", "status", "lot_id"].includes(col.key)) {
+                cell.font = { ...(cell.font || {}), bold: true };
+            }
+        });
+    });
 }
 
-// ---- Main export ------------------------------------------------------------
+function renderSection({ sheet, title, rows, groups = [], ctx }) {
+    const { exportColumns, partNameIdx, timeStartIdx } = ctx;
+    const n = exportColumns.length;
+
+    const titleRow = sheet.addRow([]);
+    titleRow.height = 24;
+    for (let i = 1; i <= n; i++) titleRow.getCell(i).fill = solid(COLORS.headerFill);
+    if (partNameIdx !== -1) {
+        const c = titleRow.getCell(partNameIdx + 1);
+        c.value = title;
+        c.font = { bold: true, size: 18, color: { argb: COLORS.sectionTitleFont } };
+    }
+    if (timeStartIdx !== -1) {
+        const c = titleRow.getCell(timeStartIdx + 1);
+        c.value = "PPC";
+        c.font = { bold: true, size: 18, color: { argb: COLORS.sectionTitleFont } };
+    }
+
+    const headerRow = sheet.addRow(exportColumns.map((c) => HEADER_LABEL_OVERRIDES[c.key] ?? c.name));
+    headerRow.height = 15;
+    for (let i = 1; i <= n; i++) {
+        const cell = headerRow.getCell(i);
+        cell.font = { bold: true, color: { argb: COLORS.headerFont } };
+        cell.fill = solid(COLORS.headerFill);
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        applyBorder(cell);
+    }
+
+    writeRows(sheet, rows, ctx);
+
+    groups.forEach((g) => {
+        const labelRow = sheet.addRow([]);
+        for (let i = 1; i <= n; i++) labelRow.getCell(i).fill = solid(COLORS.groupFill);
+        if (partNameIdx !== -1) {
+            const c = labelRow.getCell(partNameIdx + 1);
+            c.value = `▸ Group: ${g.label}`;
+            c.font = { bold: true };
+        }
+        writeRows(sheet, g.rows, ctx);
+    });
+
+    sheet.addRow([]);
+}
+
+// ---- main -------------------------------------------------------------------
 
 /**
- * @param {Object} params
- * @param {Array<Object>} params.dataRows  	 Flat, unfiltered rows (all machines, all packages).
- * @param {Array<any>} params.machines  	  	  	Machine identifiers in display order (may include null).
- * @param {Object<string, string[]>} params.packageGroups
- *  	  	  	  	e.g. { RN: ['QSOP', 'QSOP_EP', ...], SOT: [...], ... } — sheet name -> package_name list.
- * @param {Array<{ key: string, name: string, width?: number }>} params.columns  	Your DATA_COLUMNS.
- * @param {(row: Object) => boolean} [params.isBlockRow]  	Same predicate the grid uses.
- * @param {(machine: any) => string} [params.getMachineLabel]  	Defaults null -> "Unassigned".
- * @param {string[]} [params.excludeKeys]  	Column keys to drop entirely. Defaults to ["entry_id"].
- * @returns {Promise<ExcelJS.Buffer>}
+ * @param {Object} p
+ * @param {Array<Object>} p.dataRows            flat, unfiltered rows (NOT displayRows)
+ * @param {Array<any>} p.machines               display order, may include null / "MANUAL" / non-machine keys
+ * @param {string[]} p.groupNames               the package tab names (packageGroupNames prop)
+ * @param {Array<{id:number,label:string,machine:string|null}>} [p.buckets]
+ * @param {string} [p.selectedLocation]         rows from other locations are left out, like the table
+ * @param {string} [p.date]                     plan date (Y-m-d), decides the time format
+ * @param {Array<{key:string,name:string,width?:number}>} p.columns   DATA_COLUMNS
+ * @param {(a:Object,b:Object)=>number} [p.sortUnassigned]            compareUnassigned from Deemo
  */
 export async function exportLoadingPlanToExcel({
-  	dataRows,
-  	machines,
-  	packageGroups,
-  	columns,
-  	isBlockRow: isBlockRowParam = isBlockRow,
-  	getMachineLabel = (m) => (m === null || m === undefined ? "Unassigned" : String(m)),
-  	excludeKeys = ["id", "entry_id", "sequence_order", "doable_status"],
+    dataRows,
+    machines,
+    groupNames,
+    buckets = [],
+    selectedLocation = null,
+    date = null,
+    columns,
+    isBlockRow: isBlock = defaultIsBlockRow,
+    getMachineLabel = (m) => (m === null || m === undefined ? "Unassigned" : String(m)),
+    sortUnassigned = null,
+    excludeKeys = ["machine", "id", "entry_id", "sequence_order", "doable_status"],
 }) {
-  	if (!Array.isArray(dataRows)) throw new Error("exportLoadingPlanToExcel: `dataRows` must be an array");
-  	if (!Array.isArray(machines)) throw new Error("exportLoadingPlanToExcel: `machines` must be an array");
-  	if (!packageGroups || typeof packageGroups !== "object") {
-  	  	throw new Error("exportLoadingPlanToExcel: `packageGroups` is required");
-  	}
-  	if (!Array.isArray(columns) || columns.length === 0) {
-  	  	throw new Error("exportLoadingPlanToExcel: `columns` (DATA_COLUMNS) is required");
-  	}
+    if (!Array.isArray(dataRows)) throw new Error("exportLoadingPlanToExcel: `dataRows` must be an array");
+    if (!Array.isArray(machines)) throw new Error("exportLoadingPlanToExcel: `machines` must be an array");
+    if (!Array.isArray(groupNames)) throw new Error("exportLoadingPlanToExcel: `groupNames` must be an array");
+    if (!Array.isArray(columns) || columns.length === 0) {
+        throw new Error("exportLoadingPlanToExcel: `columns` (DATA_COLUMNS) is required");
+    }
 
-  	const baseColumns = columns.filter((c) => !excludeKeys.includes(c.key));
-  	const exportColumns = [
-		{ key: DATE_COLUMN_KEY, name: "Date" },
-		{ key: ITEM_COLUMN_KEY, name: "Item" },
-		{ key: MACHINE_COLUMN_KEY, name: "Machine" },
-		...baseColumns
-	];
+    const baseColumns = columns.filter((c) => !excludeKeys.includes(c.key));
+    const exportColumns = [
+        { key: DATE_COLUMN_KEY, name: "Date" },
+        { key: ITEM_COLUMN_KEY, name: "Item" },
+        { key: MACHINE_COLUMN_KEY, name: "Machine" },
+        ...baseColumns,
+    ];
 
-  	const partNameIdx = exportColumns.findIndex((c) => c.key === "part_name");
-  	const timeStartIdx = exportColumns.findIndex((c) => c.key === "time_start");
+    const ctx = {
+        exportColumns,
+        isBlock,
+        getMachineLabel,
+        date,
+        partNameIdx: exportColumns.findIndex((c) => c.key === "part_name"),
+        timeStartIdx: exportColumns.findIndex((c) => c.key === "time_start"),
+    };
 
-  	const ranges = {
-  	  	partNameToQty: keyRange(exportColumns, "part_name", "qty"),
-  	  	partNameToBake: keyRange(exportColumns, "part_name", "bake_time_temp"),
-  	};
+    const isRes = (r) => r.station === RES_STATION;
+    const groupOf = (r) => r.package_group ?? r.package_name;
+    const groupSet = new Set(groupNames);
+    const bucketIds = new Set(buckets.map((b) => b.id));
+    const isParked = (r) => r.bucket_id != null && bucketIds.has(r.bucket_id);
+    const isOtherLoc = (r) => !isBlock(r) && selectedLocation != null && r.location != null && r.location !== selectedLocation;
+    const bucketsFor = (m) => buckets.filter((b) => (b.machine ?? null) === m);
+    const byPosition = (a, b) => (a.bucket_position ?? 0) - (b.bucket_position ?? 0);
 
-  	const workbook = new ExcelJS.Workbook();
-  	workbook.creator = "PPC";
-  	workbook.created = new Date();
+    const rows = dataRows.filter((r) => !isOtherLoc(r));
 
-  	function addSheetForRows(sheetName, rowsForThisSheet) {
-  	  	const sheet = workbook.addWorksheet(sanitizeSheetName(sheetName));
-  	  	sheet.columns = exportColumns.map((col) => ({
-  	  	  	key: col.key,
-  	  	  	width: widthFromPx(col.width, col.name),
-  	  	}));
+    const known = new Set(machines);
+    const orphanMachines = [...new Set(rows.map((r) => r.machine).filter((m) => m != null && !known.has(m)))];
+    const allMachines = [...machines, ...orphanMachines];
 
-  	  	let anyMachineRendered = false;
-  	  	machines.forEach((m) => {
-  	  	  	const rowsForMachine = rowsForThisSheet.filter((r) => r.machine === m);
-  	  	  	if (rowsForMachine.length === 0) return;
-  	  	  	anyMachineRendered = true;
-  	  	  	renderMachineSection({
-  	  	  	  	sheet,
-  	  	  	  	machineLabel: getMachineLabel(m),
-  	  	  	  	rowsForMachine,
-  	  	  	  	exportColumns,
-  	  	  	  	ranges,
-  	  	  	  	isBlockRow,
-  	  	  	  	partNameIdx,
-  	  	  	  	timeStartIdx,
-  	  	  	});
-  	  	});
+    const sheetDefs = [
+        { name: "Unassigned", machines: [null], include: (r) => r.machine === null && !isRes(r), optional: true },
+        { name: "RES", machines: allMachines, include: (r) => isBlock(r) || isRes(r), optional: true },
+        ...groupNames.map((g) => ({
+            name: g,
+            machines: allMachines,
+            include: (r) => isBlock(r) || (!isRes(r) && groupOf(r) === g),
+        })),
+        {
+            name: "Other",
+            machines: allMachines,
+            include: (r) => isBlock(r) || (!isRes(r) && !groupSet.has(groupOf(r))),
+            optional: true,
+        },
+    ];
 
-  	  	if (!anyMachineRendered) {
-  	  	  	sheet.addRow(["No data for this package group."]);
-  	  	}
-  	}
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "PPC";
+    workbook.created = new Date();
 
-  	const assignedPackageNames = new Set(Object.values(packageGroups).flat());
+    for (const def of sheetDefs) {
+        const sheet = workbook.addWorksheet(sanitizeSheetName(def.name));
+        sheet.columns = exportColumns.map((col) => ({ key: col.key, width: widthFromPx(col.width, col.name) }));
 
-  	for (const [groupName, packageList] of Object.entries(packageGroups)) {
-  	  	const rowsForGroup = dataRows.filter(
-  	  	  	(r) => isBlockRow(r) || packageList.includes(r.package_name)
-  	  	);
-  	  	addSheetForRows(groupName, rowsForGroup);
-  	}
+        const sheetRows = rows.filter(def.include);
+        let rendered = false;
 
-  	// Rows whose package_name matched nothing above (block rows already
-  	// appear in every group sheet, so they're left out here).
-  	const unassignedRows = dataRows.filter(
-  	  	(r) => !isBlockRow(r) && !assignedPackageNames.has(r.package_name)
-  	);
-  	addSheetForRows("Unassigned", unassignedRows);
+        for (const m of def.machines) {
+            let mine = sheetRows.filter((r) => r.machine === m && !isParked(r));
+            if (m === null && sortUnassigned) mine = [...mine].sort(sortUnassigned);
 
-  	return workbook.xlsx.writeBuffer();
+            const groups = m === null ? [] : bucketsFor(m)
+                .map((b) => ({
+                    label: b.label,
+                    rows: sheetRows.filter((r) => r.bucket_id === b.id && !isBlock(r)).sort(byPosition),
+                }))
+                .filter((g) => g.rows.length > 0);
+
+            const hasLots = mine.some((r) => !isBlock(r));
+            if (!hasLots && groups.length === 0) continue; // the table hides machines with nothing on this tab
+
+            renderSection({ sheet, title: getMachineLabel(m), rows: mine, groups, ctx });
+            rendered = true;
+        }
+
+        // top-level groups (no machine) go at the end, like the table
+        for (const b of bucketsFor(null)) {
+            const groupRows = sheetRows.filter((r) => r.bucket_id === b.id && !isBlock(r)).sort(byPosition);
+            if (groupRows.length === 0) continue;
+            renderSection({ sheet, title: `Group: ${b.label}`, rows: groupRows, ctx });
+            rendered = true;
+        }
+
+        if (!rendered) {
+            if (def.optional) workbook.removeWorksheet(sheet.id);
+            else sheet.addRow(["No data for this package group."]);
+        }
+    }
+
+    return workbook.xlsx.writeBuffer();
 }
 
-/**
- * Browser helper: trigger a file download from the buffer returned above.
- * (Node/SSR environments should write the buffer to disk instead.)
- */
 export function downloadExcelBuffer(buffer, fileName = "loading_plan.xlsx") {
-  	const blob = new Blob([buffer], {
-  	  	type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  	});
-  	const url = URL.createObjectURL(blob);
-  	const link = document.createElement("a");
-  	link.href = url;
-  	link.download = fileName;
-  	document.body.appendChild(link);
-  	link.click();
-  	link.remove();
-  	URL.revokeObjectURL(url);
+    const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
 }
-
-/**
- * Example usage:
- *
- * import { DATA_COLUMNS } from "./dataColumns";
- * import { exportLoadingPlanToExcel, downloadExcelBuffer } from "./loadingPlanExcelExporter";
- *
- * const PACKAGE_GROUPS = {
- *  	 RN: ["QSOP", "QSOP_EP", "SOIC_N", "SOIC_N_EP"],
- *  	 SOT: ["SOT-223", "SOT_23", "SOT_23_3", "SOT_89", "SOT-23"],
- *  	 // ...rest of the backend's GROUPS constant, passed down as a prop
- * };
- *
- * async function handleExport() {
- *  	 setIsExporting(true);
- *  	 try {
- *  	  	 const buffer = await exportLoadingPlanToExcel({
- *  	  	  	 dataRows,  	  	  	  	  	  	  	  	 // flat, unfiltered rows — NOT displayRows
- *  	  	  	 machines,
- *  	  	  	 packageGroups: PACKAGE_GROUPS, // from the backend prop
- *  	  	  	 columns: DATA_COLUMNS,
- *  	  	  	 isBlockRow,  	  	  	  	  	  	  	  	// your existing predicate
- *  	  	  	 getMachineLabel: (m) => (m === null ? "Unassigned" : m === MACHINE_MANUAL ? "MANUAL" : m),
- *  	  	 });
- *  	  	 downloadExcelBuffer(buffer, `loading_plan_${new Date().toISOString().slice(0, 10)}.xlsx`);
- *  	 } finally {
- *  	  	 setIsExporting(false);
- *  	 }
- * }
- */

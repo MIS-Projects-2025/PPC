@@ -2,6 +2,18 @@ import { useEffect, useState } from "react";
 
 const TUBE_TRAY = ["TUBE", "TRAY", "WAFFLE_TRAY"];
 const MODAL_ID = "doable_edit_modal";
+const INPUT_ID = "doable_override_input";
+
+export function openDoableEditModal() {
+    const dlg = document.getElementById(MODAL_ID);
+    if (!dlg || dlg.open) return;
+    dlg.showModal();
+    requestAnimationFrame(() => {
+        const el = document.getElementById(INPUT_ID);
+        el?.focus();
+        el?.select();
+    });
+}
 
 export default function DoableEditModal({ row, sameCount, disabled, onSaveOverride, onSaveRecipe, onOpenPartRecord }) {
     const [recipe, setRecipe] = useState("");
@@ -22,10 +34,67 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
     const recipeNum = Number(recipe);
     const doableNum = doable === "" ? null : Number(doable);
 
+    const qty = Number(row?.qty ?? 0);
+    const qtyZero = !(qty > 0);
+    const overMax = doableNum !== null && doableNum > qty;
+    const parked = !row?.entry_id && row?.bucket_id != null;
+    const canSaveOverride = !disabled && !parked && doableNum !== null && doableNum >= 0 && !overMax;
+
+    const saveOverride = () => { if (canSaveOverride) run(() => onSaveOverride(doableNum)); };
+
     return (
         <dialog id={MODAL_ID} className="modal">
             <div className="modal-box bg-base-300 max-w-md space-y-5">
-                <h3 className="font-bold text-lg">Doable: {row?.part_name} <span className="opacity-50 font-mono text-sm">{row?.lot_id}</span></h3>
+                <h3 className="font-bold text-lg">
+                    Doable: {row?.part_name} <span className="opacity-50 font-mono text-sm">{row?.lot_id}</span>
+                </h3>
+
+                <section className="space-y-2">
+                    <div className="font-semibold text-sm">Override doable (this lot only)</div>
+
+                    {parked ? (
+                        <div className="alert alert-warning alert-soft text-sm">
+                            This lot is in a group. Remove it from the group to override its doable.
+                        </div>
+                    ) : (
+                        <>
+                            {qtyZero && (
+                                <div className="alert alert-warning alert-soft text-sm">
+                                    Qty is 0, so doable can only be 0. Fix the Qty first if this is wrong.
+                                </div>
+                            )}
+                            <label className="input input-bordered w-full flex items-center gap-2">
+                                <input
+                                    id={INPUT_ID}
+                                    type="number"
+                                    min="0"
+                                    max={qty}
+                                    className="grow"
+                                    value={doable}
+                                    onChange={(e) => setDoable(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter") { e.preventDefault(); saveOverride(); }
+                                    }}
+                                />
+                                <kbd className="kbd kbd-sm">Enter</kbd>
+                            </label>
+                            {overMax && <p className="text-xs text-error">Doable can't be more than the Qty ({qty.toLocaleString()}).</p>}
+                            <p className="text-xs opacity-60">Not saved to the package list. Clears itself if this lot's quantity changes.</p>
+                            <div className="flex gap-2">
+                                <button className="btn btn-sm btn-primary" disabled={!canSaveOverride} onClick={saveOverride}>
+                                    Save override
+                                </button>
+                                {row?.doable_overridden && (
+                                    <button className="btn btn-sm btn-ghost" disabled={disabled} onClick={() => run(() => onSaveOverride(null))}>
+                                        Clear override
+                                    </button>
+                                )}
+                            </div>
+                        </>
+                    )}
+                </section>
+
+                <div className="divider my-0" />
 
                 <section className="space-y-2">
                     <div className="font-semibold text-sm">Recipe for {row?.part_name}</div>
@@ -54,26 +123,6 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
                             >
                                 Save recipe
                             </button>
-                        </>
-                    )}
-                </section>
-
-                <div className="divider my-0" />
-
-                <section className="space-y-2">
-                    <div className="font-semibold text-sm">Override doable (this lot only)</div>
-                    {!row?.entry_id ? (
-                        <p className="text-xs opacity-70">Place this lot on a machine first.</p>
-                    ) : (
-                        <>
-                            <input type="number" min="0" max={row?.qty} className="input input-bordered w-full" value={doable} onChange={(e) => setDoable(e.target.value)} />
-                            <p className="text-xs opacity-60">Not saved to the package list. Clears itself if this lot's quantity changes.</p>
-                            <div className="flex gap-2">
-                                <button className="btn btn-sm btn-primary" disabled={disabled || doableNum === null || !(doableNum >= 0)} onClick={() => run(() => onSaveOverride(doableNum))}>Save override</button>
-                                {row?.doable_overridden && (
-                                    <button className="btn btn-sm btn-ghost" disabled={disabled} onClick={() => run(() => onSaveOverride(null))}>Clear override</button>
-                                )}
-                            </div>
                         </>
                     )}
                 </section>

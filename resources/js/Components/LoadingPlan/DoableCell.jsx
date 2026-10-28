@@ -134,9 +134,9 @@ export function DoableCell({ value, status, recipeSource, overridden = false, on
         );
 
     if (!onEdit) return body;
-    
+
     return (
-        <div className="w-full h-full flex items-center" onDoubleClick={onEdit} title="Double-click to edit">
+        <div className="w-full h-full flex items-center cursor-pointer" onClick={onEdit} title="Click to edit">
             {body}
         </div>
     );
