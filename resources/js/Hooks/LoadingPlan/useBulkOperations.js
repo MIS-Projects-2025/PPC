@@ -15,6 +15,9 @@ export function useBulkOperations({
     date,
     syncServerFields,
 }) {
+    const canBulkEdit = (r) =>
+        !isBlockRow(r) && (r.entry_id || (r.machine === null && r.bucket_id == null && r.lot_id));
+
     const runFieldUpdate = useCallback(
         ({ filter, fields, applyLocal, conflictLabel, afterSuccess }) => {
             if (!beginWrite()) return;
@@ -30,18 +33,19 @@ export function useBulkOperations({
             withUpdating(
                 mutate(route("loading-plan.bulk-update"), {
                     body: {
-                        updates: targets.map((r) => ({
-                            entry_id: r.entry_id ?? null,
-                            fields,
-                            lock_version: r.lock_version ?? 0,
-                        })),
+                        scheduled_date: date,
+                        updates: targets.map((r) =>
+                            r.entry_id
+                                ? { entry_id: r.entry_id, fields, lock_version: r.lock_version ?? 0 }
+                                : { lot_id: r.lot_id, fields },
+                        ),
                     },
                 }),
             )
                 .then(({ entries }) => {
                     const patches = targets
                         .map((r) => {
-                            const match = entries?.find((e) => e.id === r.entry_id);
+                            const match = entries?.find((e) => (r.entry_id ? e.id === r.entry_id : e.lot_id === r.lot_id && !e.rework_seq));
                             return match ? { dndId: r._dndId, fields: { entry_id: match.id, lock_version: match.lock_version } } : null;
                         })
                         .filter(Boolean);
@@ -63,13 +67,13 @@ export function useBulkOperations({
                     }
                 });
         },
-        [dataRows, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, update, beginWrite, date, withUpdating, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const handleBulkTag = useCallback(
         (tag) =>
             runFieldUpdate({
-                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
+                filter: (r) => selectedRows.has(r.id) && canBulkEdit(r),
                 fields: { tag },
                 applyLocal: (r) => ({ ...r, tag }),
                 conflictLabel: "tag",
@@ -83,7 +87,7 @@ export function useBulkOperations({
         (newStatus) => {
             const normalizedStatus = newStatus === "NONE" ? null : newStatus;
             runFieldUpdate({
-                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
+                filter: (r) => selectedRows.has(r.id) && canBulkEdit(r),
                 fields: { status: normalizedStatus },
                 applyLocal: (r) => ({ ...r, status: normalizedStatus }),
                 conflictLabel: "status",
@@ -95,7 +99,7 @@ export function useBulkOperations({
     const handleBulkFieldUpdate = useCallback(
         (field, value) => {
             runFieldUpdate({
-                filter: (r) => selectedRows.has(r.id) && !isBlockRow(r) && r.entry_id,
+                filter: (r) => selectedRows.has(r.id) && canBulkEdit(r),
                 fields: { [field]: value },
                 applyLocal: (r) => ({ ...r, [field]: value }),
                 conflictLabel: field,

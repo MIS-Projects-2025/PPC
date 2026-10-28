@@ -318,12 +318,27 @@ class LoadingPlanEntryController extends Controller
     public function updateDoable(Request $request, int $id): JsonResponse
     {
         $data = $request->validate([
-            'doable'       => 'present|nullable|integer|min:0',  // null clears the override
-            'lock_version' => 'nullable|integer',
+            'doable'         => 'present|nullable|integer|min:0',
+            'lock_version'   => 'nullable|integer',
+            'lot_id'         => 'nullable|string',
+            'scheduled_date' => 'nullable|date',
         ]);
 
         try {
-            return response()->json($this->service->setCommitOverride($id, $data['doable'], $data['lock_version'] ?? null));
+            $lockVersion = $data['lock_version'] ?? null;
+
+            if ($id === 0) {
+                if (empty($data['lot_id']) || empty($data['scheduled_date'])) {
+                    return response()->json(['error' => 'bad_request', 'message' => 'lot_id and scheduled_date are required for a lot with no entry.'], 422);
+                }
+                $entry = $this->service->ensureUnplacedEntry($data['lot_id'], $data['scheduled_date']);
+                $id = $entry->id;
+                $lockVersion = (int) $entry->lock_version;
+            }
+
+            return response()->json($this->service->setCommitOverride($id, $data['doable'], $lockVersion));
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That lot no longer exists.'], 404);
         } catch (StaleWriteException $e) {
             return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
         } catch (\InvalidArgumentException $e) {
@@ -486,14 +501,16 @@ class LoadingPlanEntryController extends Controller
     public function bulkUpdateField(Request $request): JsonResponse
     {
         $data = $request->validate([
+            'scheduled_date'         => 'nullable|date',
             'updates'                => 'required|array|min:1',
-            'updates.*.entry_id'     => 'required|integer',
+            'updates.*.entry_id'     => 'nullable|integer|required_without:updates.*.lot_id',
+            'updates.*.lot_id'       => 'nullable|string',
             'updates.*.fields'       => 'required|array',
             'updates.*.lock_version' => 'nullable|integer',
         ]);
 
         try {
-            $entries = $this->service->bulkEditField($data['updates']);
+            $entries = $this->service->bulkEditField($data['updates'], $data['scheduled_date'] ?? null);
             return response()->json(['entries' => $entries]);
         } catch (BulkStaleWriteException $e) {
             return response()->json([
@@ -503,6 +520,8 @@ class LoadingPlanEntryController extends Controller
             ], 409);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That lot no longer exists.'], 404);
         }
     }
 

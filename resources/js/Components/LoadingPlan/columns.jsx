@@ -218,7 +218,7 @@ export const NUM_COLUMNS = DATA_COLUMNS.length + 1;
 export const NUM_BAKE_COLUMNS = BAKE_COLUMNS.length + 1;
 
 // Range 1: Part Name (index 2) to Qty (index 7)
-const PARTNAME_TO_QTY_KEYS = new Set([
+export const PARTNAME_TO_QTY_KEYS = new Set([
     "part_name",
     "lead_count",
     "package_name",
@@ -228,7 +228,7 @@ const PARTNAME_TO_QTY_KEYS = new Set([
 ]);
 
 // Range 2: Part Name to Bake_Time_Temp (Bake Time/Temp equivalent in your dataset)
-const PARTNAME_TO_BAKE_KEYS = new Set([
+export const PARTNAME_TO_BAKE_KEYS = new Set([
     "part_name", "lead_count", "package_name", "lot_id",
     "status", "qty", "doable", "capacity_uph", "accu_time",
     "time_start", "time_end", "lot_type", "lot_status",

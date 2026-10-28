@@ -34,6 +34,7 @@ class LoadingPlanEntryService
 
     private const GAP_SEED = 1000.0;
     private const MIN_GAP = 0.001;
+    private const UNPLACED_EDITABLE = ['status', 'remarks', 'tag', 'is_manual_expedite', 'is_scm'];
 
     /** @var array<string,int> machine_num => id */
     private array $machineIdByNum;
@@ -51,55 +52,69 @@ class LoadingPlanEntryService
             ->all();
     }
 
-    /**
-     * Edit status/remarks on a lot that has no entry yet (plain Unassigned WIP/F3 row).
-     * Creates the unassigned entry (same shape bulkMove() creates) then edits it.
-     */
+    /** Find (or create) the unassigned entry for a lot with no placement. Race-safe on uniq_lot_date_seq. */
+    private function findOrCreateUnplacedEntry(string $lotId, string $date): LoadingPlanEntry
+    {
+        $this->assertDateNotFinalized($date);
+
+        if (LotBucketItem::where('scheduled_date', $date)->where('lot_id', $lotId)->exists()) {
+            throw new \InvalidArgumentException("Lot [{$lotId}] is in a group. Remove it from the group first.");
+        }
+
+        $find = fn() => LoadingPlanEntry::where('lot_id', $lotId)
+            ->where('scheduled_date', $date)
+            ->where('rework_seq', 0)
+            ->lockForUpdate()   // current read, so it sees a row another transaction just committed
+            ->first();
+
+        if ($entry = $find()) {
+            return $entry;
+        }
+
+        $wip = $this->sources()->find([$lotId], $date)->get($lotId)
+            ?? throw new ModelNotFoundException();
+
+        try {
+            $entry = LoadingPlanEntry::create([
+                'entry_type'     => 'lot',
+                'source'         => $wip->source ?? 'wip',
+                'lot_id'         => $lotId,
+                'scheduled_date' => $date,
+                'machine_id'     => null,
+                'package_name'   => $wip->Package_Name,
+                'sequence_order' => null,
+                'status'         => 'NONE',
+                'rework_seq'     => 0,
+                'lock_version'   => 1,
+            ]);
+        } catch (\Illuminate\Database\UniqueConstraintViolationException) {
+            return $find() ?? throw new ModelNotFoundException();
+        }
+
+        $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
+        $lot->part_name = $wip->Part_Name ?? '';
+        $lot->qty_base  = $wip->Qty ?? 0;
+        if ($lot->isDirty()) {
+            $lot->save();
+        }
+
+        return $entry;
+    }
+
+    public function ensureUnplacedEntry(string $lotId, string $date): LoadingPlanEntry
+    {
+        return DB::transaction(fn() => $this->findOrCreateUnplacedEntry($lotId, $date));
+    }
+
     public function editFieldForUnplacedLot(string $lotId, string $date, array $fields): LoadingPlanEntry
     {
         $this->assertSupportedEditField($fields);
-        if ($unsupported = array_diff(array_keys($fields), ['status', 'remarks'])) {
-            throw new \InvalidArgumentException('Only status and remarks can be edited on an unassigned lot.');
+        if (array_diff(array_keys($fields), self::UNPLACED_EDITABLE)) {
+            throw new \InvalidArgumentException('Only status, remarks, tag, expedite and SCM can be edited on an unassigned lot.');
         }
 
         return DB::transaction(function () use ($lotId, $date, $fields) {
-            $this->assertDateNotFinalized($date);
-
-            if (LotBucketItem::where('scheduled_date', $date)->where('lot_id', $lotId)->exists()) {
-                throw new \InvalidArgumentException('Grouped lots can\'t be edited. Remove it from the group first.');
-            }
-
-            $entry = LoadingPlanEntry::where('lot_id', $lotId)
-                ->where('scheduled_date', $date)
-                ->where('rework_seq', 0)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$entry) {
-                $wip = $this->sources()->find([$lotId], $date)->get($lotId)
-                    ?? throw new ModelNotFoundException();
-
-                $entry = LoadingPlanEntry::create([
-                    'entry_type'     => 'lot',
-                    'source'         => $wip->source ?? 'wip',
-                    'lot_id'         => $lotId,
-                    'scheduled_date' => $date,
-                    'machine_id'     => null,
-                    'package_name'   => $wip->Package_Name,
-                    'sequence_order' => null,
-                    'status'         => 'NONE',
-                    'rework_seq'     => 0,
-                    'lock_version'   => 1,
-                ]);
-
-                $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
-                $lot->part_name = $wip->Part_Name ?? '';
-                $lot->qty_base  = $wip->Qty ?? 0;
-                if ($lot->isDirty()) {
-                    $lot->save();
-                }
-            }
-
+            $entry = $this->findOrCreateUnplacedEntry($lotId, $date);
             return $this->editLotField($entry->id, $fields, (int) $entry->lock_version);
         });
     }
@@ -355,17 +370,23 @@ class LoadingPlanEntryService
                 foreach ($newLotIds as $lotId) {
                     $wipItem = $wip->get($lotId);
 
-                    $created[$lotId] = LoadingPlanEntry::create([
-                        'entry_type'     => 'lot',
-                        'source'         => $wipItem?->source ?? 'wip',
-                        'lot_id'         => $lotId,
-                        'scheduled_date' => $date,
-                        'machine_id'     => null,
-                        'package_name'   => $wipItem?->Package_Name,
-                        'sequence_order' => null,
-                        'rework_seq'     => 0,
-                        'lock_version'   => 1,
-                    ]);
+                    // newlot can still be present because user edit their status/remarks/tag etc  
+                    $created[$lotId] = LoadingPlanEntry::where('lot_id', $lotId)
+                        ->where('scheduled_date', $date)
+                        ->where('rework_seq', 0)
+                        ->lockForUpdate()
+                        ->first()
+                        ?? LoadingPlanEntry::create([
+                            'entry_type'     => 'lot',
+                            'source'         => $wipItem?->source ?? 'wip',
+                            'lot_id'         => $lotId,
+                            'scheduled_date' => $date,
+                            'machine_id'     => null,
+                            'package_name'   => $wipItem?->Package_Name,
+                            'sequence_order' => null,
+                            'rework_seq'     => 0,
+                            'lock_version'   => 1,
+                        ]);
 
                     $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
                     $lot->part_name = $wipItem?->Part_Name ?? '';
@@ -849,17 +870,23 @@ class LoadingPlanEntryService
                 $wipForNew = $this->sources()->find([$lotId], $scheduledDate)->get($lotId)
                     ?? throw new ModelNotFoundException();
 
-                $entry = LoadingPlanEntry::create([
-                    'lot_id'         => $lotId,
-                    'source'         => $wipForNew->source ?? 'wip',
-                    'scheduled_date' => $scheduledDate,
-                    'package_name'   => $wipForNew->Package_Name,
-                    'machine_id'     => null,
-                    'sequence_order' => null,
-                    'entry_type'     => 'lot',
-                    'rework_seq'     => 0,
-                    'lock_version'   => 0,
-                ]);
+                // can exists yet unassigned
+                $entry = LoadingPlanEntry::where('lot_id', $lotId)
+                    ->where('scheduled_date', $scheduledDate)
+                    ->where('rework_seq', 0)
+                    ->lockForUpdate()
+                    ->first()
+                    ?? LoadingPlanEntry::create([
+                        'lot_id'         => $lotId,
+                        'source'         => $wipForNew->source ?? 'wip',
+                        'scheduled_date' => $scheduledDate,
+                        'package_name'   => $wipForNew->Package_Name,
+                        'machine_id'     => null,
+                        'sequence_order' => null,
+                        'entry_type'     => 'lot',
+                        'rework_seq'     => 0,
+                        'lock_version'   => 0,
+                    ]);
             } else {
                 $entry = $this->resolveEntry($entryId);
                 $this->assertNotFinalized($entry);
@@ -1758,9 +1785,26 @@ class LoadingPlanEntryService
         });
     }
 
-    public function bulkEditField(array $updates): array
+    public function bulkEditField(array $updates, ?string $date = null): array
     {
-        return DB::transaction(function () use ($updates) {
+        return DB::transaction(function () use ($updates, $date) {
+            foreach ($updates as &$u) {
+                if (!empty($u['entry_id'])) continue;
+
+                if (empty($u['lot_id']) || !$date) {
+                    throw new \InvalidArgumentException('lot_id and scheduled_date are required for a lot with no entry.');
+                }
+                $this->assertSupportedEditField($u['fields']);
+                if (array_diff(array_keys($u['fields']), self::UNPLACED_EDITABLE)) {
+                    throw new \InvalidArgumentException('Only status, remarks, tag, expedite and SCM can be edited on an unassigned lot.');
+                }
+
+                $entry = $this->findOrCreateUnplacedEntry($u['lot_id'], $date);
+                $u['entry_id'] = $entry->id;
+                $u['lock_version'] = $entry->lock_version;
+            }
+            unset($u);
+
             $entries = [];
             $conflicts = [];
 

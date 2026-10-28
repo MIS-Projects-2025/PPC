@@ -10,7 +10,7 @@ import DataIntegrityModal, {
 import DisseminationSummaryModal, {
     DISSEMINATION_MODAL_ID,
 } from "@/Components/LoadingPlan/DisseminationSummary";
-import DoableEditModal from "@/Components/LoadingPlan/DoableEditModal";
+import DoableEditModal, { openDoableEditModal } from "@/Components/LoadingPlan/DoableEditModal";
 import { DroppableRow } from "@/Components/LoadingPlan/DroppableRow";
 import EntryHistoryModal from "@/Components/LoadingPlan/EntryHistoryModal";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
@@ -1108,8 +1108,9 @@ export default function Deemo({
 
     const onEditDoable = useCallback((row) => {
         if (readOnly || writesLocked || isBlockRow(row)) return;
+        if (document.getElementById("doable_edit_modal")?.open) return; // click + onEdit can both fire
         setDoableEditId(row.id);
-        document.getElementById("doable_edit_modal")?.showModal();
+        openDoableEditModal();
     }, [readOnly, writesLocked]);
 
     const rawColumns = useMemo(

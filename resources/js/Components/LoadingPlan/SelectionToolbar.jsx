@@ -69,10 +69,10 @@ export default function SelectionToolbar({
     shortcutsRef.current = {
         g: () => run(reasons.group, () => document.getElementById("bucket-popover")?.togglePopover?.()),
         b: () => run(reasons.bulk, () => document.getElementById("tag-expedite-popover")?.togglePopover?.()),
-        s: () => run(reasons.split, () => splitModalRef.current?.showModal()),
+        // s: () => run(reasons.split, () => splitModalRef.current?.showModal()), // SPLIT disabled for now 
         m: () => run(reasons.merge, () => mergeModalRef.current?.showModal()),
         r: () => run(reasons.rework, () => onRework(selectedRow)),
-        u: () => run(busy || (isSelectedRowsUnassigned ? reasons.bulk : null), () => {
+        u: () => run(reasons.bulk, () => {
             transferModalRef.current?.close();
             setStatusOpen((v) => !v);
             setTransferOpen(false);
@@ -139,6 +139,8 @@ export default function SelectionToolbar({
         [allData, selectedIds],
     );
 
+    const hasGroupedSelected = useMemo(() => selectedRows.some((r) => r.bucket_id != null), [selectedRows]);
+
     const canDelete = selectedRows.every(
         (r) => r.machine !== null || Number.isInteger(r.bucket_id),
     );
@@ -168,7 +170,7 @@ export default function SelectionToolbar({
             || ((buckets ?? []).length === 0 ? "No groups exist yet. Create one first." : null)
             || (!canGroup ? "Only regular lots can be grouped. Leaked, rework and block rows are excluded." : null),
         bulk: busy
-            || (isSelectedRowsUnassigned ? "Unassigned rows can't be edited in bulk. Place them on a machine first." : null),
+            || (hasGroupedSelected ? "Grouped rows can't be edited in bulk. Remove them from the group first." : null),
         split: busy
             || (count !== 1 ? "Select exactly 1 lot to split." : null)
             || (isSelectedRowsUnassigned ? "Unassigned lots can't be split." : null)
@@ -247,6 +249,7 @@ export default function SelectionToolbar({
                         popoverTarget="tag-expedite-popover"
                         style={{ anchorName: "--tag-expedite-anchor" }}
                         aria-disabled={!!reasons.bulk}
+                        onClick={guard(reasons.bulk)}
                     >
                         Bulk Actions ▾
                         <kbd className="kbd rounded-sm kbd-xs">b</kbd>
@@ -352,7 +355,7 @@ export default function SelectionToolbar({
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    <div className="tooltip" data-tip={reasons.split ?? "Split lot"}>
+                    {/* <div className="tooltip" data-tip={reasons.split ?? "Split lot"}>
                         <button
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.split)}`}
                             aria-disabled={!!reasons.split}
@@ -360,7 +363,7 @@ export default function SelectionToolbar({
                         >
                             <GoRepoForked size={16} /> split <kbd className="kbd rounded-sm kbd-xs">s</kbd>
                         </button>
-                    </div>
+                    </div> */}
 
                     <div
                         className="tooltip"
@@ -397,7 +400,7 @@ export default function SelectionToolbar({
                                 setTransferOpen(false);
                             })}
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.bulk)}`}
-                            disabled={disabled || isSelectedRowsUnassigned}
+                            disabled={disabled || hasGroupedSelected}
                         >
                             Set status <kbd className="kbd rounded-sm kbd-xs">u</kbd>
                             <svg
