@@ -480,7 +480,7 @@ export function useDragReorder({
                     toast?.error?.(err?.message ?? "Couldn't move the row — reverted.");
                 });
         },
-        [update, date, groupFor, handleGroupDrop, onReorder, collapsedRunsById, onLotTransfer, store, dataRows, withUpdating, beginWrite, mutate, toast, setIsDirty, syncServerFields],
+        [update, date, groupFor, handleGroupDrop, onPark, onUnpark, selectedLocation, onReorder, collapsedRunsById, onLotTransfer, store, dataRows, withUpdating, beginWrite, mutate, toast, setIsDirty, syncServerFields],
     );
 
     const draggedRow = useMemo(

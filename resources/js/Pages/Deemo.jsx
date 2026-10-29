@@ -955,7 +955,7 @@ export default function Deemo({
                     throw err;
                 });
         },
-        [readOnly, activePackage, packageGroups, baseTimes, date, update, beginWrite, withUpdating, mutate, toast],
+        [readOnly, activePackage, isF3, packageGroups, baseTimes, date, update, beginWrite, withUpdating, mutate, toast],
     );
 
     const handleAddBlock = useCallback((machine) => {
@@ -2414,11 +2414,11 @@ export default function Deemo({
                                 <BsSearch size={16} />
                             </button>
                             
-                            {!readOnly && !isF3 && (
+                            {/* {!readOnly && !isF3 && (
                                 <button className="btn btn-sm z-50" onClick={() => pickupInsertModalRef.current?.showModal()}>
                                     Schedule Pickups
                                 </button>
-                            )}
+                            )} */}
 
                             {idleMachines.length > 0 && activePackage !== "Unassigned" && activePackage !== ORPHAN_TAB && (
                                 <fieldset className="fieldset bg-base-100 border-base-300 rounded-box border py-1 px-2">

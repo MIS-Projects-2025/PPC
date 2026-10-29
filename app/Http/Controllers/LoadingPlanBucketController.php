@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\QdnMachine;
 use App\Models\LoadingPlanBucket;
 use App\Services\LoadingPlanEntryService;
+use App\Exceptions\LoadingPlanDateFinalizedException;
 
 class LoadingPlanBucketController extends Controller
 {
@@ -53,14 +54,19 @@ class LoadingPlanBucketController extends Controller
             'prev_lot_id' => 'nullable|string',
             'next_lot_id' => 'nullable|string',
         ]);
-        $result = (new LoadingPlanEntryService())->parkLots(
-            $d['lot_ids'],
-            $d['bucket_id'],
-            $d['scheduled_date'],
-            $d['prev_lot_id'] ?? null,
-            $d['next_lot_id'] ?? null,
-        );
-        return response()->json($result);
+
+        try {
+            $result = (new LoadingPlanEntryService())->parkLots(
+                $d['lot_ids'],
+                $d['bucket_id'],
+                $d['scheduled_date'],
+                $d['prev_lot_id'] ?? null,
+                $d['next_lot_id'] ?? null,
+            );
+            return response()->json($result);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
     }
 
     public function unpark(Request $r)

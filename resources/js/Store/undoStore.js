@@ -71,17 +71,27 @@ export const createUndoStore = (initialState, options = {}) => {
             if (!patches.length) return;
             const byDndId = new Map(patches.map((p) => [p.dndId, p.fields]));
 
-            const applyPatches = (rows) =>
-                rows.map((r) => {
-                    const fields = byDndId.get(r._dndId);
-                    return fields ? { ...r, ...fields } : r;
+            const applyPatches = (rows) => {
+                let changed = false;
+                const next = rows.map((r) => {
+                    const f = byDndId.get(r._dndId);
+                    if (!f) return r;
+                    changed = true;
+                    return { ...r, ...f };
                 });
+                return changed ? next : rows;
+            };
+
+            const patchSnap = (snap) => {
+                const rows = applyPatches(snap.rows);
+                return rows === snap.rows ? snap : { ...snap, rows };
+            };
 
             const { past, present, future } = get();
             set({
-                past: past.map((snap) => ({ ...snap, rows: applyPatches(snap.rows) })),
-                present: { ...present, rows: applyPatches(present.rows) },
-                future: future.map((snap) => ({ ...snap, rows: applyPatches(snap.rows) })),
+                past: past.map(patchSnap), 
+                present: patchSnap(present), 
+                future: future.map(patchSnap)
             });
         },
 

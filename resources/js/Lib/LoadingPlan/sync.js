@@ -105,7 +105,7 @@ export function syncDeemoToServer(
             const code = err?.data?.error;
             if (revertOnError) update(() => prevRows, true);
 
-            if (code === "active_split_or_merge" || code === "stale_write") {
+            if (code === "active_split_or_merge" || code === "stale_write" || code === "not_found") {
                 toast?.error?.(err.data?.message ?? err.message);
             } else {
                 toast?.error?.("That change couldn't be saved and was reverted.");

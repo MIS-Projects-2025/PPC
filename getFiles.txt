@@ -7,6 +7,7 @@ names=(
   "LoadingPlanMergeController"
   "Deemo"
   "ValidatesLoadingPlanEntries"
+  "NonMachineController"
   "columns"
   "RecipeService"
   "useSplitMergeOperations"

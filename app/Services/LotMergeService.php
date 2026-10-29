@@ -72,6 +72,10 @@ class LotMergeService
             $qtyA = $quantityA->effectiveQty();
             $qtyB = $quantityB->effectiveQty();
 
+            if ($qtyA <= 0 || $qtyB <= 0) {
+                throw new InvalidMergeException('Cannot merge a lot that has no remaining quantity.');
+            }
+
             // Larger qty is target/parent; smaller is source/child. Equal → A wins arbitrarily.
             [$targetEntry, $sourceEntry, $targetQuantity, $sourceQuantity, $targetQty, $sourceQty] = ($qtyA >= $qtyB)
                 ? [$entryA, $entryB, $quantityA, $quantityB, $qtyA, $qtyB]

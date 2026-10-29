@@ -171,6 +171,7 @@ export function useBulkOperations({ dataRows, selectedRows, update, beginWrite, 
             return selectedRows.has(r.id) && r.entry_id;
         });
         const entryIds = targets.map((r) => r.entry_id);
+        if (entryIds.length === 0) { clearSelection(); return false; }
         const prevSnapshot = dataRows;
 
         const removable = (r) => isBlockRow(r) || r.is_rework;

@@ -1827,7 +1827,7 @@ class LoadingPlanEntryService
 
                 $existing = $locked->get($entryId) ?? LoadingPlanEntry::whereKey($entryId)->lockForUpdate()->first();
                 if (!$existing) {
-                    throw new \RuntimeException("Entry [{$entryId}] not found.");
+                    throw new \Illuminate\Database\Eloquent\ModelNotFoundException();
                 }
                 $this->assertNotFinalized($existing);
 
@@ -2621,7 +2621,7 @@ class LoadingPlanEntryService
         $entryId = $row['entry_id'];
         $existing = LoadingPlanEntry::whereKey($entryId)->lockForUpdate()->first();
         if (!$existing) {
-            throw new \RuntimeException("Row [{$entryId}] not found.");
+            throw new \Illuminate\Database\Eloquent\ModelNotFoundException();
         }
         $this->assertNotFinalized($existing);
         $this->assertLockVersion($existing, $row['lock_version'] ?? null);

@@ -46,6 +46,8 @@ class NonMachineController extends Controller
     {
         try {
             return response()->json($this->service->deleteNonMachine($nonMachine->id));
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         } catch (\Throwable $e) {
             return response()->json([
                 'error'   => 'bad_request',
@@ -66,6 +68,8 @@ class NonMachineController extends Controller
             return response()->json($this->service->setNonMachineStart($nonMachine->id, $data['time_start'], $data['scheduled_date']));
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         }
     }
 }

@@ -60,20 +60,24 @@ export function reconcileSplitCreate(rows, result, { parentEntryId }) {
 
 export function reconcileSplitRevert(rows, result) {
     const parentId = result.parent ? (result.parent.entry_id ?? result.parent.id) : null;
-    return rows
-        .filter((r) => !(r.lot_id === result.deleted && !r.is_rework))
+    const isChild = (r) =>
+        childEntryId != null ? r.entry_id === childEntryId
+        : r.split_info?.isChild ? r.split_info.splitId === result.split?.id
+        : r.lot_id === result.deleted && !r.is_rework && !r.is_leaked;
+
+    return rows.filter((r) => !isChild(r))
         .map((r) =>
             parentId != null && r.entry_id === parentId
-                ? {
-                      ...r,
-                      qty: result.parentQty ?? r.qty,
-                      doable: result.parentDoable ?? r.doable,
-                      doable_status: result.parentDoableStatus ?? r.doable_status,
-                      capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
-                      lock_version: result.parent.lock_version,
-                      split_info: result.parentSplitInfo,
-                  }
-                : r,
+            ? {
+                    ...r,
+                    qty: result.parentQty ?? r.qty,
+                    doable: result.parentDoable ?? r.doable,
+                    doable_status: result.parentDoableStatus ?? r.doable_status,
+                    capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
+                    lock_version: result.parent.lock_version,
+                    split_info: result.parentSplitInfo,
+                }
+            : r,
         );
 }
 

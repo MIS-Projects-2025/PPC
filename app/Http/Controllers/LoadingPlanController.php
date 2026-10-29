@@ -57,7 +57,7 @@ class LoadingPlanController extends Controller
 
         $props['schedulerHistory'] = Inertia::defer(
             fn() => SchedulerRun::query()
-                ->where('date', $request->get('date', ShiftDay::current()))
+                ->where('date', ShiftDay::current($request->get('location', 'PL1')))
                 ->latest()->limit(20)->get()
         );
         $props['readOnly'] = false;

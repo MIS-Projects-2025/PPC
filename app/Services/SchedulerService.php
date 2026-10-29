@@ -2836,8 +2836,32 @@ class SchedulerService
             $logTimer('bulkPlacePlan', $start, ['fresh_entry_count' => $freshEntries->count()]);
 
             foreach ($results['unassigned'] as $lot) {
-                $old = $existingByLot->get($lot->Lot_Id);
-                if (!$old) continue;
+                $old = $existingByLot->get($lot->Lot_Id) ?? $staleByLot->get($lot->Lot_Id);
+
+                if (!$old) {
+                    // manual pickup with no WIP row would otherwise vanish; WIP lots reappear from the import
+                    if (!($lot->is_pickup ?? false)) continue;
+
+                    LoadingPlanEntry::create([
+                        'entry_type' => 'lot',
+                        'source' => 'wip',
+                        'lot_id' => $lot->Lot_Id,
+                        'package_name' => $lot->Package_Name,
+                        'scheduled_date' => $dateString,
+                        'machine_id' => null,
+                        'sequence_order' => null,
+                        'rework_seq' => 0,
+                        'status' => 'NONE',
+                        'is_pickup' => true,
+                        'lock_version' => 1,
+                    ]);
+                    \App\Models\LotQuantity::updateOrCreate(
+                        ['lot_id' => $lot->Lot_Id, 'scheduled_date' => $dateString, 'rework_seq' => 0],
+                        ['part_name' => $lot->Part_Name, 'qty_base' => (int) ($lot->Qty ?? 0), 'split_adjustment' => 0, 'merge_adjustment' => 0],
+                    );
+                    continue;
+                }
+
                 LoadingPlanEntry::create([
                     'entry_type' => 'lot',
                     'source' => $old->source ?? 'wip',
