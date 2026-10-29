@@ -436,7 +436,12 @@ class LoadingPlanController extends Controller
 
     public function runScheduler(Request $request)
     {
-        $date = $request->get('date', ShiftDay::current());
+        $validated = $request->validate([
+            'date'     => ['nullable', 'date_format:Y-m-d'],
+            'location' => ['nullable', 'string', 'max:10'],
+        ]);
+
+        $date = $validated['date'] ?? ShiftDay::current();
         $previousDate = Carbon::parse($date)->subDay()->toDateString();
 
         $lock = $this->schedulerLock($date);

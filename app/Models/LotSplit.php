@@ -4,10 +4,12 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Awobaz\Compoships\Compoships;
 
 class LotSplit extends Model
 {
     use HasFactory;
+    use Compoships;
 
     protected $fillable = [
         'parent_lot_id',

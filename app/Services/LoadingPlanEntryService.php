@@ -101,6 +101,14 @@ class LoadingPlanEntryService
         return $entry;
     }
 
+    public function unparkLots(array $lotIds, string $date): void
+    {
+        DB::transaction(function () use ($lotIds, $date) {
+            $this->assertDateNotFinalized($date);
+            $this->releaseFromBuckets($lotIds, $date);
+        });
+    }
+
     public function ensureUnplacedEntry(string $lotId, string $date): LoadingPlanEntry
     {
         return DB::transaction(fn() => $this->findOrCreateUnplacedEntry($lotId, $date));
@@ -516,24 +524,11 @@ class LoadingPlanEntryService
     public function autoSortCycleTime(string $targetMachine, string $date)
     {
         $prev = $start = microtime(true);
-        $queries = 0;
-        $queryMs = 0.0;
 
-        DB::listen(function ($q) use (&$queries, &$queryMs) {
-            $queries++;
-            $queryMs += $q->time;
-        });
-
-        $lap = function (string $label) use (&$prev, &$queries, &$queryMs) {
+        $lap = function (string $label) use (&$prev) {
             $now = microtime(true);
-            Log::debug("[autoSort] {$label}", [
-                'ms'       => round(($now - $prev) * 1000, 1),
-                'queries'  => $queries,
-                'query_ms' => round($queryMs, 1),
-            ]);
+            Log::debug("[autoSort] {$label}", ['ms' => round(($now - $prev) * 1000, 1)]);
             $prev = $now;
-            $queries = 0;
-            $queryMs = 0.0;
         };
 
         return DB::transaction(function () use ($targetMachine, $date, $lap, $start) {
@@ -819,6 +814,13 @@ class LoadingPlanEntryService
             [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($resolvedDate, $beforeEntryId, $afterEntryId, [$entry->id]);
             [$machineId, $nonMachineId] = $this->resolveTarget($machine);
 
+            if (
+                (int) ($entry->machine_id ?? 0) !== (int) ($machineId ?? 0)
+                || (int) ($entry->non_machine_id ?? 0) !== (int) ($nonMachineId ?? 0)
+            ) {
+                abort(409, 'This row is no longer on that machine. Refresh and try again.');
+            }
+
             $rows = $nonMachineId !== null
                 ? $this->lockNonMachineRows([$nonMachineId], $resolvedDate)
                 : $this->lockMachineRows([$machineId], $resolvedDate);
@@ -897,7 +899,7 @@ class LoadingPlanEntryService
                         'sequence_order' => null,
                         'entry_type'     => 'lot',
                         'rework_seq'     => 0,
-                        'lock_version'   => 0,
+                        'lock_version'   => 1,
                     ]);
             } else {
                 $entry = $this->resolveEntry($entryId);
@@ -907,7 +909,7 @@ class LoadingPlanEntryService
             $resolvedDate = $entry->scheduled_date->toDateString();
             [$beforeEntryId, $afterEntryId] = $this->sameDateAnchors($resolvedDate, $beforeEntryId, $afterEntryId, [$entry->id]);
             log_entities($entry);
-            if ($entryType === 'lot' && $entry->rework_seq === 0) $this->releaseFromBuckets([$entry->lot_id], $resolvedDate);
+            if ($entryType === 'lot' && (int) $entry->rework_seq === 0) $this->releaseFromBuckets([$entry->lot_id], $resolvedDate);
 
             $sourceMachineId = $entry->machine_id; // null for the newly-created row, fine
             $sourceNonMachineId = $entry->non_machine_id;
@@ -2114,6 +2116,7 @@ class LoadingPlanEntryService
         return LoadingPlanEntry::whereKey($ids)->get();
     }
 
+    // deprecated
     private function applyBulkReorder(array $op, string $date)
     {
         $machine = $op['machine'];
@@ -2174,6 +2177,7 @@ class LoadingPlanEntryService
             ->get();
     }
 
+    // deprecated
     private function computeBulkPositions(Collection $rows, array $placements): array
     {
         $movedIds = collect($placements)->pluck('entry_id')->all();
@@ -2335,7 +2339,7 @@ class LoadingPlanEntryService
             ]);
 
             $nonMachineIds = collect([
-                ...collect($rows)->pluck('machine')->map(fn($m) => NonMachine::idFromKey($m))->all(),
+                ...collect($rows)->pluck('machine')->filter()->map(fn($m) => NonMachine::idFromKey($m))->all(),
                 ...collect($order)->keys()->map(fn($m) => NonMachine::idFromKey($m))->all(),
                 ...$deletedEntries->pluck('non_machine_id')->all(),
             ])->filter()->unique()->sort()->values()->all();
@@ -2924,6 +2928,7 @@ class LoadingPlanEntryService
     //     });
     // }
 
+    // deprecated
     private function applyMerge(array $op)
     {
         $mergeService = app(\App\Services\LotMergeService::class);
@@ -2941,6 +2946,7 @@ class LoadingPlanEntryService
         ];
     }
 
+    // deprecated
     private function applyRevertMerge(array $op)
     {
         $mergeService = app(\App\Services\LotMergeService::class);
@@ -2954,6 +2960,7 @@ class LoadingPlanEntryService
         ];
     }
 
+    // deprecated
     private function applySplit(array $op)
     {
         $splitService = app(\App\Services\LotSplitService::class);
@@ -3474,12 +3481,15 @@ class LoadingPlanEntryService
 
         $existingIds = LoadingPlanEntry::whereIn('machine_id', array_keys($plan))
             ->where('scheduled_date', $date)->pluck('id')->all();
-        // --- pass 3: bulk write ---
-        LoadingPlanEntry::insert($entryInsertRows);
 
-        if (!empty($lotQuantityRows)) {
+        // --- pass 3: bulk write ---
+        foreach (array_chunk($entryInsertRows, 500) as $chunk) {
+            LoadingPlanEntry::insert($chunk);
+        }
+
+        foreach (array_chunk($lotQuantityRows, 500) as $chunk) {
             LotQuantity::upsert(
-                $lotQuantityRows,
+                $chunk,
                 ['lot_id', 'scheduled_date', 'rework_seq'],
                 ['part_name', 'qty_base', 'recipe_used', 'recipe_source_id', 'recipe_source_type', 'commit', 'recipe_status', 'capacity_uph_snapshot']
             );
@@ -3523,8 +3533,8 @@ class LoadingPlanEntryService
             ];
         }
 
-        if ($entryHistoryRows) {
-            LoadingPlanEntryHistory::insert($entryHistoryRows);
+        foreach (array_chunk($entryHistoryRows, 500) as $chunk) {
+            LoadingPlanEntryHistory::insert($chunk);
         }
 
         if (!empty($lotQuantityRows)) {
@@ -3546,7 +3556,10 @@ class LoadingPlanEntryService
                     'changed_at' => $now,
                 ];
             }
-            LotQuantityHistory::insert($lotQuantityHistoryRows);
+
+            foreach (array_chunk($lotQuantityHistoryRows, 500) as $chunk) {
+                LotQuantityHistory::insert($chunk);
+            }
         }
 
         return $freshEntries;

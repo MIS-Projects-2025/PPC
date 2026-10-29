@@ -22,7 +22,7 @@ class LoadingPlanBucketController extends Controller
 
     public function store(Request $r)
     {
-        $d = $r->validate(['location' => 'required|string|max:10', 'label' => 'required|string|max:64', 'machine' => 'nullable|string']);
+        $d = $r->validate(['location' => 'required|in:PL1,PL6,F3', 'label' => 'required|string|max:64', 'machine' => 'nullable|string']);
 
         $machineId = null;
         if (!empty($d['machine'])) {
@@ -79,7 +79,12 @@ class LoadingPlanBucketController extends Controller
     public function unpark(Request $r)
     {
         $d = $r->validate(['lot_ids' => 'required|array|min:1', 'lot_ids.*' => 'string', 'scheduled_date' => 'required|date']);
-        (new LoadingPlanEntryService())->releaseFromBuckets($d['lot_ids'], $d['scheduled_date']);
-        return response()->json(['ok' => true]);
+
+        try {
+            (new LoadingPlanEntryService())->unparkLots($d['lot_ids'], $d['scheduled_date']);
+            return response()->json(['ok' => true]);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
     }
 }

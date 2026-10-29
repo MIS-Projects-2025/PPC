@@ -44,14 +44,12 @@ class LoadingPlanEntry extends Model
         'rework_seq',
         'rework_of_entry_id',
         'is_pickup',
-        'is_rework',
         'is_scm',
     ];
 
     protected $casts = [
         'scheduled_date' => 'date',
         'is_pickup'      => 'boolean',
-        'is_rework'      => 'boolean',
         'is_scm'         => 'boolean',
         'sequence_order' => 'float',
         'finalized_at'   => 'datetime',
@@ -133,9 +131,11 @@ class LoadingPlanEntry extends Model
 
     public function activeLotSplit(): HasOne
     {
-        return $this->hasOne(LotSplit::class, 'child_lot_id', 'lot_id')
-            ->whereColumn('scheduled_date', 'loading_plan_entries.scheduled_date')
-            ->active();
+        return $this->hasOne(
+            LotSplit::class,
+            ['child_lot_id', 'scheduled_date'],
+            ['lot_id', 'scheduled_date']
+        )->active();
     }
 
     /**

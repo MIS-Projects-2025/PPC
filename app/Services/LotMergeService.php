@@ -38,6 +38,10 @@ class LotMergeService
             $entryA = LoadingPlanEntry::with('machineModel')->findOrFail($entryIdA);
             $entryB = LoadingPlanEntry::with('machineModel')->findOrFail($entryIdB);
 
+            if ($entryA->entry_type !== 'lot' || $entryB->entry_type !== 'lot' || !$entryA->lot_id || !$entryB->lot_id) {
+                throw new InvalidMergeException('Only lot rows can be merged.');
+            }
+
             if ($entryA->rework_seq > 0 || $entryB->rework_seq > 0) {
                 throw new InvalidMergeException('Rework rows cannot be merged.');
             }

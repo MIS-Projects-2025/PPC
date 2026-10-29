@@ -35,7 +35,10 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
             setSplitHistoryData(null);
             setCurrentLotRole({ isParent, isChild });
             try {
-                const res = await fetch(route("loading-plan.splits.history", rootLotId));
+                const res = await fetch(route("loading-plan.splits.history", rootLotId), {
+                    headers: { Accept: "application/json" },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 setSplitHistoryData(await res.json());
             } catch (err) {
                 console.error("Failed to load split history:", err);
@@ -56,7 +59,10 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
             setMergeHistoryData(null);
             setCurrentLotRole({ isParent, isChild });
             try {
-                const res = await fetch(route("loading-plan.merges.history", { targetLotId }));
+                const res = await fetch(route("loading-plan.merges.history", { targetLotId }), {
+                    headers: { Accept: "application/json" },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 setMergeHistoryData(await res.json());
             } catch (err) {
                 console.error("Failed to load merge history:", err);

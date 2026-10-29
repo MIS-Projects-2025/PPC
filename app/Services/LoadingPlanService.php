@@ -61,6 +61,7 @@ class LoadingPlanService
     /**
      * Keys createPlannedLot needs to find when $entry is passed as an array,
      * matching this method's own return shape (not the raw LoadingPlanEntry model).
+     * deprecated
      */
     private const REQUIRED_ENTRY_ARRAY_KEYS = [
         'entry_id',
