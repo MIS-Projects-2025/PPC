@@ -30,6 +30,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\App;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
+use App\Models\BoschPart;
 
 class LoadingPlanController extends Controller
 {
@@ -124,6 +125,17 @@ class LoadingPlanController extends Controller
         }
     }
 
+    private function attachBosch($rows)
+    {
+        $bosch = BoschPart::lookup();
+
+        return $rows->map(function ($row) use ($bosch) {
+            $row['is_bosch'] = !($row['is_block'] ?? false)
+                && isset($bosch[strtoupper(trim((string) ($row['part_name'] ?? '')))]);
+            return $row;
+        });
+    }
+
     /**
      * Shared read path for both index() and readOnly(): resolves date /
      * location, builds the package list, active machines, bake lots, and
@@ -216,6 +228,7 @@ class LoadingPlanController extends Controller
         $mark('initPlanned');
 
         $result = $this->attachBuckets($svc->initEntries(), $date);
+        $result = $this->attachBosch($result);
         $mark('initEntries + attachBuckets');
 
         $groups = app(PackageGroups::class);

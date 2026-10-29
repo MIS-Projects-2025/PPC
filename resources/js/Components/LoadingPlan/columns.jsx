@@ -8,6 +8,7 @@ import { CellEditor } from "./CellEditor";
 import { DoableCell } from "./DoableCell";
 import { MachineHeaderCell } from "./MachineHeaderCell";
 import { OvenHeaderCell } from "./OvenHeaderCell";
+import { PartNameCell } from "./PartNameCell";
 import { RowDropTargetCell } from "./RowDropTargetCell";
 import TimeCell from "./TimeCell";
 
@@ -517,6 +518,10 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                     }
 
                     if (col.key === "accu_time") return fmtHours(row.accu_time);
+
+                    if (col.key === "part_name") {
+                        return <PartNameCell partName={row.part_name} isBosch={row.is_bosch} />;
+                    }
 
                     return row[col.key];
                 },
