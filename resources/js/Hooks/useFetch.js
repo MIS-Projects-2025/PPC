@@ -29,14 +29,13 @@ export function useFetch(url, options = {}) {
 
 		try {
 			const fetchUrl = buildUrlWithParams(url, currentParams);
-			const token = localStorage.getItem("authify-token");
 			const response = await fetch(fetchUrl, {
 				method: "GET",
 				headers: {
 					Accept: "application/json",
 					"Content-Type": "application/json",
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
 				},
+				credentials: "same-origin",
 				signal: controller.signal,
 			});
 
@@ -47,6 +46,11 @@ export function useFetch(url, options = {}) {
 				const error = new Error("Invalid JSON response from server");
 				error.status = response.status;
 				throw error;
+			}
+
+			if (response.status === 401) {
+				window.location.href = route("login");
+				return;
 			}
 
 			if (!response.ok || (result && result.status === "error")) {

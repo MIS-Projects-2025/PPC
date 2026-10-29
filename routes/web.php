@@ -41,7 +41,7 @@ use App\Http\Controllers\{
     RackController,
     RackSlotController,
 };
-use App\Http\Controllers\General\{AdminController, ProfileController};
+use App\Http\Controllers\General\{ProfileController};
 
 
 $app_name = env('APP_NAME', '');
@@ -413,13 +413,6 @@ Route::get('/pickup-list',       [PickupController::class, 'index'])->name('pick
 // Profile
 Route::get('/profile',          [ProfileController::class, 'index'])->name('profile.index');
 Route::post('/change-password', [ProfileController::class, 'changePassword'])->name('changePassword');
-
-// Admin
-Route::get('/admin',             [AdminController::class, 'index'])->name('admin');
-Route::get('/new-admin',         [AdminController::class, 'index_addAdmin'])->name('index_addAdmin');
-Route::post('/add-admin',        [AdminController::class, 'addAdmin'])->name('addAdmin');
-Route::post('/remove-admin',     [AdminController::class, 'removeAdmin'])->name('removeAdmin');
-Route::patch('/change-admin-role', [AdminController::class, 'changeAdminRole'])->name('changeAdminRole');
 
 // Part Names
 Route::prefix('partname')->name('partname.')->group(function () {

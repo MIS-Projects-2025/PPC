@@ -1,14 +1,25 @@
-import { usePage } from "@inertiajs/react";
+import useUserStore from "@/Store/useUserStore";
+import { router, usePage } from "@inertiajs/react";
 import { MdLogout, MdOutlinePersonOutline } from "react-icons/md";
 
 export default function NavBar() {
 	const { emp_data } = usePage().props;
 
 	const logout = () => {
-		localStorage.clear();
-		sessionStorage.clear();
-
-		window.location.href = route("logout");
+		router.post(
+			route("logout"),
+			{},
+			{
+				onSuccess: () => {
+					useUserStore.getState().clearUserData();
+				},
+				// session already expired (419) or request failed: just go to login
+				onError: () => {
+					useUserStore.getState().clearUserData();
+					window.location.href = route("login");
+				},
+			},
+		);
 	};
 
 	return (

@@ -25,13 +25,8 @@ export default function Profile({ profile, errors }) {
 			{
 				preserveScroll: true,
 				onSuccess: () => {
-					const token = localStorage.getItem("authify-token");
-					localStorage.removeItem("authify-token");
-					router.get(route("logout"));
 					useUserStore.getState().clearUserData();
-					window.location.href = `http://192.168.20.21:8200/logout?key=${encodeURIComponent(
-						token,
-					)}&redirect=${encodeURIComponent(route("dashboard"))}`;
+					router.post(route("logout"));
 				},
 			},
 		);
@@ -47,7 +42,7 @@ export default function Profile({ profile, errors }) {
 				{profile && (
 					<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
 						<ProfileField label="Name" value={profile.emp_name} />
-						<ProfileField label="Position" value={profile.emp_jobtittle} />
+						<ProfileField label="Position" value={profile.emp_jobtitle} />
 						<ProfileField label="Department" value={profile.emp_dept} />
 						<ProfileField
 							label="Production Line"

@@ -1,20 +1,22 @@
 <?php
 
-use App\Http\Controllers\AuthenticationController;
-use App\Http\Controllers\DashboardController;
-use App\Http\Middleware\AuthMiddleware;
+use App\Http\Controllers\LoginController;
 use App\Http\Middleware\SessionMiddleware;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 $app_name = env('APP_NAME', '');
 
-Route::prefix($app_name)->withoutMiddleware([SessionMiddleware::class, AuthMiddleware::class])->group(function () {
-  Route::post("/setSession", [AuthenticationController::class, 'setSession'])->name('setSession');
+Route::withoutMiddleware([SessionMiddleware::class])->group(function () {
+  Route::get('/login', [LoginController::class, 'show'])->name('login');
+  Route::post('/login', [LoginController::class, 'store'])
+    ->middleware('throttle:10,1')
+    ->name('login.store');
+  Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
+});
 
-  Route::get("/logout", [AuthenticationController::class, 'logout'])->name('logout');
-
-  Route::get("/unauthorized", function () {
+Route::prefix($app_name)->withoutMiddleware([SessionMiddleware::class])->group(function () {
+  Route::get('/unauthorized', function () {
     return Inertia::render('Unauthorized');
-  })->name(name: 'unauthorized');
+  })->name('unauthorized');
 });
