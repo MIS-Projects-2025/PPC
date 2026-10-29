@@ -67,13 +67,11 @@ export const useF3PackagesStore = create((set, get) => {
 					route("api.f3.package.names.getAll"),
 					params,
 				);
-				const token = localStorage.getItem("authify-token");
 
 				const response = await fetch(url, {
 					method: "GET",
 					headers: {
 						"Content-Type": "application/json",
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
 					},
 					signal: abortController.signal,
 				});

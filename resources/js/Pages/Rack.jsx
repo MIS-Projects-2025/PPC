@@ -220,7 +220,6 @@ const SlotButton = React.memo(function SlotButton({
 	const handleMarkSlotFullToggle = async () => {
 		const updateType = isManuallyFull ? "clearFull" : "markFull";
 		const url = route(`rack.rack-slot.${updateType}`, { id: slot.id });
-		const token = localStorage.getItem("authify-token");
 		const nextValue = !isManuallyFull;
 
 		try {
@@ -230,7 +229,6 @@ const SlotButton = React.memo(function SlotButton({
 					Accept: "application/json",
 					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
 						?.content,
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
 				},
 				body: JSON.stringify({
 					is_manually_full: !isManuallyFull,

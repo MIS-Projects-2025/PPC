@@ -33,7 +33,6 @@ export function useMutation({ track = true } = {}) {
                 additionalHeaders = {},
             } = options;
 
-            const token = localStorage.getItem("authify-token");
 
             const response = await fetch(url, {
                 method,
@@ -41,7 +40,6 @@ export function useMutation({ track = true } = {}) {
                     ...(isContentTypeInclude && { "Content-Type": "application/json" }),
                     Accept: "application/json",
                     "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')?.content,
-                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
                     ...additionalHeaders,
                 },
                 body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,

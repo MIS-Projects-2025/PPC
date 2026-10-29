@@ -45,7 +45,13 @@ class LoginController extends Controller
             'generated_at'  => now(),
         ]]);
 
-        return redirect()->intended(route('dashboard'));
+        $intended = session()->pull('url.intended');
+
+        if ($intended && !str_contains($intended, '/.well-known/')) {
+            return Inertia::location($intended);
+        }
+
+        return Inertia::location(route('dashboard'));
     }
 
     public function destroy(Request $request)
@@ -53,6 +59,6 @@ class LoginController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return redirect()->route('login');
+        return Inertia::location(route('login'));
     }
 }
