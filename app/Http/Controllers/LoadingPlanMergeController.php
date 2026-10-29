@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use App\Exceptions\LoadingPlanDateFinalizedException;
 use App\Exceptions\InvalidMergeException;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class LoadingPlanMergeController extends Controller
 {
@@ -39,6 +40,11 @@ class LoadingPlanMergeController extends Controller
                 'message'        => $e->getMessage(),
                 'scheduled_date' => $e->scheduledDate,
             ], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'error'   => 'bad_request',
+                'message' => $e->getMessage(),
+            ], 422);
         }
     }
 
@@ -58,17 +64,16 @@ class LoadingPlanMergeController extends Controller
                 'affected_timings' => $result['affected_timings'],
             ]);
         } catch (LoadingPlanDateFinalizedException $e) {
-            return response()->json([
-                'error'          => 'finalized',
-                'message'        => $e->getMessage(),
-                'scheduled_date' => $e->scheduledDate,
-            ], 422);
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (InvalidMergeException $e) {                       // moved above Throwable
+            return response()->json(['error' => 'invalid_merge', 'message' => $e->getMessage()], 422);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That merge does not exist or is already reverted.'], 404);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
         } catch (\Throwable $e) {
             Log::error('lot merge revert failed', ['merge_id' => $merge, 'message' => $e->getMessage()]);
-            return response()->json([
-                'error'   => 'server_error',
-                'message' => 'Could not revert this merge.',
-            ], 500);
+            return response()->json(['error' => 'server_error', 'message' => 'Could not revert this merge.'], 500);
         }
     }
 
@@ -94,6 +99,14 @@ class LoadingPlanMergeController extends Controller
                 'message'        => $e->getMessage(),
                 'scheduled_date' => $e->scheduledDate,
             ], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'error'   => 'not_found',
+                'message' => 'That row no longer exists.',
+            ], 404);
+        } catch (\Throwable $e) {
+            Log::error('lot merge unrevert failed', ['merge_id' => $merge, 'message' => $e->getMessage()]);
+            return response()->json(['error' => 'server_error', 'message' => 'Could not unrevert this merge.'], 500);
         }
     }
 }

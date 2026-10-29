@@ -870,7 +870,7 @@ export default function Deemo({
                 })
                 .catch((err) => {
                     console.error("Status update failed:", err);
-                    update(() => prevSnapshot, true); // <- skipHistory, no stack pointer movement
+                    useLoadingPlanStore.getState().rollback(prevSnapshot);
                     toast?.error?.("Couldn't save status change — reverted.");
                 });
         },
@@ -896,7 +896,8 @@ export default function Deemo({
         setIsDirty,
         clearSelection,
         date,
-        syncServerFields
+        syncServerFields,
+        store: useLoadingPlanStore
     });
 
     const { handleUndo, handleRedo, dataRowsRef } = useUndoRedoSync({
@@ -954,7 +955,7 @@ export default function Deemo({
                     throw err;
                 });
         },
-        [readOnly, activePackage, packageGroups, baseTimes, date, update, beginWrite, withUpdating, mutate, toast],
+        [readOnly, activePackage, isF3, packageGroups, baseTimes, date, update, beginWrite, withUpdating, mutate, toast],
     );
 
     const handleAddBlock = useCallback((machine) => {
@@ -1780,6 +1781,7 @@ export default function Deemo({
             
             const tag = e.target?.tagName;
             if (tag === "INPUT" || tag === "TEXTAREA") return;
+            if (document.querySelector("dialog[open]")) return;
             
             if (readOnly) return; // no undo/redo/select-all in read-only mode
             if (e.ctrlKey || e.metaKey) {
@@ -2412,11 +2414,11 @@ export default function Deemo({
                                 <BsSearch size={16} />
                             </button>
                             
-                            {!readOnly && !isF3 && (
+                            {/* {!readOnly && !isF3 && (
                                 <button className="btn btn-sm z-50" onClick={() => pickupInsertModalRef.current?.showModal()}>
                                     Schedule Pickups
                                 </button>
-                            )}
+                            )} */}
 
                             {idleMachines.length > 0 && activePackage !== "Unassigned" && activePackage !== ORPHAN_TAB && (
                                 <fieldset className="fieldset bg-base-100 border-base-300 rounded-box border py-1 px-2">

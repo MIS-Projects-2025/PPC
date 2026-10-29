@@ -73,7 +73,7 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
         ({ splitId, revertedBy, childLotId }, { onDone } = {}) => {
             if (!beginWrite()) return;
 
-            const childRow = dataRows.find((r) => r.lot_id === childLotId);
+            const childRow = dataRows.find((r) => r.lot_id === childLotId && !r.is_rework && !r.is_leaked);
             if (!childRow) {
                 toast?.error?.("Couldn't find the split lot — please refresh.");
                 return;
@@ -86,29 +86,31 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
                 }),
             )
                 .then((result) => {
-                    update(
-                        (prev) => {
-                            const next = prev
-                                .filter((r) => r.lot_id !== result.deleted)
-                                .map((r) =>
-                                    result.parent && r.lot_id === result.parent.lot_id
-                                        ? {
-                                              ...r,
-                                              qty: result.parentQty ?? r.qty,
-                                              doable: result.parentDoable ?? r.doable,
-                                              doable_status: result.parentDoableStatus ?? r.doable_status,
-                                              capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
-                                              lock_version: result.parent.lock_version,
-                                              split_info: result.parentSplitInfo,
-                                          }
-                                        : r,
-                                );
+                    update((prev) => reconcileSplitRevert(prev, result, { childEntryId: childRow.entry_id }),
+                        false, { type: "split", splitId, resultingState: "reverted" });
+                    // update(
+                    //     (prev) => {
+                    //         const next = prev
+                    //             .filter((r) => r.lot_id !== result.deleted)
+                    //             .map((r) =>
+                    //                 result.parent && r.lot_id === result.parent.lot_id
+                    //                     ? {
+                    //                           ...r,
+                    //                           qty: result.parentQty ?? r.qty,
+                    //                           doable: result.parentDoable ?? r.doable,
+                    //                           doable_status: result.parentDoableStatus ?? r.doable_status,
+                    //                           capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
+                    //                           lock_version: result.parent.lock_version,
+                    //                           split_info: result.parentSplitInfo,
+                    //                       }
+                    //                     : r,
+                    //             );
 
-                            return next;
-                        },
-                        false,
-                        { type: "split", splitId, resultingState: "reverted" },
-                    );
+                    //         return next;
+                    //     },
+                    //     false,
+                    //     { type: "split", splitId, resultingState: "reverted" },
+                    // );
                     applyAffectedTimings(update, result.affected_timings, date);
                     // parent survives the operation — its lock_version needs to
                     // reach past/future snapshots too, same as any field patch
@@ -152,17 +154,7 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
             )
                 .then((result) => {
                     const { target, source } = result;
-                    update((prev) => prev.map((row) => {
-                        if (target && row.lot_id === target.lot_id) {
-                            return { ...row, qty: target.qty, lock_version: target.lock_version, merge_info: target.merge_info ?? null,
-                                doable: target.doable, doable_status: target.doable_status, capacity_uph: target.capacity_uph };
-                        }
-                        if (source && row.lot_id === source.lot_id) {
-                            return { ...row, qty: source.qty, lock_version: source.lock_version, merge_info: source.merge_info ?? null,
-                                doable: source.doable, doable_status: source.doable_status, capacity_uph: source.capacity_uph };
-                        }
-                        return row;
-                    }), false, { type: "merge", mergeId, resultingState: "reverted" });
+                    update((prev) => reconcileMergeRevert(prev, result), false, { type: "merge", mergeId, resultingState: "reverted" });
                     applyAffectedTimings(update, result.affected_timings, date);
                     syncServerFields?.([
                         target && { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },

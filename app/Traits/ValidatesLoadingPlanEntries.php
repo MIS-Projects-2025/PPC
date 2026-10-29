@@ -18,7 +18,7 @@ trait ValidatesLoadingPlanEntries
     protected function assertNotFinalized(?LoadingPlanEntry $entry): void
     {
         if ($entry && $entry->finalized_at !== null) {
-            throw new LoadingPlanDateFinalizedException($entry->scheduled_date, $entry->id);
+            throw new LoadingPlanDateFinalizedException($entry->scheduled_date->toDateString(), $entry->id);
         }
     }
 

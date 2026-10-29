@@ -2504,6 +2504,17 @@ class SchedulerService
             $pickup,
             &$results
         ) {
+            $staleByLot = $staleUnassigned->keyBy('lot_id');
+            foreach ($pickupLots as $lot) {
+                if ($old = $staleByLot->get($lot->Lot_Id)) {
+                    $lot->Remarks     = $old->remarks;
+                    $lot->Tag         = $old->tag;
+                    $lot->IsScm       = (bool) $old->is_scm;
+                    $lot->EntryStatus = $old->status ?? 'NONE';
+                    $lot->isExpedite  = ($lot->isExpedite ?? false) || (bool) $old->is_manual_expedite;
+                }
+            }
+
             $this->loadingPlanEntryService->deleteEntriesWithHistory($staleUnassigned);
 
             $transactionStart = microtime(true);
@@ -2691,6 +2702,8 @@ class SchedulerService
                 'skipped_count'      => count($skippedEntryIds),
             ]);
 
+            $existingByLot = $entries->whereIn('id', $hydratedEntryIds)->keyBy('lot_id');
+
             // 11. Delete existing open entries
             $openBlocks = LoadingPlanEntry::query()
                 ->whereIn('machine_id', $candidateMachineIds)
@@ -2821,6 +2834,52 @@ class SchedulerService
                 );
 
             $logTimer('bulkPlacePlan', $start, ['fresh_entry_count' => $freshEntries->count()]);
+
+            foreach ($results['unassigned'] as $lot) {
+                $old = $existingByLot->get($lot->Lot_Id) ?? $staleByLot->get($lot->Lot_Id);
+
+                if (!$old) {
+                    // manual pickup with no WIP row would otherwise vanish; WIP lots reappear from the import
+                    if (!($lot->is_pickup ?? false)) continue;
+
+                    LoadingPlanEntry::create([
+                        'entry_type' => 'lot',
+                        'source' => 'wip',
+                        'lot_id' => $lot->Lot_Id,
+                        'package_name' => $lot->Package_Name,
+                        'scheduled_date' => $dateString,
+                        'machine_id' => null,
+                        'sequence_order' => null,
+                        'rework_seq' => 0,
+                        'status' => 'NONE',
+                        'is_pickup' => true,
+                        'lock_version' => 1,
+                    ]);
+                    \App\Models\LotQuantity::updateOrCreate(
+                        ['lot_id' => $lot->Lot_Id, 'scheduled_date' => $dateString, 'rework_seq' => 0],
+                        ['part_name' => $lot->Part_Name, 'qty_base' => (int) ($lot->Qty ?? 0), 'split_adjustment' => 0, 'merge_adjustment' => 0],
+                    );
+                    continue;
+                }
+
+                LoadingPlanEntry::create([
+                    'entry_type' => 'lot',
+                    'source' => $old->source ?? 'wip',
+                    'lot_id' => $old->lot_id,
+                    'package_name' => $old->package_name,
+                    'scheduled_date' => $dateString,
+                    'machine_id' => null,
+                    'sequence_order' => null,
+                    'rework_seq' => 0,
+                    'status' => $old->status ?? 'NONE',
+                    'remarks' => $old->remarks,
+                    'tag' => $old->tag,
+                    'is_scm' => $old->is_scm,
+                    'is_manual_expedite' => $old->is_manual_expedite,
+                    'is_pickup' => $old->is_pickup,
+                    'lock_version' => 1,
+                ]);
+            }
 
             // 20. Final result
             $results['placed'] = $freshEntries->all();

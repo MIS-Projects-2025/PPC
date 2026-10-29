@@ -22,7 +22,12 @@ class LotSourceService
     /**
      * Pool of lots that can be shown/placed for a location, keyed by Lot_Id.
      * F3 only; F1/F2 keep using LoadingPlanService::getWipRowsForToday().
-     * Excludes soft-deleted travelers.
+     *
+     * F3 is NOT date-bound: every non-deleted traveler is in the pool on every
+     * date, except lots already placed (or finalized) on a *different* date.
+     * A lot placed on $date itself stays in the pool so its source row is
+     * available; LoadingPlanService::initEntries() removes it from "unassigned"
+     * via todayPlannedLotIds.
      */
     public function poolFor(string $date, ?string $location): Collection
     {
@@ -30,11 +35,22 @@ class LotSourceService
             return collect();
         }
 
-        return ProcessTraveler::forPlanDate($date)
+        $placedElsewhere = LoadingPlanEntry::query()
+            ->where('source', self::F3)
+            ->where('entry_type', 'lot')
+            ->whereNotNull('lot_id')               // NOT IN with a NULL matches nothing
+            ->where('scheduled_date', '!=', $date)
+            ->where(fn($q) => $q->whereNotNull('machine_id')
+                ->orWhereNotNull('non_machine_id')
+                ->orWhereNotNull('finalized_at'))  // in case finalizing clears the lane
+            ->select('lot_id');
+
+        return ProcessTraveler::query()            // default scope: soft-deleted excluded
+            ->whereNotIn('lot_number', $placedElsewhere)
             ->orderByDesc('id')
             ->get()
             ->toBase()
-            ->unique('lot_number')                    // latest row wins if lot_number is duplicated
+            ->unique('lot_number')                 // latest row wins if lot_number is duplicated
             ->mapWithKeys(fn($t) => [$t->lot_number => $t->toWip()]);
     }
 

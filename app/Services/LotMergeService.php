@@ -72,6 +72,10 @@ class LotMergeService
             $qtyA = $quantityA->effectiveQty();
             $qtyB = $quantityB->effectiveQty();
 
+            if ($qtyA <= 0 || $qtyB <= 0) {
+                throw new InvalidMergeException('Cannot merge a lot that has no remaining quantity.');
+            }
+
             // Larger qty is target/parent; smaller is source/child. Equal → A wins arbitrarily.
             [$targetEntry, $sourceEntry, $targetQuantity, $sourceQuantity, $targetQty, $sourceQty] = ($qtyA >= $qtyB)
                 ? [$entryA, $entryB, $quantityA, $quantityB, $qtyA, $qtyB]
@@ -162,8 +166,8 @@ class LotMergeService
 
             $merge->update(['reverted_at' => now(), 'reverted_by' => $revertedBy]);
 
-            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
-            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
 
             $targetEntryNonMachineId = $targetEntry?->non_machine_id;
             $sourceEntryNonMachineId = $sourceEntry?->non_machine_id;
@@ -233,8 +237,8 @@ class LotMergeService
 
             $merge->update(['reverted_at' => null, 'reverted_by' => null]);
 
-            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
-            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->first();
+            $targetEntry = LoadingPlanEntry::where('lot_id', $merge->target_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
+            $sourceEntry = LoadingPlanEntry::where('lot_id', $merge->source_lot_id)->where('scheduled_date', $merge->scheduled_date)->where('rework_seq', 0)->first();
 
             $targetEntryNonMachineId = $targetEntry?->non_machine_id;
             $sourceEntryNonMachineId = $sourceEntry?->non_machine_id;

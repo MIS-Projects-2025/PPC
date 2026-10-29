@@ -59,51 +59,59 @@ export function reconcileSplitCreate(rows, result, { parentEntryId }) {
 }
 
 export function reconcileSplitRevert(rows, result) {
-    return rows
-        .filter((r) => r.lot_id !== result.deleted)
+    const parentId = result.parent ? (result.parent.entry_id ?? result.parent.id) : null;
+    const isChild = (r) =>
+        childEntryId != null ? r.entry_id === childEntryId
+        : r.split_info?.isChild ? r.split_info.splitId === result.split?.id
+        : r.lot_id === result.deleted && !r.is_rework && !r.is_leaked;
+
+    return rows.filter((r) => !isChild(r))
         .map((r) =>
-            result.parent && r.lot_id === result.parent.lot_id
-                ? {
-                      ...r,
-                      qty: result.parentQty ?? r.qty,
-                      doable: result.parentDoable ?? r.doable,
-                      doable_status: result.parentDoableStatus ?? r.doable_status,
-                      capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
-                      lock_version: result.parent.lock_version,
-                      split_info: result.parentSplitInfo,
-                  }
-                : r,
+            parentId != null && r.entry_id === parentId
+            ? {
+                    ...r,
+                    qty: result.parentQty ?? r.qty,
+                    doable: result.parentDoable ?? r.doable,
+                    doable_status: result.parentDoableStatus ?? r.doable_status,
+                    capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
+                    lock_version: result.parent.lock_version,
+                    split_info: result.parentSplitInfo,
+                }
+            : r,
         );
 }
 
 export function reconcileSplitUnrevert(rows, result) {
-    // unrevert() recreates the child entry — same shape concerns as create,
-    // plus it needs to re-stitch the parent's qty/doable fields like revert does.
-    let next = rows.map((r) =>
-        r.lot_id === result.parent.lot_id
-            ? {
-                  ...r,
-                  qty: result.parentQty ?? r.qty,
-                  doable: result.parentDoable ?? r.doable,
-                  doable_status: result.parentDoableStatus ?? r.doable_status,
-                  capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
-                  lock_version: result.parent.lock_version,
-                  split_info: result.parentSplitInfo,
-              }
-            : r,
-    );
-    next = next.concat([
-        {
-            ...result.child,
-            qty: result.childQty ?? result.child.qty,
-            doable: result.childDoable,
-            doable_status: result.childDoableStatus,
-            capacity_uph: result.childCapacityUph,
-            split_info: result.childSplitInfo,
-            _dndId: `entry-${result.child.entry_id}`,
-        },
-    ]);
-    return next;
+    const parentId = result.parent.entry_id ?? result.parent.id;
+    const childId = result.child.entry_id;
+    const childRow = {
+        ...result.child,
+        qty: result.childQty ?? result.child.qty,
+        doable: result.childDoable,
+        doable_status: result.childDoableStatus,
+        capacity_uph: result.childCapacityUph,
+        split_info: result.childSplitInfo,
+        _dndId: `entry-${childId}`,
+    };
+
+    let found = false;
+    const next = rows.map((r) => {
+        if (r.entry_id === parentId) {
+            return {
+                ...r,
+                qty: result.parentQty ?? r.qty,
+                doable: result.parentDoable ?? r.doable,
+                doable_status: result.parentDoableStatus ?? r.doable_status,
+                capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
+                lock_version: result.parent.lock_version,
+                split_info: result.parentSplitInfo,
+            };
+        }
+        // the restored snapshot already holds the child: replace, never append a second one
+        if (r.entry_id === childId) { found = true; return { ...r, ...childRow }; }
+        return r;
+    });
+    return found ? next : next.concat([childRow]);
 }
 
 export function reconcileMergeCreate(rows, result) {
@@ -114,28 +122,28 @@ export function reconcileMergeCreate(rows, result) {
     });
 }
 
+const sameEntry = (row, side) =>
+    side && (side.entry_id != null ? row.entry_id === side.entry_id : row.lot_id === side.lot_id);
+
 export function reconcileMergeRevert(rows, result) {
     const { target, source } = result;
-
+    const apply = (row, s) => ({
+        ...row, qty: s.qty, lock_version: s.lock_version,
+        merge_info: s.merge_info ?? null,   // target may still be part of another active merge
+        doable: s.doable, doable_status: s.doable_status, capacity_uph: s.capacity_uph,
+    });
     return rows.map((row) => {
-        if (target && row.lot_id === target.lot_id) {
-            return { ...row, qty: target.qty, lock_version: target.lock_version, merge_info: null,
-                doable: target.doable, doable_status: target.doable_status, capacity_uph: target.capacity_uph };
-        }
-        if (source && row.lot_id === source.lot_id) {
-            return { ...row, qty: source.qty, lock_version: source.lock_version, merge_info: null,
-                doable: source.doable, doable_status: source.doable_status, capacity_uph: source.capacity_uph };
-        }
+        if (sameEntry(row, target)) return apply(row, target);
+        if (sameEntry(row, source)) return apply(row, source);
         return row;
     });
 }
 
 export function reconcileMergeUnrevert(rows, result) {
     const { target, source } = result;
-    
     return rows.map((row) => {
-        if (row.lot_id === target.lot_id) return { ...row, ...target };
-        if (row.lot_id === source.lot_id) return { ...row, ...source };
+        if (sameEntry(row, target)) return { ...row, ...target };
+        if (sameEntry(row, source)) return { ...row, ...source };
         return row;
     });
 }

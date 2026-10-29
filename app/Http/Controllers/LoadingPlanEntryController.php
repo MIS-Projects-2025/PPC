@@ -76,6 +76,8 @@ class LoadingPlanEntryController extends Controller
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (LoadingPlanDateFinalizedException $e) {
             return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
         }
     }
 
@@ -118,6 +120,8 @@ class LoadingPlanEntryController extends Controller
                 return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
             } catch (LoadingPlanDateFinalizedException $e) {
                 return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+            } catch (StaleWriteException $e) {
+                return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
             }
         }
 
@@ -181,6 +185,8 @@ class LoadingPlanEntryController extends Controller
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (StaleWriteException $e) {
             return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         }
     }
 
@@ -284,8 +290,12 @@ class LoadingPlanEntryController extends Controller
             'scheduled_date' => 'required|date',
         ]);
 
-        $timings = $this->service->deleteEntry($id, $data['machine'] ?? null);
-        return response()->json(['id' => $id, 'affected_timings' => $timings]);
+        try {
+            $timings = $this->service->deleteEntry($id, $data['machine'] ?? null);
+            return response()->json(['id' => $id, 'affected_timings' => $timings]);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        }
     }
 
     public function bulkDestroy(Request $request): JsonResponse
@@ -312,6 +322,8 @@ class LoadingPlanEntryController extends Controller
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (StaleWriteException $e) {
             return response()->json(['error' => 'stale', 'message' => $e->getMessage(), 'current' => $e->current], 409);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         }
     }
 
@@ -472,7 +484,7 @@ class LoadingPlanEntryController extends Controller
             $payload = $entry->toArray();
 
             if (
-                array_intersect(['accu_time', 'qty'], array_keys($fields))
+                array_intersect(['accu_time', 'qty', 'part_name'], array_keys($fields))
                 && ($entry->machine_id !== null || $entry->non_machine_id !== null)
             ) {
                 $payload['affected_timings'] = LoadingPlanEntryService::timingsFor(
@@ -522,6 +534,8 @@ class LoadingPlanEntryController extends Controller
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
         } catch (ModelNotFoundException $e) {
             return response()->json(['error' => 'not_found', 'message' => 'That lot no longer exists.'], 404);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         }
     }
 
@@ -536,6 +550,12 @@ class LoadingPlanEntryController extends Controller
             return response()->json($result);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json([
+                'error'          => 'finalized',
+                'message'        => $e->getMessage(),
+                'scheduled_date' => $e->scheduledDate,
+            ], 422);
         } catch (\Throwable $e) {
             Log::error('autoSortCycleTime failed', ['exception' => $e]);
             return response()->json([
@@ -567,6 +587,11 @@ class LoadingPlanEntryController extends Controller
             'rows.*.fields.is_manual_expedite' => 'nullable|boolean',
             'rows.*.fields.is_scm'             => 'nullable|boolean',
             'rows.*.lock_version'        => 'nullable|integer',
+            'rows.*.rework_seq'         => 'nullable|integer|min:0',
+            'rows.*.rework_of_entry_id' => 'nullable|integer',
+            'rows.*.package_name'       => 'nullable|string',
+            'rows.*.part_name'          => 'nullable|string',
+            'rows.*.qty'                => 'nullable|integer|min:0',
             'order'                      => 'nullable|array',
             'order.*'                    => 'array',
             'scheduled_date'             => 'required|date',
@@ -593,6 +618,8 @@ class LoadingPlanEntryController extends Controller
             ], 422);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'A row no longer exists.'], 404);
         } catch (\Throwable $e) {
             Log::error('batchSync failed', ['exception' => $e]);
             return response()->json([

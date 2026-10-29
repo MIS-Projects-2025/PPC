@@ -17,14 +17,14 @@ use App\Models\MachineCapacity;
 use App\Services\SchedulerService;
 use App\Services\PackageLocation;
 use App\Services\LoadingPlanPackageCoverage;
-use App\Support\Probe;
 use App\Services\LoadingPlanPartnameIntegrity;
 use App\Services\PackageGroups;
+use App\Services\LoadingPlanService;
+use App\Support\Probe;
 use Illuminate\Support\Facades\Log;
 use App\Helpers\ShiftDay;
 use App\Services\BakeLotService;
 use App\Services\LoadingPlanEntryService;
-use App\Services\LoadingPlanService;
 use App\Models\NonMachine;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\App;
@@ -57,7 +57,7 @@ class LoadingPlanController extends Controller
 
         $props['schedulerHistory'] = Inertia::defer(
             fn() => SchedulerRun::query()
-                ->where('date', $request->get('date', ShiftDay::current()))
+                ->where('date', ShiftDay::current($request->get('location', 'PL1')))
                 ->latest()->limit(20)->get()
         );
         $props['readOnly'] = false;
@@ -244,7 +244,7 @@ class LoadingPlanController extends Controller
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
-            'status'            => $isF3 ? 'ok' : ($wipRows->isEmpty() ? 'not_imported' : 'ok'),
+            'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)
                 ->orderBy('sort_order')
                 ->get()

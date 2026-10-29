@@ -2,19 +2,8 @@ import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
 import { useCallback } from "react";
 
-export function useBulkOperations({
-    dataRows,
-    selectedRows,
-    update,
-    beginWrite,
-    withUpdating,
-    mutate,
-    toast,
-    setIsDirty,
-    clearSelection,
-    date,
-    syncServerFields,
-}) {
+export function useBulkOperations({ dataRows, selectedRows, update, beginWrite, withUpdating, mutate, toast,
+    setIsDirty, clearSelection, date, syncServerFields, store }) {
     const canBulkEdit = (r) =>
         !isBlockRow(r) && (r.entry_id || (r.machine === null && r.bucket_id == null && r.lot_id));
 
@@ -54,7 +43,7 @@ export function useBulkOperations({
                 })
                 .catch((err) => {
                     console.error(`Bulk ${conflictLabel} update failed:`, err);
-                    update(() => prevSnapshot, true);
+                    store.getState().rollback(prevSnapshot);
                     if (err.status === 409) {
                         const conflicts = err.data?.conflicts ?? [];
                         toast?.error?.(
@@ -119,6 +108,7 @@ export function useBulkOperations({
             const blockEntryIds = selected.filter((r) => isBlockRow(r) && r.entry_id).map((r) => r.entry_id);
 
             const prevSnapshot = dataRows;
+            const hadBucket = selected.some((r) => r.bucket_id != null);   // next to prevSnapshot
 
             const affectedMachines = new Set();
 
@@ -151,23 +141,24 @@ export function useBulkOperations({
                 }),
             )
                 .then(({ entries, affected_timings }) => {
-                    const patches = selected
-                        .map((r) => {
-                            const match = r.entry_id
-                                ? entries?.find((e) => e.entry_id === r.entry_id)
-                                : entries?.find((e) => e.lot_id === r.lot_id);
-                            return match ? { dndId: r._dndId, fields: { ...match } } : null;
-                        })
-                        .filter(Boolean);
-                    syncServerFields?.(patches);
+                    const idPatches = [];
+                    const derived = new Map();
+                    selected.forEach((r) => {
+                        const m = r.entry_id ? entries?.find((e) => e.entry_id === r.entry_id)
+                                            : entries?.find((e) => e.lot_id === r.lot_id);
+                        if (!m) return;
+                        idPatches.push({ dndId: r._dndId, fields: { entry_id: m.entry_id, lock_version: m.lock_version } });
+                        derived.set(r._dndId, { capacity_uph: m.capacity_uph, doable: m.doable, doable_status: m.doable_status, accu_time: m.accu_time, qty: m.qty });
+                    });
+                    syncServerFields?.(idPatches);                       // history: ids only
+                    update((prev) => prev.map((r) => (derived.has(r._dndId) ? { ...r, ...derived.get(r._dndId) } : r)), true);
                     applyAffectedTimings(update, affected_timings, date);
+                    // the server released them from their group; undo can't re-park them
+                    if (hadBucket) store.getState().reset(store.getState().present.rows);
                 })
                 .catch((err) => {
                     console.error("Bulk transfer failed:", err);
-                    update(() => {
-                        const restored = prevSnapshot.map((r) => ({ ...r }));
-                        return restored;
-                    }, true);
+                    store.getState().rollback(prevSnapshot);
                     toast?.error?.(err?.message ?? "Couldn't transfer the selected rows — reverted.");
                 });
         },
@@ -180,6 +171,7 @@ export function useBulkOperations({
             return selectedRows.has(r.id) && r.entry_id;
         });
         const entryIds = targets.map((r) => r.entry_id);
+        if (entryIds.length === 0) { clearSelection(); return false; }
         const prevSnapshot = dataRows;
 
         const removable = (r) => isBlockRow(r) || r.is_rework;
@@ -230,7 +222,7 @@ export function useBulkOperations({
             })
             .catch((err) => {
                 console.error("Bulk delete failed:", err);
-                update(() => prevSnapshot, true);
+                store.getState().rollback(prevSnapshot);
                 toast?.error?.("Couldn't delete/unassign — reverted.");
             });
 
