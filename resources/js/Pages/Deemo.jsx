@@ -1720,10 +1720,8 @@ export default function Deemo({
     //     }
     // }
 
-
-    const stickyMachine = useStickyGroupHeader(displayRows, gridRef);
-
-    const stickyOven = useStickyGroupHeader(bakeDisplayRows, gridRef);
+    const stickyMachine = useStickyGroupHeader(displayRows, gridRef, activePackage === FOR_BAKE_TAB);
+    const stickyOven = useStickyGroupHeader(bakeDisplayRows, gridRef, activePackage === FOR_BAKE_TAB);
 
     // Deemo always renders a machine section once it has rows (see
     // displayRows above) — "idle" here just means a real machine from

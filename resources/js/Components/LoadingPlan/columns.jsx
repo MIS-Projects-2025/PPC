@@ -534,6 +534,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         row.__type !== "collapsed" &&
                         row.__type !== "header" &&
                         !(row.machine === null && row.bucket_id != null) &&
+                        !(row.machine === null && col.key !== "remarks") && // unassigned rows: remarks only (matches UNPLACED_EDITABLE)
                         !(isBlockRow(row) && col.key === "remarks"),
                 }),
             };

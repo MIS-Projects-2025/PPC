@@ -2237,13 +2237,23 @@ class LoadingPlanEntryService
     {
         if (empty($ids)) return;
 
+        // Strictly below every real value on the affected dates, so a staged row
+        // can't collide with anything. The unique key is per lane + date, so
+        // scoping by date is enough.
+        $floor = min(
+            0.0,
+            (float) LoadingPlanEntry::query()
+                ->whereIn('scheduled_date', LoadingPlanEntry::whereKey($ids)->select('scheduled_date'))
+                ->min('sequence_order')
+        ) - 1;
+
         $cases = [];
         $bindings = [];
 
         foreach ($ids as $id) {
             $cases[] = "WHEN id = ? THEN ?";
             $bindings[] = $id;
-            $bindings[] = -$id; // use the id as the sequence order temporarily
+            $bindings[] = $floor - $id; // distinct per row, all below any real value
         }
 
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
@@ -2269,7 +2279,7 @@ class LoadingPlanEntryService
         $write();
 
         $now = now();
-        $by = auth()->id();
+        $by = null;
         $rows = [];
 
         foreach (LoadingPlanEntry::whereKey($ids)->get() as $after) {
@@ -2667,6 +2677,12 @@ class LoadingPlanEntryService
         }
         if ($nonMachineId !== $existing->non_machine_id) {
             $fields['non_machine_id'] = $nonMachineId;
+        }
+
+        if ($machineId === null && $nonMachineId === null) {
+            $fields['sequence_order'] = null;
+            $fields['time_start']     = null;
+            $fields['time_end']       = null;
         }
 
         $existing->fill($fields);
