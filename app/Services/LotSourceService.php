@@ -204,12 +204,15 @@ class LotSourceService
     /**
      * For lots being placed for the first time (no entry yet, so no hint):
      * lotId => 'wip'|'f3'. Unknown lots default to 'wip'.
+     * DEPRECATED
      */
     public function sourcesFor(iterable $lotIds, string $date): Collection
     {
-        return $this->find($lotIds, $date)
+        $ids = collect($lotIds)->values();
+
+        return $this->find($ids, $date)
             ->map(fn($w) => $w->source)
-            ->union(collect($lotIds)->mapWithKeys(fn($id) => [$id => self::WIP]));
+            ->union(collect($ids)->mapWithKeys(fn($id) => [$id => self::WIP]));
     }
 
     /** Split child ids must not collide with a WIP lot or any traveler (including deleted ones). */

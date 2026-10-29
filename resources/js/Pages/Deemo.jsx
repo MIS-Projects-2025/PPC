@@ -2011,21 +2011,27 @@ export default function Deemo({
 
     const handleSaveOverride = useCallback((doable) => {
         if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
-
         const row = doableEditRow;
+        if (!row) return Promise.reject(new Error("Row no longer exists"));
+
         return withUpdating(
-            mutate(route("loading-plan.entries.doable", { id: row.entry_id }), {
+            mutate(route("loading-plan.entries.doable", { id: row.entry_id ?? 0 }), {
                 method: "PATCH",
-                body: { doable, lock_version: row.lock_version ?? null },
+                body: {
+                    doable,
+                    lock_version: row.lock_version ?? null,
+                    ...(row.entry_id ? {} : { lot_id: row.lot_id, scheduled_date: date }),
+                },
             }),
         )
             .then((entry) => {
-                syncServerFields?.([doablePatch(entry)]);
+                const patch = doablePatch(entry);
+                syncServerFields?.([{ ...patch, dndId: row._dndId }]); // keep the row's existing key
                 applyAffectedTimings(update, entry.affected_timings, date);
                 setIsDirty(true);
             })
             .catch((err) => { reportError(err, "Couldn't save doable."); throw err; });
-    }, [doableEditRow, beginWrite, withUpdating, mutate, syncServerFields, update, date, setIsDirty, reportError]);
+    }, [doableEditRow, date, beginWrite, withUpdating, mutate, syncServerFields, update, setIsDirty, reportError]);
 
     const applyRecalc = useCallback(({ entries, affected_timings }) => {
         syncServerFields?.((entries ?? []).map(doablePatch));

@@ -33,7 +33,7 @@ class LoadingPlanSplitController extends Controller
                 $data['before_entry_id'] ?? null,
                 $data['after_entry_id'] ?? null,
                 $data['child_lot_id'] ?? null,
-                $request->user()?->name,
+                $request->user()?->name, // TODO, user id insertion not yet implemented, field unknown
             );
             // DD($result);
             return response()->json($result, 201);
@@ -64,7 +64,7 @@ class LoadingPlanSplitController extends Controller
     public function destroy(Request $request, int $splitId): JsonResponse
     {
         try {
-            $result = $this->service->revert($splitId, $request->user()?->name);
+            $result = $this->service->revert($splitId, $request->user()?->name); // TODO, user id insertion not yet implemented, field unknown
 
             return response()->json($result);
         } catch (LoadingPlanDateFinalizedException $e) {
@@ -120,9 +120,10 @@ class LoadingPlanSplitController extends Controller
                 'message' => 'That split does not exist or is not in a state where this can be done.',
             ], 404);
         } catch (\Throwable $e) {
+            Log::error('lot split unrevert failed', ['split_id' => $split, 'message' => $e->getMessage()]);
             return response()->json([
                 'error'   => 'server_error',
-                'message' => 'Could not revert this split.',
+                'message' => 'Could not unrevert this split.',
             ], 500);
         }
     }
