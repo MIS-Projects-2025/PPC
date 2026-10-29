@@ -919,46 +919,46 @@ export default function LotsUpstream({
         [slotPendingLot],
     );
 
-    useEffect(() => {
-        const channel = window.Echo.channel(`lot-updates.${productionLineId}`);
-        // const channel = window.Echo.channel("lot-updates");
+    // useEffect(() => {
+    //     const channel = window.Echo.channel(`lot-updates.${productionLineId}`);
+    //     // const channel = window.Echo.channel("lot-updates");
 
-        channel.listen("LotChanged", (e) => {
-            const action = e?.action ?? "did something on ";
-            const id = e?.id ?? null;
-            const data = e?.data ?? null;
+    //     channel.listen("LotChanged", (e) => {
+    //         const action = e?.action ?? "did something on ";
+    //         const id = e?.id ?? null;
+    //         const data = e?.data ?? null;
 
-            const receivedBy = e?.data?.received_by?.FIRSTNAME ?? "someone";
-            const modifiedBy = e?.data?.modified_by?.FIRSTNAME ?? "someone";
-            const releasedBy = e?.data?.released_by?.FIRSTNAME ?? "someone";
+    //         const receivedBy = e?.data?.received_by?.FIRSTNAME ?? "someone";
+    //         const modifiedBy = e?.data?.modified_by?.FIRSTNAME ?? "someone";
+    //         const releasedBy = e?.data?.released_by?.FIRSTNAME ?? "someone";
 
-            let mutator = "someone";
-            if (action === "created") {
-                mutator = receivedBy;
-                receiveLot({
-                    ...e.data,
-                });
-                incrementTotalReceived();
-                appendRecentUpdate(e.id, mutator, action);
-                setTimeout(() => clearRecentUpdate(e.id), 5000);
-            } else if (action === "updated" || action === "released") {
-                mutator = action === "released" ? releasedBy : modifiedBy;
-                incrementTotalReleased();
-                updateLot(e.id, e.data);
-                appendRecentUpdate(e.id, mutator, action);
-                setTimeout(() => clearRecentUpdate(e.id), 5000);
-            }
+    //         let mutator = "someone";
+    //         if (action === "created") {
+    //             mutator = receivedBy;
+    //             receiveLot({
+    //                 ...e.data,
+    //             });
+    //             incrementTotalReceived();
+    //             appendRecentUpdate(e.id, mutator, action);
+    //             setTimeout(() => clearRecentUpdate(e.id), 5000);
+    //         } else if (action === "updated" || action === "released") {
+    //             mutator = action === "released" ? releasedBy : modifiedBy;
+    //             incrementTotalReleased();
+    //             updateLot(e.id, e.data);
+    //             appendRecentUpdate(e.id, mutator, action);
+    //             setTimeout(() => clearRecentUpdate(e.id), 5000);
+    //         }
 
-            if (!id || !data) return;
+    //         if (!id || !data) return;
 
-            toast.info(`${mutator} ${action} ${data?.lot_id}`, {
-                duration: 10000,
-                position: "top-left",
-            });
-        });
+    //         toast.info(`${mutator} ${action} ${data?.lot_id}`, {
+    //             duration: 10000,
+    //             position: "top-left",
+    //         });
+    //     });
 
-        return () => window.Echo.leave("lot-updates");
-    }, []);
+    //     return () => window.Echo.leave("lot-updates");
+    // }, []);
 
     const goToPage = (page) => {
         router.reload({

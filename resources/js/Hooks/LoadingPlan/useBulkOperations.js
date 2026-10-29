@@ -110,15 +110,11 @@ export function useBulkOperations({ dataRows, selectedRows, update, beginWrite, 
             const prevSnapshot = dataRows;
             const hadBucket = selected.some((r) => r.bucket_id != null);   // next to prevSnapshot
 
-            const affectedMachines = new Set();
-
             if (lotEntryIds.length === 0 && unplannedLotIds.length === 0 && blockEntryIds.length === 0) return;
 
             update((prev) => {
                 const next = prev.map((r) => {
-                    if (!selectedRows.has(r.id)) return { ...r };
-                    affectedMachines.add(r.machine);
-                    affectedMachines.add(targetMachine);
+                    if (!selectedRows.has(r.id)) return r;
                     return { ...r, machine: targetMachine, bucket_id: null, bucket_position: null };
                 });
                 return next;
@@ -177,11 +173,9 @@ export function useBulkOperations({ dataRows, selectedRows, update, beginWrite, 
         const removable = (r) => isBlockRow(r) || r.is_rework;
 
         update((prev) => {
-            const affectedMachines = new Set();
             const next = prev
                 .map((r) => {
                     if (!selectedRows.has(r.id)) return r;
-                    affectedMachines.add(r.machine);
                     if (removable(r)) return r;
                     return {
                         ...r,

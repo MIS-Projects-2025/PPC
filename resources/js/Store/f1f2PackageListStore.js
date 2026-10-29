@@ -28,13 +28,11 @@ export const useF1F2PackagesStore = create((set, get) => {
 					route("api.wip.distinctPackages"),
 					params,
 				);
-				const token = localStorage.getItem("authify-token");
 
 				const response = await fetch(url, {
 					method: "GET",
 					headers: {
 						"Content-Type": "application/json",
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
 					},
 					signal: abortController.signal,
 				});

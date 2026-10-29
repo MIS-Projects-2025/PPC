@@ -19,12 +19,10 @@ export function useDownloadFile() {
 		try {
 			const query = new URLSearchParams(params).toString();
 			const fetchUrl = query ? `${url}?${query}` : url;
-			const token = localStorage.getItem("authify-token");
 
 			const response = await fetch(fetchUrl, {
 				method: "GET",
 				headers: {
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
 				},
 				signal: controller.signal,
 			});

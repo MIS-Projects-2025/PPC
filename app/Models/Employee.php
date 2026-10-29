@@ -6,8 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class Employee extends Model
 {
-  protected $connection = 'masterlist';
-  protected $table = 'employee_masterlist';
+  protected $table = 'employee_directory';
   protected $primaryKey = 'EMPLOYID';
+  public $incrementing = false;
+  protected $keyType = 'string';
   public $timestamps = false;
 }

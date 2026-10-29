@@ -7,6 +7,8 @@ use App\Models\NonMachine;
 use App\Services\LoadingPlanEntryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Facades\Log;
 
 class NonMachineController extends Controller
 {
@@ -48,11 +50,13 @@ class NonMachineController extends Controller
             return response()->json($this->service->deleteNonMachine($nonMachine->id));
         } catch (LoadingPlanDateFinalizedException $e) {
             return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'bad_request', 'message' => $e->getMessage()], 422);
+        } catch (ModelNotFoundException $e) {
+            return response()->json(['error' => 'not_found', 'message' => 'That non-machine no longer exists.'], 404);
         } catch (\Throwable $e) {
-            return response()->json([
-                'error'   => 'bad_request',
-                'message' => $e->getMessage(),
-            ], 422);
+            Log::error('non-machine delete failed', ['id' => $nonMachine->id, 'exception' => $e]);
+            return response()->json(['error' => 'server_error', 'message' => 'Could not delete this non-machine.'], 500);
         }
     }
 

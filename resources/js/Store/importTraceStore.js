@@ -37,11 +37,10 @@ export const useImportTraceStore = create((set, get) => {
 					route("api.import.trace.getAllLatestImports"),
 					params,
 				);
-				const token = localStorage.getItem("authify-token");
 				const response = await fetch(url, {
 					method: "GET",
 					signal: abortController.signal,
-					headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+					headers: {},
 				});
 				const result = await response.json();
 
@@ -70,12 +69,10 @@ export const useImportTraceStore = create((set, get) => {
 					route("api.import.trace.getImport", type),
 					params,
 				);
-				const token = localStorage.getItem("authify-token");
 				const response = await fetch(url, {
 					method: "GET",
 					signal: abortController.signal,
 					headers: {
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
 					},
 				});
 				const result = await response.json();
@@ -104,13 +101,11 @@ export const useImportTraceStore = create((set, get) => {
 			set({ isLoading: true, errorMessage: null });
 
 			try {
-				const token = localStorage.getItem("authify-token");
 				const url = route("api.import.trace.upsertImport", type);
 				const response = await fetch(url, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
 					},
 					body: JSON.stringify(payload),
 					signal: controller.signal,

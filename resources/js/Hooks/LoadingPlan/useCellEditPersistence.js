@@ -42,6 +42,7 @@ export function useCellEditPersistence({
             const dayChanged = field === "time_start" && dayOffset !== (prevRow.time_start_day_offset ?? 0);
             if (value === prevRow[field] && !dayChanged) return;
             if (!beginWrite()) return;
+            if (field === "time_start" && prevRow.machine === null) return;
 
             if (field === "time_start") {
                 if (isNonMachineKey(prevRow.machine)) {

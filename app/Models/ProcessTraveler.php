@@ -40,6 +40,8 @@ class ProcessTraveler extends Model
      * Uses the default (non-trashed) scope on purpose: this feeds the pool of
      * lots that can still be shown/placed. Lookups for lots that already have
      * an entry go through LotSourceService::find(), which uses withTrashed().
+     * 
+     * For now, all f3 will be fetch as unassigned. this is deprecated
      */
     public function scopeForPlanDate(Builder $q, string $date): Builder
     {

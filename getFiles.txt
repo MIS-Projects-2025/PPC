@@ -12,6 +12,7 @@ names=(
   "RecipeService"
   "useSplitMergeOperations"
   "LoadingPlanController"
+  "useStickyGroupHeader"
   "LoadingPlanEntryService"
   "LoadingPlanEntry"
   "LoadingPlanEntryController"
@@ -30,6 +31,7 @@ names=(
   "MergeSplit"
   "useMutation"
   "sync"
+  "useRowHoverInsert"
   "SelectionToolbar"
   "useUndoRedoSync"
   "loadingPlanSchedule"
@@ -59,4 +61,4 @@ while IFS= read -r -d '' file; do
   cat "$file"
   echo '```'
   echo
-done | clip.exe
+done | iconv -f UTF-8 -t UTF-16LE | clip.exe

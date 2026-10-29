@@ -19,13 +19,11 @@ export const useWipStore = create((set, get) => ({
 		set({ isLoading: true, errorMessage: null, abortController: controller });
 
 		try {
-			const token = localStorage.getItem("authify-token");
 
 			const response = await fetch(route("api.wip.today"), {
 				method: "GET",
 				headers: {
 					"Content-Type": "application/json",
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
 				},
 				signal: controller.signal,
 			});
