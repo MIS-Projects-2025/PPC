@@ -63,12 +63,13 @@ class LotSplitService
                 throw new InvalidSplitException("child_qty must be between 1 and " . ($totalQty - 1) . " (total was {$totalQty}).");
             }
 
+            $customChildLotId = $customChildLotId !== null ? trim($customChildLotId) : null;
+            if ($customChildLotId === '') $customChildLotId = null;
+
             $rootLotId = $parentEntry->resolveRootLotId();
             $childLotId = $customChildLotId ?? $this->nextChildLotId($rootLotId);
 
             if ($customChildLotId !== null) {
-                $customChildLotId = trim($customChildLotId);
-
                 if (!preg_match('/^[A-Za-z0-9._-]{1,50}$/', $customChildLotId)) {
                     throw new InvalidSplitException('Lot ID may only contain letters, digits, ".", "_" and "-".');
                 }
@@ -373,13 +374,6 @@ class LotSplitService
                 );
             }
 
-            $parentSplitInfo = [
-                'isParent'  => true,
-                'isChild'   => false,
-                'rootLotId' => $split->root_lot_id,
-                'splitId'   => null,
-            ];
-
             $childSplitInfo = [
                 'isParent'  => false,
                 'isChild'   => true,
@@ -387,7 +381,6 @@ class LotSplitService
                 'splitId'   => $split->id,
             ];
 
-            $this->recalculateParentQty($parentEntry);
             $parentEntry = $parentEntry->fresh();
 
             $parentQuantity = LotQuantity::where('lot_id', $parentEntry->lot_id)
@@ -427,6 +420,7 @@ class LotSplitService
                 'affected_timings' => LoadingPlanEntryService::timingsFor(
                     [$parentEntry->machine_id, $childEntry['machine_id'] ?? null],
                     $date->toDateString(),
+                    [$parentEntry->non_machine_id, NonMachine::idFromKey($split->target_machine)],
                 ),
             ];
         });

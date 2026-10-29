@@ -58,7 +58,7 @@ export function reconcileSplitCreate(rows, result, { parentEntryId }) {
         .concat([{ ...result.child, _dndId: `entry-${result.child.entry_id}` }]);
 }
 
-export function reconcileSplitRevert(rows, result) {
+export function reconcileSplitRevert(rows, result, { childEntryId = null } = {}) {
     const parentId = result.parent ? (result.parent.entry_id ?? result.parent.id) : null;
     const isChild = (r) =>
         childEntryId != null ? r.entry_id === childEntryId

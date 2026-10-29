@@ -23,10 +23,17 @@ class LoadingPlanBucketController extends Controller
     public function store(Request $r)
     {
         $d = $r->validate(['location' => 'required|string|max:10', 'label' => 'required|string|max:64', 'machine' => 'nullable|string']);
+
+        $machineId = null;
+        if (!empty($d['machine'])) {
+            $machineId = QdnMachine::where('machine_num', $d['machine'])->value('id')
+                ?? abort(422, "Machine [{$d['machine']}] does not exist.");
+        }
+
         $b = LoadingPlanBucket::create([
             'location' => $d['location'],
             'label' => $d['label'],
-            'machine_id' => $d['machine'] ? QdnMachine::where('machine_num', $d['machine'])->value('id') : null,
+            'machine_id' => $machineId,
             'sort_order' => (LoadingPlanBucket::where('location', $d['location'])->max('sort_order') ?? 0) + 1,
         ]);
         return response()->json($this->present($b));

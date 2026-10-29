@@ -25,7 +25,7 @@ class LoadingPlanMergeController extends Controller
             $result = $this->mergeService->merge(
                 (int) $data['entry_id_a'],
                 (int) $data['entry_id_b'],
-                $request->user()?->emp_name ?? null,
+                $request->user()?->emp_name ?? null, // TODO, user id insertion not yet implemented, field unknown
             );
 
             return response()->json($result, 201);
@@ -67,10 +67,8 @@ class LoadingPlanMergeController extends Controller
             return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         } catch (InvalidMergeException $e) {                       // moved above Throwable
             return response()->json(['error' => 'invalid_merge', 'message' => $e->getMessage()], 422);
-        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
-            return response()->json(['error' => 'not_found', 'message' => 'That merge does not exist or is already reverted.'], 404);
         } catch (ModelNotFoundException $e) {
-            return response()->json(['error' => 'not_found', 'message' => 'That row no longer exists.'], 404);
+            return response()->json(['error' => 'not_found', 'message' => 'That merge does not exist or is already reverted.'], 404);
         } catch (\Throwable $e) {
             Log::error('lot merge revert failed', ['merge_id' => $merge, 'message' => $e->getMessage()]);
             return response()->json(['error' => 'server_error', 'message' => 'Could not revert this merge.'], 500);

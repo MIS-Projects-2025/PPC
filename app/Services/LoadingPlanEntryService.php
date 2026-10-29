@@ -306,6 +306,15 @@ class LoadingPlanEntryService
         return [...$payload, 'affected_timings' => self::timingsFor($machineIds, $date, $nonMachineIds)];
     }
 
+    private function partNamesFor(iterable $lotIds, string $date, iterable $extra = []): array
+    {
+        $fromQty = LotQuantity::where('scheduled_date', $date)
+            ->whereIn('lot_id', collect($lotIds)->filter()->unique()->values())
+            ->pluck('part_name');
+
+        return collect($extra)->concat($fromQty)->filter()->unique()->values()->all();
+    }
+
     public function bulkMove(array $items, string $targetMachine, ?int $beforeEntryId, ?int $afterEntryId, string $requestDate): array
     {
         return DB::transaction(function () use ($items, $targetMachine, $beforeEntryId, $afterEntryId, $requestDate) {
@@ -453,9 +462,12 @@ class LoadingPlanEntryService
             $this->sources()->ensureLotQuantities($existing, $date);
 
             $wip = $this->sources()->forEntries($existing);
+            $partNames = $this->partNamesFor(
+                $movers->pluck('lot_id'),
+                $date,
+                $wip->filter()->pluck('Part_Name')->concat($newWip->pluck('Part_Name')),
+            );
 
-            $partNames = $wip->filter()->pluck('Part_Name')
-                ->concat($newWip->pluck('Part_Name'))->filter()->unique()->values()->all();
             $calc->loadPackageList($partNames);
 
             foreach ($movers as $m) {
@@ -865,6 +877,8 @@ class LoadingPlanEntryService
                     abort(422, 'lot_id and scheduled_date are required to create an entry for an unassigned WIP.');
                 }
 
+                $this->assertDateNotFinalized($scheduledDate);
+
                 $wipForNew = $this->sources()->find([$lotId], $scheduledDate)->get($lotId)
                     ?? throw new ModelNotFoundException();
 
@@ -1147,6 +1161,10 @@ class LoadingPlanEntryService
             $plannedLotIds = $lotEntries->where('rework_seq', 0)->pluck('lot_id')->all();
             $unplannedLotIds = array_values(array_diff($lotIds, $plannedLotIds));
 
+            if (!empty($unplannedLotIds)) {
+                $this->assertDateNotFinalized($date);
+            }
+
             $requestOrder = array_flip([...$entryIds, ...$blockEntryIds]);
             $allEntries = $lotEntries->concat($blockEntries)
                 ->sortBy(fn($e) => $requestOrder[$e->id] ?? PHP_INT_MAX)
@@ -1212,8 +1230,11 @@ class LoadingPlanEntryService
             $wip = $this->sources()->forEntries($allEntries);
             $newWip = $unplannedLotIds ? $this->sources()->find($unplannedLotIds, $date) : collect();
 
-            $partNames = $wip->filter()->pluck('Part_Name')
-                ->concat($newWip->pluck('Part_Name'))->filter()->unique()->values()->all();
+            $partNames = $this->partNamesFor(
+                $allEntries->pluck('lot_id'),
+                $date,
+                $wip->filter()->pluck('Part_Name')->concat($newWip->pluck('Part_Name')),
+            );
             $calculator->loadPackageList($partNames);
 
             foreach ($movers as $entry) {
@@ -1805,6 +1826,9 @@ class LoadingPlanEntryService
 
             $entryIds = collect($updates)->pluck('entry_id')->unique()->values()->all();
             $existingEntries = LoadingPlanEntry::whereIn('id', $entryIds)->get()->keyBy('id');
+            if ($existingEntries->count() !== count($entryIds)) {
+                throw new \Illuminate\Database\Eloquent\ModelNotFoundException();
+            }
             $date = $this->assertConsistentDates($existingEntries);
 
             $machineIds = $existingEntries->pluck('machine_id')->filter()->unique()->sort()->values()->all();
@@ -2488,7 +2512,9 @@ class LoadingPlanEntryService
             $this->releaseFromBuckets([$lotId], $date);
         }
         $fields = $row['fields'] ?? [];
-        [$machineId, $nonMachineId] = $row['machine'] !== null ? $this->resolveTarget($row['machine']) : [null, null];
+
+        $machine = $row['machine'] ?? null;
+        [$machineId, $nonMachineId] = $machine !== null ? $this->resolveTarget($machine) : [null, null];
 
         $parent  = ($reworkSeq > 0 && !empty($row['rework_of_entry_id']))
             ? LoadingPlanEntry::find($row['rework_of_entry_id']) : null;
@@ -2542,7 +2568,8 @@ class LoadingPlanEntryService
     private function createBlockRow(array $row, string $date)
     {
         $fields = $row['fields'] ?? [];
-        [$machineId, $nonMachineId] = $row['machine'] !== null ? $this->resolveTarget($row['machine']) : [null, null];
+        $machine = $row['machine'] ?? null;
+        [$machineId, $nonMachineId] = $machine !== null ? $this->resolveTarget($machine) : [null, null];
 
         $entry = LoadingPlanEntry::create([
             'entry_type'     => 'block',
@@ -2629,7 +2656,8 @@ class LoadingPlanEntryService
         $fields = $row['fields'] ?? [];
         $this->assertSupportedEditField($fields);
 
-        [$machineId, $nonMachineId] = $row['machine'] !== null ? $this->resolveTarget($row['machine']) : [null, null];
+        $machine = $row['machine'] ?? null;
+        [$machineId, $nonMachineId] = $machine !== null ? $this->resolveTarget($machine) : [null, null];
         if ($machineId !== $existing->machine_id) {
             $fields['machine_id'] = $machineId;
         }

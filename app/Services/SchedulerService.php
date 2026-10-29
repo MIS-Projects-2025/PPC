@@ -719,7 +719,7 @@ class SchedulerService
                 continue;
             }
 
-            if (!$item['lot_id']) {
+            if (empty($item['lot_id'])) {
                 throw new Exception("The lot to be scheduled does not have lot_id");
             }
 
@@ -728,7 +728,7 @@ class SchedulerService
                 'Lot_Id'       => $item['lot_id'],
                 'Package_Name' => $item['package_name'] ?? null,
                 'Qty'          => $item['qty'] ?? null,
-                'Lead_Count'   => $packageInfo->lead_count,
+                'Lead_Count'   => is_numeric($packageInfo->lead_count) ? (int) $packageInfo->lead_count : null,
                 'Body_Size'    => $packageInfo->dimensions,
                 // real PartName columns are devicename/focus_grp/allocation
                 'Focus_Group'  => $packageInfo->focus_grp,
@@ -1884,7 +1884,7 @@ class SchedulerService
                 'Package_Name' => $entry->package_name,
                 'Qty' => $lotQty->effectiveQty() ?? $lotQty->qty_base,
                 'QtyBase'      => $lotQty->qty_base,
-                'Lead_Count' => $partInfo->lead_count,
+                'Lead_Count' => is_numeric($partInfo->lead_count) ? (int) $partInfo->lead_count : null,
                 'Body_Size' => $partInfo->dimensions,
                 'Focus_Group' => $partInfo->focus_grp,
                 'is_auto_part' => (bool) $partInfo->is_auto_part,
