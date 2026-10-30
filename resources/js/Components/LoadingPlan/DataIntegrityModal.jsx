@@ -40,6 +40,14 @@ const TAB_BADGE_TONES = {
     error: "badge-error",
 };
 
+function TabDescription({ text }) {
+    return (
+        <p className="shrink-0 text-sm text-base-content/70 mb-3 px-1">
+            {text}
+        </p>
+    );
+}
+
 function getReasonInfo(reason) {
     return (
         REASON_INFO[reason] ?? {
@@ -463,9 +471,7 @@ function RecipeIssuesTable({ rows }) {
                                     {row.Lot_Id}
                                 </td>
                                 <td>{row.Part_Name}</td>
-                                <td
-                                    className={`bg-${info.tone} text-center p-0`}
-                                >
+                                <td className={`${info.cell} text-center p-0`}>
                                     <span>{info.label}</span>
                                 </td>
                                 <td className="text-xs">

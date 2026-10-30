@@ -2,6 +2,7 @@ import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import { forwardRef } from "react";
 import { GoGitMerge } from "react-icons/go";
 import LotEndpoint from "./LotEndpoint";
+import { useContext } from "react";
 
 function formatDate(dateStr) {
     if (!dateStr) return "—";
