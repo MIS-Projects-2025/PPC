@@ -207,6 +207,7 @@ export function useDragReorder({
             const base = store.getState().present.rows;
             const next = build(base);
             if (next === base) return;
+            if (pending && pending.toMachine === null && !pending.isTransfer) return;
             update(() => next);
 
             if (movedRows.length === 0) return;
@@ -322,7 +323,12 @@ export function useDragReorder({
             if (dragged?.rework_seq > 0 && toUnassigned) {
                 toast.error("Rework rows cannot be unassigned — delete the row instead.")
                 return;
-            }            
+            }
+            
+            if (dragged && isBlockRow(dragged) && toUnassigned) {
+                toast?.error?.("Time blocks can't be unassigned. Delete the row instead.");
+                return;
+            }
 
             let pending = null;
 
@@ -409,6 +415,7 @@ export function useDragReorder({
             const base = store.getState().present.rows;
             const next = build(base);
             if (next === base) return;     // no-op drop
+            if (pending && pending.toMachine === null && !pending.isTransfer) return;
             update(() => next);
 
             setIsDirty(true);

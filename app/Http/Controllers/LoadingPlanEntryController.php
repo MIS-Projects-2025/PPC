@@ -101,18 +101,22 @@ class LoadingPlanEntryController extends Controller
         }
 
         $lockVersion = $data['lock_version'] ?? null;
-
+        
         // Unassigned isn't a real machine — order doesn't apply there, so this
         // is an unassign, not a transfer. deleteEntry() (non-force) already
         // does exactly that: clears machine/sequence_order, keeps the row.
         if ($data['target_machine'] === null) {
             if (empty($data['entry_id'])) {
                 return response()->json(['error' => 'bad_request', 'message' => 'This lot has no entry to unassign.'], 422);
-            }
+                }
             try {
                 $entry = $this->service->resolveEntry((int) $data['entry_id']);
                 if ($entry->rework_seq > 0) {
                     return response()->json(['error' => 'bad_request', 'message' => 'Rework rows cannot be unassigned — delete the row instead.'], 422);
+                }
+                if ($entry->entry_type === 'block') {
+                    return response()->json(['error' => 'bad_request',
+                        'message' => "Time blocks can't be unassigned. Delete the row instead."], 422);
                 }
                 $timings = $this->service->deleteEntry($entry->id, $entry->getMachineName(), false, $lockVersion);
                 return response()->json([...$entry->fresh()->toArray(), 'affected_timings' => $timings]);
@@ -168,7 +172,7 @@ class LoadingPlanEntryController extends Controller
             $updated = $this->service->bulkTransfer(
                 $data['lot_ids'] ?? [],
                 $data['block_entry_ids'] ?? [],
-                $data['target_machine'],
+                $data['target_machine'] ?? null,
                 $data['scheduled_date'],
                 $data['entry_ids'] ?? [],
                 $data['locks'] ?? []
@@ -224,7 +228,7 @@ class LoadingPlanEntryController extends Controller
     public function createManualLot(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'machine'         => 'required|string',
+            'machine' => 'present|nullable|string',
             'scheduled_date'  => 'required|date',
             'fields.part_name'    => 'nullable|string|max:100',
             'fields.package_name' => 'nullable|string|max:50',

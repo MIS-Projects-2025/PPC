@@ -1773,6 +1773,7 @@ class SchedulerService
         $committed = LoadingPlanEntry::query()
             ->whereIn('machine_id', $machineIds)
             ->where('entry_type', 'lot')
+            ->where('loading_plan_entries.rework_seq', 0)
             ->whereBetween('time_start', [$windowStart, $windowEnd])
             ->join('lot_quantities', function ($join) {
                 $join->on('lot_quantities.lot_id', '=', 'loading_plan_entries.lot_id')
@@ -2766,7 +2767,9 @@ class SchedulerService
                 })
                 ->values();
 
-            $this->preloadReferenceData($pool);
+            $this->preloadReferenceData(
+                $pool->concat(collect($this->lastPlannedLotByMachine)->values())
+            );
             $this->preloadPackageList($pool);
 
             $logTimer('Merge existingLots + pickupLots', $start, [

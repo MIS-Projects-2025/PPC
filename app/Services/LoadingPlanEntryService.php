@@ -71,7 +71,7 @@ class LoadingPlanEntryService
             return $entry;
         }
 
-        $wip = $this->sources()->find([$lotId], $date)->get($lotId)
+        $wip ??= $this->sources()->find([$lotId], $date)->get($lotId)
             ?? throw new ModelNotFoundException();
 
         try {
@@ -385,33 +385,8 @@ class LoadingPlanEntryService
             $newWip = collect();
             if (!empty($newLotIds)) {
                 $newWip = $this->sources()->find($newLotIds, $date);
-
                 foreach ($newLotIds as $lotId) {
-                    $wipItem = $newWip->get($lotId);
-                    // newlot can still be present because user edit their status/remarks/tag etc  
-                    $created[$lotId] = LoadingPlanEntry::where('lot_id', $lotId)
-                        ->where('scheduled_date', $date)
-                        ->where('rework_seq', 0)
-                        ->lockForUpdate()
-                        ->first()
-                        ?? LoadingPlanEntry::create([
-                            'entry_type'     => 'lot',
-                            'source'         => $wipItem?->source ?? 'wip',
-                            'lot_id'         => $lotId,
-                            'scheduled_date' => $date,
-                            'machine_id'     => null,
-                            'package_name'   => $wipItem?->Package_Name,
-                            'sequence_order' => null,
-                            'rework_seq'     => 0,
-                            'lock_version'   => 1,
-                        ]);
-
-                    $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
-                    $lot->part_name = $wipItem?->Part_Name ?? '';
-                    $lot->qty_base  = $wipItem?->Qty ?? 0;
-                    if ($lot->isDirty()) {
-                        $lot->save();
-                    }
+                    $created[$lotId] = $this->findOrCreateUnplacedEntry($lotId, $date, $newWip->get($lotId));
                 }
             }
 
@@ -1265,7 +1240,7 @@ class LoadingPlanEntryService
 
 
             foreach ($unplannedLotIds as $lotId) {
-                $wipItem = $newWip->get($lotId);
+                $wipItem = $newWip->get($lotId) ?? throw new ModelNotFoundException();
 
                 $entry = LoadingPlanEntry::create([
                     'entry_type'     => 'lot',
@@ -1285,10 +1260,9 @@ class LoadingPlanEntryService
                     'rework_seq'     => 0
                 ]);
 
-                $lot->part_name = $wipItem?->Part_Name ?? '';
-                $lot->qty_base  = $wipItem?->Qty ?? 0;
-
-                if ($lot->isDirty()) {
+                if (!$lot->exists) {                       // never clobber an existing row
+                    $lot->part_name = $wipItem->Part_Name ?? '';
+                    $lot->qty_base  = $wipItem->Qty ?? 0;
                     $lot->save();
                 }
 
@@ -1926,18 +1900,11 @@ class LoadingPlanEntryService
     }
 
     /** Batch version — returns just the ids, order not guaranteed to match input. */
-    private function resolveMachineIds(array $machineNames): array
+    private function resolveMachineIds(array $machines): array
     {
-        if (empty($machineNames)) {
-            return [];
-        }
-
-        return collect($machineNames)
-            ->map(fn($name) => $this->machineIdByNum[$name] ?? null)
-            ->filter()
-            ->unique()
-            ->values()
-            ->all();
+        return collect($machines)
+            ->map(fn($m) => $this->resolveMachineId($m))
+            ->filter()->unique()->values()->all();
     }
 
     /** Given a target sequence_order that may no longer be free, find the
@@ -3425,6 +3392,8 @@ class LoadingPlanEntryService
                     $entryInsertRows[] = [
                         'entry_type' => 'block',
                         'lot_id' => null,
+                        'source'     => 'wip',
+                        'rework_seq' => 0,
                         'package_name' => null,
                         'scheduled_date' => $date,
                         'machine_id' => $machineId,
@@ -3453,6 +3422,8 @@ class LoadingPlanEntryService
                     $entryInsertRows[] = [
                         'entry_type' => 'lot',
                         'lot_id' => $row['lot_id'],
+                        'source'     => 'wip',
+                        'rework_seq' => 0,
                         'package_name' => $row['package_name'],
                         'scheduled_date' => $date,
                         'machine_id' => $machineId,

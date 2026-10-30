@@ -185,6 +185,21 @@ class LotSplitService
 
             $this->assertDateNotFinalized($split->scheduled_date->toDateString());
             $this->assertNotInvolvedInMerge($split->child_lot_id, $split->scheduled_date->toDateString());
+            $day = $split->scheduled_date->toDateString();
+
+            if (LotSplit::active()->where('parent_lot_id', $split->child_lot_id)
+                    ->where('scheduled_date', $day)->exists()) {
+                throw new InvalidSplitException(
+                    "Lot [{$split->child_lot_id}] was split further — revert those splits first."
+                );
+            }
+
+            if (\App\Models\LotMerge::active()->where('source_lot_id', $split->parent_lot_id)
+                    ->where('scheduled_date', $day)->exists()) {
+                throw new InvalidSplitException(
+                    "Lot [{$split->parent_lot_id}] was merged into another lot — revert that merge first."
+                );
+            }
 
             $childEntry = LoadingPlanEntry::where('lot_id', $split->child_lot_id)
                 ->where('scheduled_date', $split->scheduled_date)

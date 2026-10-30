@@ -217,19 +217,18 @@ const READONLY_STRIP_KEYS = new Set(["select-row"]);
 // already inert in read-only mode because DndContext is mounted with
 // sensors={[]}, so no drag can ever be initiated; nothing needs removing.
 
+const HISTORY_FIELDS = [
+    "entry_id", "lock_version",
+    "doable", "doable_status", "doable_overridden",
+    "doable_recipe_source", "part_missing_from_list",
+];
+const PRESENT_FIELDS = ["capacity_uph", "accu_time"];
+const pickKeys = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
+
 const doablePatch = (e) => ({
     dndId: `entry-${e.entry_id}`,
-    fields: {
-        entry_id: e.entry_id,
-        lock_version: e.lock_version,
-        doable: e.doable,
-        doable_status: e.doable_status,
-        doable_overridden: e.doable_overridden,
-        doable_recipe_source: e.doable_recipe_source,
-        part_missing_from_list: e.part_missing_from_list,
-        capacity_uph: e.capacity_uph,
-        accu_time: e.accu_time,
-    },
+    history: pickKeys(e, HISTORY_FIELDS),
+    present: pickKeys(e, PRESENT_FIELDS),
 });
 
 function toReadOnlyColumns(columns) {
@@ -1316,7 +1315,7 @@ export default function Deemo({
         const result = {};
         dataRows.forEach((r) => {
             if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
-            if (isBlockRow(r) || isParked(r)) return;
+            if (isBlockRow(r) || isParked(r) || r.is_rework) return;
             if (!rowInActiveTab(r)) return;
             result[r.machine] = (result[r.machine] || 0) + (Number(r.doable) || 0);
         });
@@ -2008,6 +2007,12 @@ export default function Deemo({
         else toast?.error?.(err?.data?.message ?? err?.message ?? fallback);
     }, [toast]);
 
+    const applyDoablePatches = useCallback((patches) => {
+        syncServerFields?.(patches.map(({ dndId, history }) => ({ dndId, fields: history })));
+        const byId = new Map(patches.map((p) => [p.dndId, p.present]));
+        update((prev) => prev.map((r) => (byId.has(r._dndId) ? { ...r, ...byId.get(r._dndId) } : r)), true);
+    }, [syncServerFields, update]);
+
     const handleSaveOverride = useCallback((doable) => {
         if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
         const row = doableEditRow;
@@ -2024,8 +2029,8 @@ export default function Deemo({
             }),
         )
             .then((entry) => {
-                const patch = doablePatch(entry);
-                syncServerFields?.([{ ...patch, dndId: row._dndId }]); // keep the row's existing key
+                const patch = { ...doablePatch(entry), dndId: row._dndId };
+                applyDoablePatches([patch]);
                 applyAffectedTimings(update, entry.affected_timings, date);
                 setIsDirty(true);
             })
@@ -2033,10 +2038,16 @@ export default function Deemo({
     }, [doableEditRow, date, beginWrite, withUpdating, mutate, syncServerFields, update, setIsDirty, reportError]);
 
     const applyRecalc = useCallback(({ entries, affected_timings }) => {
-        syncServerFields?.((entries ?? []).map(doablePatch));
+        const rows = useLoadingPlanStore.getState().present.rows;
+        const dndIdFor = (e) =>
+            rows.find((r) => r.entry_id === e.entry_id)?._dndId ?? `entry-${e.entry_id}`;
+
+        applyDoablePatches(
+            (entries ?? []).map((e) => ({ ...doablePatch(e), dndId: dndIdFor(e) })),
+        );
         applyAffectedTimings(update, affected_timings, date);
         setIsDirty(true);
-    }, [syncServerFields, update, date, setIsDirty]);
+    }, [applyDoablePatches, update, date, setIsDirty]);
 
     const handleSaveRecipe = useCallback((partName, recipe, { source = "wip", lotId = null } = {}) => {
         if (!beginWrite()) return Promise.reject(new Error("Still saving…"));
@@ -2717,7 +2728,10 @@ export default function Deemo({
                             ref={addEntryModalRef}
                             placement={placementOfNewEntry}
                             anchorRow={lastHoveredRow}
-                            // onClose={handleCloseAddEntry}
+                            onClose={() => {
+                                addEntryModalRef.current?.close();
+                                setPlacementOfNewEntry(null);
+                            }}
                             // machine={machine}
                             date={date}
                             packageGroups={packageGroups}
