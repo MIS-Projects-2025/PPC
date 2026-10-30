@@ -1,4 +1,5 @@
 import { TableInteractionContext } from "@/Components/LoadingPlan/MachineHeaderBar";
+import clsx from "clsx";
 
 export function OvenHeaderBar({ row, rowCount, isCollapsed, onToggleCollapse }) {
     const ovenLabel = row?.ovenLabel;
