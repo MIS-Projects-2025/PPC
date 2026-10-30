@@ -261,16 +261,6 @@ export function TabBadge({ count, tone }) {
     );
 }
 
-export function TabBadge({ count, tone }) {
-    if (count === undefined)
-        return <span className="loading loading-dots loading-xs" />;
-    if (count === 0)
-        return (
-            <span className="badge badge-success badge-sm gap-1">✓ valid</span>
-        );
-    return <span className={`badge badge-${tone} badge-sm`}>{count}</span>;
-}
-
 function TabLoading() {
     return (
         <div className="flex items-center justify-center h-full">
