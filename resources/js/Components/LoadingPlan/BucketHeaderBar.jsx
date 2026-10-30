@@ -4,14 +4,14 @@ import clsx from "clsx";
 import { useContext } from "react";
 
 export function BucketHeaderBar({ row, onToggleCollapse, isOver, innerRef }) {
-    const { onRenameBucket, onDeleteBucket } = useContext(TableInteractionContext) ?? {};
+    const { readOnly, onRenameBucket, onDeleteBucket } = useContext(TableInteractionContext) ?? {};
     return (
         <div ref={innerRef} className={clsx(
             "w-full h-full flex items-center bg-info/10",
             row.nested && "pl-6",
             isOver && "outline-2 outline-dashed outline-[#7dd3fc] outline-offset-[-2px]",
         )}>
-            <div className="sticky left-9 flex items-center gap-2 h-full">
+            <div className={clsx("sticky flex gap-2 h-full items-center", readOnly ? "left-0" : "left-9")}>
                 <button type="button" className="btn btn-ghost btn-2xs px-1"
                     onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(row.collapseKey); }}>
                     {row.__isCollapsed ? "►" : "▼"}

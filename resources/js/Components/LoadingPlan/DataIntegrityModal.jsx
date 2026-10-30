@@ -2,6 +2,54 @@ import generateId from "@/Utils/generateId";
 import { Deferred } from "@inertiajs/react";
 import { useState } from "react";
 
+const REASON_INFO = {
+    no_package_list_entry: {
+        label: "no master record",
+        badge: "badge-error",
+        cell: "bg-error",
+    },
+    field_mismatch: {
+        label: "field mismatch",
+        badge: "badge-warning",
+        cell: "bg-warning",
+    },
+    unknown_package: {
+        label: "missing",
+        badge: "badge-secondary",
+        cell: "bg-secondary",
+    },
+    no_recipe: {
+        label: "no recipe",
+        badge: "badge-accent",
+        cell: "bg-accent",
+    },
+    qty_below_recipe: {
+        label: "qty below recipe",
+        badge: "badge-info",
+        cell: "bg-info",
+    },
+    no_commit: {
+        label: "no commit",
+        badge: "badge-ghost",
+        cell: "bg-base-300",
+    },
+};
+
+const TAB_BADGE_TONES = {
+    warning: "badge-warning",
+    error: "badge-error",
+};
+
+function getReasonInfo(reason) {
+    return (
+        REASON_INFO[reason] ?? {
+            label: reason,
+            badge: "badge-ghost",
+            cell: "bg-base-300",
+        }
+    );
+}
+
 const TAB_INFO = {
     overview: {
         label: "Overview",
@@ -24,20 +72,6 @@ const TAB_INFO = {
             "Parts with no matching package list entry, no recipe assigned, a committed quantity below the recipe minimum, or no commit recorded yet.",
     },
 };
-
-// Every distinct issue reason gets its own tone so nothing visually collides.
-const REASON_INFO = {
-    no_package_list_entry: { label: "no master record", tone: "error" },
-    field_mismatch: { label: "field mismatch", tone: "warning" },
-    unknown_package: { label: "missing", tone: "secondary" },
-    no_recipe: { label: "no recipe", tone: "accent" },
-    qty_below_recipe: { label: "qty below recipe", tone: "info" },
-    no_commit: { label: "no commit", tone: "ghost" },
-};
-
-function getReasonInfo(reason) {
-    return REASON_INFO[reason] ?? { label: reason, tone: "ghost" };
-}
 
 function countReasons(rows, getReason) {
     const counts = {};
@@ -213,11 +247,17 @@ function DataIntegrityModal({
     );
 }
 
-function TabDescription({ text }) {
+export function TabBadge({ count, tone }) {
+    if (count === undefined)
+        return <span className="loading loading-dots loading-xs" />;
+    if (count === 0)
+        return (
+            <span className="badge badge-success badge-sm gap-1">✓ valid</span>
+        );
     return (
-        <div className="alert alert-info alert-soft text-xs py-2 mb-3 shrink-0">
-            <span>{text}</span>
-        </div>
+        <span className={`badge ${TAB_BADGE_TONES[tone]} badge-sm`}>
+            {count}
+        </span>
     );
 }
 
@@ -317,10 +357,7 @@ function OverviewSummary({
                                 ([reason, count]) => {
                                     const info = getReasonInfo(reason);
                                     return (
-                                        <span
-                                            key={reason}
-                                            className={`badge badge-${info.tone} badge-sm gap-1`}
-                                        >
+                                        <span key={reason} className={`badge ${info.badge} badge-sm gap-1`}>
                                             {info.label}: {count}
                                         </span>
                                     );
@@ -359,9 +396,7 @@ function MismatchesTable({ rows }) {
                                     {row.Lot_Id}
                                 </td>
                                 <td>{row.Part_Name}</td>
-                                <td
-                                    className={`bg-${info.tone} text-center p-0`}
-                                >
+                                <td className={`${info.cell} text-center p-0`}>
                                     <span>{info.label}</span>
                                 </td>
                                 <td>
@@ -405,9 +440,7 @@ function UnknownPackagesList({ packages }) {
         <ul className="list">
             {packages.map((pkg) => (
                 <li key={pkg} className="list-row items-center">
-                    <span className={`badge badge-${info.tone} badge-sm`}>
-                        {info.label}
-                    </span>
+                    <span className={`badge ${info.badge} badge-sm`}>{info.label}</span>
                     <span className="font-mono text-sm">{pkg}</span>
                 </li>
             ))}

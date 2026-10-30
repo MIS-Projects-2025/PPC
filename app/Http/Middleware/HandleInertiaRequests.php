@@ -39,8 +39,9 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
-            'appName' => config('app.name'), // This pulls from .env
+            'appName' => config('app.name'),
             'display_name' => env('APP_DISPLAY_NAME', ''),
+            'readOnly' => (bool) config('app.read_only'),
         ];
     }
 }

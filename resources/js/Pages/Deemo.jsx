@@ -16,6 +16,7 @@ import EntryHistoryModal from "@/Components/LoadingPlan/EntryHistoryModal";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
 import { MachineHeaderBar, TableInteractionContext } from "@/Components/LoadingPlan/MachineHeaderBar";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
+import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout";
 import NonMachinesModal, { NON_MACHINES_MODAL_ID } from "@/Components/LoadingPlan/NonMachinesModal";
 import { OvenHeaderCell } from "@/Components/LoadingPlan/OvenHeaderCell";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
@@ -823,7 +824,6 @@ export default function Deemo({
                 setStatusMenu(null);
                 return
             };
-            if (readOnly) return;
 
             const normalizedStatus = newStatus === "NONE" ? null : newStatus;
             const entryId = statusMenu.entryId;
@@ -1115,7 +1115,7 @@ export default function Deemo({
     }, [readOnly, writesLocked]);
 
     const rawColumns = useMemo(
-        () => makeColumns(writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly ? undefined : onEditDoable),
+        () => makeColumns(writesLocked, readOnly ? undefined : handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly ? undefined : onEditDoable, readOnly),
         [writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly, onEditDoable],
     );
     const columns = useMemo(
@@ -1921,6 +1921,7 @@ export default function Deemo({
 
     const tableInteractionValue = useMemo(
         () => ({
+            readOnly,
             serverMachines,
             machineCapacity,
             machineTotalDoable,
@@ -2263,9 +2264,11 @@ export default function Deemo({
                             <div className="w-px h-4 bg-base-300 mx-1" />
                             
                             <div className="flex gap-2">
-                                <Link href="/loading-plan/settings" className="btn btn-sm">
-                                    <BsGear size={16} /> <span>Settings</span>
-                                </Link>
+                                {!readOnly && (
+                                    <Link href="/loading-plan/settings" className="btn btn-sm">
+                                        <BsGear size={16} /> <span>Settings</span>
+                                    </Link>
+                                )}
 
                                 <button className="btn btn-sm" onClick={handleExport} disabled={isExporting}>
                                     {isExporting ? "Exporting…" : "Export to Excel"}
@@ -2508,7 +2511,12 @@ export default function Deemo({
                                             height: ROW_HEIGHT,
                                         }}
                                     >
-                                        <div className="absolute left-0 right-0 pl-9 h-full w-full flex items-center">
+                                        <div
+                                            className={clsx(
+                                                "absolute left-0 right-0 h-full w-full flex items-center justify-between",
+                                                readOnly ? "pl-1" : "pl-9",
+                                            )}
+                                        >
                                             <OvenHeaderCell
                                                 row={stickyOven}
                                                 rowCount={stickyOven.__rowCount}
@@ -2560,21 +2568,23 @@ export default function Deemo({
 
                                     {hoveredRow && (
                                         <div onPointerLeave={handleButtonsPointerLeave}>
-                                            <RowInsertButtons
-                                                isHidden={!isInsertRowButtonVisible}
-                                                anchorElement={hoveredRow.element}
-                                                buttonsRef={buttonsRef}
-                                                onInsertAbove={() => {
-                                                    setPlacementOfNewEntry("above");
-                                                    setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
-                                                    addEntryModalRef.current?.showModal()
-                                                }}
-                                                onInsertBelow={() => {
-                                                    setPlacementOfNewEntry("below");
-                                                    setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
-                                                    addEntryModalRef.current?.showModal()
-                                                }}
-                                            />
+                                            {!readOnly && (
+                                                <RowInsertButtons
+                                                    isHidden={!isInsertRowButtonVisible}
+                                                    anchorElement={hoveredRow.element}
+                                                    buttonsRef={buttonsRef}
+                                                    onInsertAbove={() => {
+                                                        setPlacementOfNewEntry("above");
+                                                        setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
+                                                        addEntryModalRef.current?.showModal()
+                                                    }}
+                                                    onInsertBelow={() => {
+                                                        setPlacementOfNewEntry("below");
+                                                        setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
+                                                        addEntryModalRef.current?.showModal()
+                                                    }}
+                                                />
+                                            )}
 
                                             <RowHistoryButton
                                                 isHidden={!isHistoryButtonVisible}
@@ -2607,7 +2617,12 @@ export default function Deemo({
                                                 height: ROW_HEIGHT,
                                             }}
                                         >
-                                            <div className="absolute left-0 right-0 pl-9 h-full w-full flex items-center justify-between">
+                                            <div
+                                                className={clsx(
+                                                    "absolute left-0 right-0 h-full w-full flex items-center justify-between",
+                                                    readOnly ? "pl-1" : "pl-9",
+                                                )}
+                                            >
                                                 <div className="flex items-center h-full gap-2 min-w-0">
                                                     {stickyMachine.__headerKind === "bucket" ? (
                                                         <BucketHeaderBar row={stickyMachine} onToggleCollapse={toggleMachineCollapsed} />
@@ -3300,3 +3315,7 @@ export default function Deemo({
         </div>
     );
 }
+
+Deemo.layout = (page) =>
+    page.props.readOnly ? <div className="p-4">{page}</div> : 
+    <AuthenticatedLayout>{page}</AuthenticatedLayout>;

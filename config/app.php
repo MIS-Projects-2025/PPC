@@ -28,6 +28,8 @@ return [
 
     'env' => env('APP_ENV', 'production'),
 
+    'read_only' => env('APP_READ_ONLY', false),
+
     /*
     |--------------------------------------------------------------------------
     | Application Debug Mode
@@ -38,6 +40,8 @@ return [
     | application. If disabled, a simple generic error page is shown.
     |
     */
+
+    'display_name' => env('APP_DISPLAY_NAME', ''),
 
     'debug' => (bool) env('APP_DEBUG', false),
 

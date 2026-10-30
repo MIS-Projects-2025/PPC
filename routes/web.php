@@ -3,7 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
-use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware};
+use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware, SessionMiddleware};
 use App\Http\Controllers\{
     LoadingPlanController,
     LoadingPlanEntryHistoryController,
@@ -42,7 +42,6 @@ use App\Http\Controllers\{
     RackSlotController,
 };
 use App\Http\Controllers\General\{ProfileController};
-
 
 $app_name = env('APP_NAME', '');
 Route::redirect('/', "/$app_name");

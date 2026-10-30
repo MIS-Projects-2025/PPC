@@ -1,9 +1,13 @@
+import { TableInteractionContext } from "@/Components/LoadingPlan/MachineHeaderBar";
+
 export function OvenHeaderBar({ row, rowCount, isCollapsed, onToggleCollapse }) {
     const ovenLabel = row?.ovenLabel;
 
+    const { readOnly } = useContext(TableInteractionContext) ?? {};
+
     return (
         <div className="w-full h-full border-opposite-100 font-semibold flex items-center box-border">
-            <div className="sticky left-9 flex gap-2 h-full items-center">
+            <div className={clsx("sticky flex gap-2 h-full items-center", readOnly ? "left-0" : "left-9")}>
                 <div className="w-84 h-full font-extrabold whitespace-nowrap flex items-center gap-2">
                     <button
                         type="button"

@@ -10,6 +10,10 @@ class SessionMiddleware
 {
     public function handle(Request $request, Closure $next)
     {
+        if (config('app.read_only')) {
+            return $next($request);
+        }
+
         if ($request->routeIs('login', 'login.store')) {
             return $next($request);
         }

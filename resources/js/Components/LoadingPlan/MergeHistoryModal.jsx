@@ -1,3 +1,4 @@
+import { TableActionsContext } from "@/Components/LoadingPlan/columns";
 import { forwardRef } from "react";
 import { GoGitMerge } from "react-icons/go";
 import LotEndpoint from "./LotEndpoint";
@@ -25,6 +26,8 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
     { loading, history, onClose, onRevert, currentLotId, isTarget, isSource },
     ref,
 ) {
+    const { isUpdating = null } = useContext(TableActionsContext);
+
     return (
         <dialog ref={ref} id="merge_history_modal" className="modal">
             <div className="modal-box bg-base-300 w-11/12 max-w-2xl max-h-[80vh] flex flex-col">
@@ -101,8 +104,16 @@ const MergeHistoryModal = forwardRef(function MergeHistoryModal(
                                                         });
                                                     }}
                                                     className="btn btn-xs btn-error btn-outline mt-2"
+                                                    disabled={isUpdating}
                                                 >
-                                                    Revert this merge
+                                                    {isUpdating ? (
+                                                        <>
+                                                            <span className="loading loading-spinner loading-xs"></span>
+                                                            Reverting...
+                                                        </>
+                                                    ) : (
+                                                        "Revert this merge"
+                                                    )}
                                                 </button>
                                             )}
                                         </div>

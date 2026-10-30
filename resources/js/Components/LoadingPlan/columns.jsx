@@ -309,7 +309,7 @@ function renderCollapsedCell(key, row) {
 // — `hoveredRowId` was never referenced in the body (the drag-over row
 // highlight is applied via `rowClass` in the parent, not per-column).
 // Dropped here; update the call site accordingly.
-export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation, onEditDoable) {
+export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation, onEditDoable, readOnly = false) {
     return [
         compact(SelectColumn),
         {
@@ -329,6 +329,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         ? <BucketHeaderCell row={row} onToggleCollapse={onToggleCollapse} />
                         : <MachineHeaderCell row={row} rowCount={row.__rowCount} lotCount={row.__lotCount} onToggleCollapse={onToggleCollapse} />;
                 }
+                if (readOnly) return null;   // no useDroppable per row
                 return <RowDropTargetCell rowId={row.id} />;
             },
         },
@@ -398,6 +399,10 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
 
                         if (row.machine === null && row.bucket_id != null) {
                             return row[col.key];
+                        }
+
+                        if (!onStatusClick) {
+                            return <StatusBadge status={row.status} />;
                         }
 
                         return (

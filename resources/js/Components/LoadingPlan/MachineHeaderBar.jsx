@@ -38,6 +38,7 @@ export function MachineHeaderBar({
         // disableAddRowLot,
         // disableAddRowBlock,
         // scrollParentRef,
+		readOnly,
 		onAddBucket,
         onAutoSort,
 		serverMachines,
@@ -120,6 +121,12 @@ export function MachineHeaderBar({
               )
             : 0;
 
+	const canAddBucket = !!onAddBucket && machine !== null;
+	const canAddLot    = !!onAddLot && !isPseudo;
+	const canAddBlock  = !!onAddBlock && !isPseudo;
+	const canAutoSort  = !!onAutoSort && machine !== null;
+	const hasMenu = canAddBucket || canAddLot || canAddBlock || canAutoSort || canRename;
+
     return (
         <div
             className={`w-full ${factoryColor} h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
@@ -129,7 +136,7 @@ export function MachineHeaderBar({
             }`}
             ref={innerRef}
         >
-			<div className="sticky left-9 flex gap-2 h-full items-center">	
+			<div className={clsx("sticky flex gap-2 h-full items-center", readOnly ? "left-0" : "left-9")}>
 				<div className="w-80 h-full font-extrabold whitespace-nowrap flex justify-between items-center gap-2">
 					{editing ? (
 						<input
@@ -170,70 +177,60 @@ export function MachineHeaderBar({
 						</button>
 					)}
                     
-                    <button
-                        className="btn"
-                        popoverTarget={popoverId}
-                        style={{ anchorName }}
-                    >
-                        ⋮
-                    </button>
+					{hasMenu && (
+						<>
+							<button
+								className="btn"
+								popoverTarget={popoverId}
+								style={{ anchorName }}
+							>
+								⋮
+							</button>
 
-                    <ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={popoverId} style={{ positionAnchor: anchorName }}>
-                        {onAddBucket && machine !== null && (
-                            <li>
-                                <button type="button" className="btn btn-sm"
-                                    onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
-                                    + Group
-                                </button>
-                            </li>
-                        )}
-                        {onAddLot && !isPseudo && (
-                            <li>
-                                <button type="button" className="btn btn-sm"
-                                    onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddLot(machine); }}>
-                                    + Lot
-                                </button>
-                            </li>
-                        )}
-                        {onAddBlock && !isPseudo && (
-                            <li>
-                                <button type="button" className="btn btn-sm"
-                                    onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddBlock(machine); }}>
-                                    + Block
-                                </button>
-                            </li>
-                        )}
-                        {onAutoSort && machine !== null && (
-                            <li>
-                                <button type="button" className="btn btn-sm"
-                                    onClick={(e) => { e.stopPropagation(); onAutoSort(machine); }}>
-                                    Auto Sort
-                                </button>
-                            </li>
-                        )}
-						{canRename && (
-							<li>
-								<button type="button" className="btn btn-sm"
-									onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); setEditing(true); }}>
-									Rename
-								</button>
-							</li>
-						)}
-						{isNonMachine && onDeleteNonMachine && (
-							<li>
-                                {/* too dangerous */}
-								{/* <button type="button" className="btn btn-sm btn-error btn-outline"
-									onClick={(e) => {
-										e.stopPropagation();
-										if (window.confirm(`Delete "${machineLabel}"? Its lots on ALL dates go back to Unassigned and its time blocks are deleted.`)) {
-											onDeleteNonMachine(row.nonMachineId);
-										}
-									}}>
-									Delete
-								</button> */}
-							</li>
-						)}
-                    </ul>
+							<ul className="dropdown menu w-52 rounded-box bg-base-100 shadow-sm" popover="auto" id={popoverId} style={{ positionAnchor: anchorName }}>
+								{canAddBucket && (
+									<li>
+										<button type="button" className="btn btn-sm"
+											onClick={(e) => { e.stopPropagation(); onAddBucket(machine); }}>
+											+ Group
+										</button>
+									</li>
+								)}
+								{canAddLot && (
+									<li>
+										<button type="button" className="btn btn-sm"
+											onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddLot(machine); }}>
+											+ Lot
+										</button>
+									</li>
+								)}
+								{canAddBlock && (
+									<li>
+										<button type="button" className="btn btn-sm"
+											onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); onAddBlock(machine); }}>
+											+ Block
+										</button>
+									</li>
+								)}
+								{canAutoSort && (
+									<li>
+										<button type="button" className="btn btn-sm"
+											onClick={(e) => { e.stopPropagation(); onAutoSort(machine); }}>
+											Auto Sort
+										</button>
+									</li>
+								)}
+								{canRename && (
+									<li>
+										<button type="button" className="btn btn-sm"
+											onClick={(e) => { e.stopPropagation(); document.getElementById(popoverId)?.hidePopover?.(); setEditing(true); }}>
+											Rename
+										</button>
+									</li>
+								)}
+							</ul>
+						</>
+					)}
 				</div>
 
 				<div className="w-65">
