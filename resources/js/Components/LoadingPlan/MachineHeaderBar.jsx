@@ -3,6 +3,7 @@ import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { Deferred } from "@inertiajs/react";
 import { createContext, useContext, useId, useMemo, useRef, useState } from "react";
 import HoverCell from "./HoverCell";
+import clsx from "clsx";
 
 export const TableInteractionContext = createContext({
     isSortable: false,
