@@ -477,46 +477,17 @@ class LoadingPlanService
         ?LotQuantity $quantity = null,
     ): array {
         $this->ensureSplitsAndMerges();
-        /*
-        * Normalize $entry into an object so the rest of this method can
-        * consistently use ->property regardless of whether the caller
-        * supplied a LoadingPlanEntry model or an array.
-        *
-        * This is important because response-shaped arrays contain fields
-        * such as is_pickup, is_block, machine, scheduled_date, etc.
-        */
-        $entryIsArray = is_array($entry);
 
+        // Normalize $entry to an object so ->property works for both a model
+        // and a response-shaped array (keeps is_pickup, is_block, etc. intact).
+        $entryIsArray = is_array($entry);
         $resolvedMachine = null;
         $resolvedScheduledDate = null;
 
         if ($entryIsArray) {
-            /*
-            * Keep the complete array instead of manually rebuilding only
-            * selected fields. This prevents fields such as is_pickup from
-            * being accidentally dropped.
-            */
-            $entryArray = $entry;
-
-            $resolvedMachine = $entryArray['machine'] ?? null;
-            $resolvedScheduledDate = $entryArray['scheduled_date'] ?? null;
-
-            /*
-            * Convert the complete array to an object.
-            *
-            * This means all existing fields are preserved:
-            *
-            * $entry->is_pickup
-            * $entry->is_block
-            * $entry->is_leaked
-            * $entry->is_manual_expedite
-            * $entry->machine
-            * $entry->scheduled_date
-            * $entry->lot_id
-            * $entry->sequence_order
-            * etc.
-            */
-            $entry = (object) $entryArray;
+            $resolvedMachine = $entry['machine'] ?? null;
+            $resolvedScheduledDate = $entry['scheduled_date'] ?? null;
+            $entry = (object) $entry;
         }
 
         $entryId = $entryIsArray ? ($entry->entry_id ?? null) : $entry?->id;
@@ -527,8 +498,8 @@ class LoadingPlanService
 
         $reworkSeq = (int) ($entry?->rework_seq ?? 0);
 
-        $source       = $entry?->source ?? $wipRow?->source ?? 'wip';   // entry wins: survives a deleted traveler
-        $isF3         = $source === 'f3';
+        $source = $entry?->source ?? $wipRow?->source ?? 'wip';   // entry wins: survives a deleted traveler
+        $isF3   = $source === 'f3';
 
         $doableRecipeSource = match (true) {
             $quantity && $isF3 => [
@@ -555,46 +526,27 @@ class LoadingPlanService
             ? $entry->accu_time
             : self::timed('accuTime', fn() => $this->calc->accuTime($doable, $capacityUph));
 
-        /*
-        * Array-shaped entries already contain the resolved machine name.
-        * Real LoadingPlanEntry models still use the existing model logic.
-        */
-        $t = microtime(true);
+        // Array-shaped entries already carry the resolved machine name.
         $machine = $entryIsArray
             ? $resolvedMachine
             : ($entry?->finalized_at
                 ? $entry->machine_snapshot
                 : self::timed('getMachineName', fn() => $entry?->getPlacementKey()));
 
-        // self::tick('getMachineName', $t);
-
-        $t = microtime(true);
-        // $formulas = LoadingPlanFormulas::make($wipRow);
         $formulas = self::timed('Formulas::make', fn() => LoadingPlanFormulas::make($wipRow));
-
-        self::tick('Formulas::make', $t);
 
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
-        $t = microtime(true);
-
-        /*
-        * Array-shaped scheduled_date is already a Y-m-d string.
-        * A real LoadingPlanEntry uses a Carbon instance.
-        */
+        // Array-shaped scheduled_date is already a Y-m-d string.
         $scheduledDate = $entryIsArray
             ? $resolvedScheduledDate
             : ($entry?->scheduled_date?->toDateString() ?? null);
-
-        $t = microtime(true);
-        // $location = self::timed('PackageLocation::for', fn() =>
-        // PackageLocation::for($entry->package_name ?? $wipRow?->Package_Name));
 
         $packageName = $wipRow?->Package_Name ?? $entry?->package_name ?? null;
         $focusGroup  = $wipRow?->Focus_Group ?? null;
         $leadCount   = $wipRow?->Lead_Count ?? null;
 
-        $location     = $isF3 ? 'F3' : PackageLocation::resolve($packageName, $focusGroup, $leadCount);
+        $location = $isF3 ? 'F3' : PackageLocation::resolve($packageName, $focusGroup, $leadCount);
 
         $this->packageGroups ??= app(PackageGroups::class);
         $packageGroup = $isF3 ? 'F3' : $this->packageGroups->resolve($packageName, $focusGroup, $leadCount);
@@ -603,155 +555,151 @@ class LoadingPlanService
             ? null
             : date('n/j/Y g:i:s A', $ts);
 
-        $dateLoaded = $fmt($wipRow?->Date_Loaded);
-        $beStart    = $fmt($wipRow?->BE_Starttime);
-        $startAt    = $fmt($wipRow?->Start_Time);
-
         $splitInfo = self::timed('buildSplitMeta', fn() => LotSplitService::buildSplitMeta($lotId, $this->splitsByParent ?? null, $this->splitsByChild ?? null, $scheduledDate));
         $mergeInfo = self::timed('buildMergeMeta', fn() => LotMergeService::buildMergeMeta($lotId, $this->mergesByTarget ?? null, $this->mergesBySource ?? null, $scheduledDate));
 
-        self::tick('split+merge meta', $t);       // then use $split/$merge in the array
-
-        /*
-        * Array-shaped entries already contain H:i strings.
-        * LoadingPlanEntry models may contain Carbon values.
-        */
-        $startTime = $entryIsArray
-            ? ($entry->time_start_at ? Carbon::parse($entry->time_start_at) : null)
-            : ($entry?->time_start ? Carbon::parse($entry->time_start) : null);
-        $endTime = $entryIsArray
-            ? ($entry->time_end_at ? Carbon::parse($entry->time_end_at) : null)
-            : ($entry?->time_end ? Carbon::parse($entry->time_end) : null);
-        // $startTime = $entry?->time_start ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_start)) : null;
-        // $endTime   = $entry?->time_end   ? self::timed('Carbon start/end', fn() => Carbon::parse($entry->time_end))   : null;
+        // Array entries hold 'Y-m-d H:i:s' strings in *_at; models hold time_start/time_end.
+        [$timeStartAt, $timeStart] = self::timeParts($entryIsArray ? ($entry->time_start_at ?? null) : ($entry?->time_start ?? null));
+        [$timeEndAt, $timeEnd]     = self::timeParts($entryIsArray ? ($entry->time_end_at ?? null) : ($entry?->time_end ?? null));
 
         $isLeaked = $scheduledDate === $this->previousDate;
+
+        // WIP display fields: null values are dropped from the payload. The
+        // frontend reads them with `== null` / `?? ''`, so a missing key
+        // behaves the same as null, and the response gets much smaller.
+        $wipDisplay = array_filter([
+            'station'             => $wipRow?->Station,
+            'lot_type'            => $wipRow?->Lot_Type,
+            'prod_area'           => $wipRow?->Prod_Area,
+            'lot_status'          => $wipRow?->Lot_Status,
+            'focus_group'         => $wipRow?->Focus_Group,
+            'stage'               => $wipRow?->Stage,
+            'lot_entry_time_days' => $wipRow?->Lot_Entry_Time_Days,
+            'cr3'                 => $wipRow?->CR3,
+            'be_osl_days'         => $wipRow?->BE_OSL_Days,
+            'body_size'           => $wipRow?->Body_Size,
+            'ramp_time'           => $wipRow?->Ramp_Time,
+            'end_customer'        => $wipRow?->End_Customer,
+            'bake'                => $wipRow?->Bake,
+            'bake_count'          => $wipRow?->Bake_Count,
+            'test_lot_id'         => $wipRow?->Test_Lot_Id,
+            'backend_leadtime'    => $wipRow?->Backend_Leadtime,
+            'date_loaded'         => $fmt($wipRow?->Date_Loaded),
+            'be_starttime'        => $fmt($wipRow?->BE_Starttime),
+            'start_time'          => $fmt($wipRow?->Start_Time),
+            'part_type'           => $wipRow?->Part_Type,
+            'part_class'          => $wipRow?->Part_Class,
+            'date_code'           => $wipRow?->Date_Code,
+            'process_group'       => $wipRow?->Process_Group,
+            'bulk'                => $wipRow?->Bulk,
+            'ccd'                 => $wipRow?->CCD,
+            'stage_run_days'      => $wipRow?->Stage_Run_Days,
+            'tray'                => $wipRow?->Tray,
+            'osl_days'            => $wipRow?->OSL_Days,
+            'be_group'            => $wipRow?->BE_Group,
+            'strategy_code'       => $wipRow?->Strategy_Code,
+            'auto_part'           => $wipRow?->Auto_Part,
+            'stock_position'      => $wipRow?->Stock_Position,
+            'required_time'       => $wipRow?->Reqd_Time,
+            'lot_entry_time'      => $wipRow?->Lot_Entry_Time,
+            'stage_start_time'    => $wipRow?->Stage_Start_Time,
+            'assy_site'           => $wipRow?->Assy_Site,
+            'bake_time_temp'      => $wipRow?->Bake_Time_Temp,
+        ], fn($v) => $v !== null);
 
         return [
             'location'      => $location,
             'package_group' => $packageGroup,
 
-            // Entry Metadata
-            'entry_id'                   => $entryId,
-            'entry_type'                 => $entry?->entry_type,
+            // Entry metadata
+            'entry_id'           => $entryId,
+            'entry_type'         => $entry?->entry_type,
+            'is_block'           => $isBlocked,
+            'is_leaked'          => $isLeaked,
+            'is_manual_expedite' => $entry?->is_manual_expedite,
+            'is_scm'             => (bool) ($entry?->is_scm ?? false),
+            'is_for_bake'        => $formulas->isBakeHighlight,
+            'is_pickup'          => $entry?->is_pickup,
+            'block_label'        => $entry?->block_label,
+            'machine'            => $machine,
+            'machine_id'         => $entry?->machine_id,
+            'scheduled_date'     => $scheduledDate,
 
-            'is_block'                   => $isBlocked,
-            'is_leaked'                  => $isLeaked,
-            'is_manual_expedite'         => $entry?->is_manual_expedite,
-            'is_scm'                     => (bool) ($entry?->is_scm ?? false),
-            'is_for_bake'                => $formulas->isBakeHighlight,
-
-            // IMPORTANT:
-            // This now works for both an array input and a LoadingPlanEntry model
-            // because arrays were normalized to an object above.
-            'is_pickup'                  => $entry?->is_pickup,
-
-            'block_label'                => $entry?->block_label,
-            'machine'                    => $machine,
-            'machine_id'                 => $entry?->machine_id,
-            'scheduled_date'             => $scheduledDate,
-
-            // Lot & WIP Identifiers/Specs
-            'id'      => $entryId !== null ? 'entry-' . $entryId
-                : ($isF3 ? 'f3-' . $wipRow?->traveler_id : 'wip-' . $wipRow?->customer_data_id),  // avoid id collisions
-
-            'source'  => $source,
-
+            // Lot & WIP identifiers
+            'id' => $entryId !== null
+                ? 'entry-' . $entryId
+                : ($isF3 ? 'f3-' . $wipRow?->traveler_id : 'wip-' . $wipRow?->customer_data_id), // avoid id collisions
+            'source'           => $source,
             'traveler_deleted' => (bool) $wipRow?->traveler_deleted,
+            'part_name'        => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',
+            'lead_count'       => $leadCount,
+            'package_name'     => $wipRow?->Package_Name ?? $entry?->package_name ?? null,
+            'lot_id'           => $lotId,
 
-            'part_name'                  => $wipRow?->Part_Name
-                ?? $quantity?->part_name
-                ?? '',
+            // Non-null WIP display fields (see $wipDisplay above)
+            ...$wipDisplay,
 
-            'lead_count'                 => $wipRow?->Lead_Count ?? null,
+            // Execution & timing
+            'status'         => $entry?->status ?? null,
+            'sequence_order' => $entry?->sequence_order,
+            'item'           => $entry?->sequence_order,
+            'time_start'     => $timeStart,
+            'time_end'       => $timeEnd,
+            'time_start_at'  => $timeStartAt,
+            'time_end_at'    => $timeEndAt,
 
-            'package_name'               => $wipRow?->Package_Name
-                ?? $entry?->package_name
-                ?? null,
+            'remarks'         => $entry?->remarks ?? $wipRow?->traveler_remarks,
+            'tag'             => $entry?->tag ?? null,
+            'lock_version'    => $entry?->lock_version ?? null,
+            'bucket_id'       => null,
+            'bucket_position' => null,
 
-            'lot_id'                     => $lotId,
-            'station'                    => $wipRow?->Station ?? null,
-            'lot_type'                   => $wipRow?->Lot_Type ?? null,
-            'prod_area'                  => $wipRow?->Prod_Area ?? null,
-            'lot_status'                 => $wipRow?->Lot_Status ?? null,
-            'focus_group'                => $wipRow?->Focus_Group ?? null,
-            'stage'                      => $wipRow?->Stage ?? null,
-            'lot_entry_time_days'        => $wipRow?->Lot_Entry_Time_Days ?? null,
-            'cr3'                        => $wipRow?->CR3 ?? null,
-            'be_osl_days'                => $wipRow?->BE_OSL_Days ?? null,
-            'body_size'                  => $wipRow?->Body_Size ?? null,
-            'ramp_time'                  => $wipRow?->Ramp_Time ?? null,
-            'end_customer'               => $wipRow?->End_Customer ?? null,
-            'bake'                       => $wipRow?->Bake ?? null,
-            'bake_count'                 => $wipRow?->Bake_Count ?? null,
-            'test_lot_id'                => $wipRow?->Test_Lot_Id ?? null,
-            'backend_leadtime'           => $wipRow?->Backend_Leadtime ?? null,
+            // Capacity & recipe metadata
+            'accu_time'            => $accuTime,
+            'doable_recipe_source' => $doableRecipeSource,
+            'qty'                  => $effectiveQty,
+            'doable'               => $doable,
+            'doable_status'        => $doableStatus,
+            'doable_overridden'    => $quantity?->commit_override !== null,
+            // package_list has no row at all (computeMetrics sets recipe_source_id from the row's id)
+            'part_missing_from_list' => !$isF3 && $quantity !== null
+                && $quantity->recipe_source_id === null && $quantity->recipe_status === 'no_recipe',
+            'capacity_uph'         => $capacityUph,
 
-            'date_loaded'                => $dateLoaded,
-
-            'be_starttime'               => $beStart,
-
-            'start_time'                 => $startAt,
-
-            'part_type'                  => $wipRow?->Part_Type ?? null,
-            'part_class'                 => $wipRow?->Part_Class ?? null,
-            'date_code'                  => $wipRow?->Date_Code ?? null,
-            'process_group'              => $wipRow?->Process_Group ?? null,
-            'bulk'                       => $wipRow?->Bulk ?? null,
-            'ccd'                        => $wipRow?->CCD ?? null,
-            'stage_run_days'             => $wipRow?->Stage_Run_Days ?? null,
-            'tray'                       => $wipRow?->Tray ?? null,
-            'osl_days'                   => $wipRow?->OSL_Days ?? null,
-            'be_group'                   => $wipRow?->BE_Group ?? null,
-            'strategy_code'              => $wipRow?->Strategy_Code ?? null,
-            'auto_part'                  => $wipRow?->Auto_Part ?? null,
-            'stock_position'             => $wipRow?->Stock_Position ?? null,
-            'required_time'              => $wipRow?->Reqd_Time ?? null,
-            'lot_entry_time'             => $wipRow?->Lot_Entry_Time ?? null,
-            'stage_start_time'           => $wipRow?->Stage_Start_Time ?? null,
-            'assy_site'                  => $wipRow?->Assy_Site ?? null,
-            'bake_time_temp'             => $wipRow?->Bake_Time_Temp ?? null,
-
-            // Execution & Timing
-            'status'                     => $entry?->status ?? null,
-            'sequence_order'             => $entry?->sequence_order,
-            'item'                       => $entry?->sequence_order,
-            'time_start'                 => $startTime?->format('H:i'),
-            'time_end'                   => $endTime?->format('H:i'),
-            'time_start_at'              => $startTime?->format('Y-m-d H:i:s'),
-            'time_end_at'                => $endTime?->format('Y-m-d H:i:s'),
-
-            'remarks'                    => $entry?->remarks ?? $wipRow?->traveler_remarks,
-            'tag'                        => $entry?->tag ?? null,
-            'lock_version'               => $entry?->lock_version ?? null,
-            'bucket_id'                  => null,
-            'bucket_position'            => null,
-
-            // Capacity & Recipe Metadata
-            'accu_time'                  => $accuTime,
-            'doable_recipe_source'       => $doableRecipeSource,
-            'qty'                        => $effectiveQty,
-            'doable'                     => $doable,
-            'doable_status'              => $doableStatus,
-            'doable_overridden'          => $quantity?->commit_override !== null,
-            // package_list has no row  at all (computeMetrics sets recipe_source_id from the row's id)
-            'part_missing_from_list'     => !$isF3 && $quantity !== null && $quantity->recipe_source_id === null && $quantity->recipe_status === 'no_recipe',
-            'capacity_uph'               => $capacityUph,
-
-            // Formula Calculated Metrics
+            // Formula-calculated metrics
             'ct'                         => $formulas->ct,
             'osl'                        => $formulas->osl,
             'cycle_time_exceed'          => $formulas->cycleTimeExceed,
             'cycle_time_exceed_residual' => $formulas->cycleTimeExceedResidual,
 
-            'rework_seq'                 => $reworkSeq,
-            'is_rework'                  => $reworkSeq > 0,
-            'rework_of_entry_id'         => $entry?->rework_of_entry_id ?? null,
+            'rework_seq'         => $reworkSeq,
+            'is_rework'          => $reworkSeq > 0,
+            'rework_of_entry_id' => $entry?->rework_of_entry_id ?? null,
 
-            // Split & Merge Metadata
-            'split_info'                 => $splitInfo,
-            'merge_info'                 => $mergeInfo,
+            // Split & merge metadata
+            'split_info' => $splitInfo,
+            'merge_info' => $mergeInfo,
         ];
+    }
+
+    /**
+     * Returns [ 'Y-m-d H:i:s' | null, 'H:i' | null ].
+     * Plain "Y-m-d H:i:s" strings skip Carbon entirely; anything else
+     * (Carbon instances, other formats) goes through Carbon as before.
+     */
+    private static function timeParts(mixed $v): array
+    {
+        if ($v === null || $v === '') {
+            return [null, null];
+        }
+
+        if (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $v)) {
+            return [$v, substr($v, 11, 5)];
+        }
+
+        $c = $v instanceof CarbonInterface ? $v : Carbon::parse($v);
+
+        return [$c->format('Y-m-d H:i:s'), $c->format('H:i')];
     }
 
     public function mapWipToPickupPayload(CustomerDataWip $wip): array

@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
+import { memo } from "react";
 
-export default function TimeCell({ row, field }) {
+const TimeCell = memo(function TimeCell({ row, field }) {
     const value = row[field];
     if (!value) return null;
 
@@ -22,4 +23,6 @@ export default function TimeCell({ row, field }) {
             {label && <span className={`badge badge-xs badge-soft ${tone}`}>{label}</span>}
         </span>
     );
-}
+});
+
+export default TimeCell;

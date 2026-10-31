@@ -1,9 +1,9 @@
 import { TableActionsContext } from "@/Components/LoadingPlan/columns";
-import React, { useContext } from "react";
+import React, { useContext, memo } from "react";
 
 const noop = () => {};
 
-export function LotIdCell({
+export const LotIdCell = memo(function LotIdCell({
     lotId,
     isPickup,
     splitInfo,
@@ -84,7 +84,7 @@ export function LotIdCell({
             </div>
         </span>
     );
-}
+});
 
 function LotLabel({
     isF3,

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo } from "react";
 import { LuTriangleAlert } from "react-icons/lu";
 import HoverCell from "./HoverCell";
 
@@ -43,7 +43,7 @@ const DOABLE_STATUS_COPY = {
 //   status       — one of 'ok' | 'unknown' | 'no_recipe' | 'qty_below_recipe'
 //   recipeSource — object containing recipe details or null
 // ---------------------------------------------------------------------------
-export function DoableCell({ value, status, recipeSource, overridden = false, onEdit }) {
+export const DoableCell = memo(function DoableCell({ value, status, recipeSource, overridden = false, onEdit }) {
     let display;
 
     if (overridden) {
@@ -140,4 +140,4 @@ export function DoableCell({ value, status, recipeSource, overridden = false, on
             {body}
         </div>
     );
-}
+});

@@ -1,6 +1,6 @@
 import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
-import { createContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { SelectColumn } from "react-data-grid";
 import { isBlockRow } from "../../Lib/LoadingPlan/helpers";
 import { BucketHeaderCell } from "./BucketHeaderBar";
@@ -244,6 +244,20 @@ const compact = (c) => ({
     headerCellClass: [c.headerCellClass, "!p-0"].filter(Boolean).join(" "),
 });
 
+function StatusButton({ row, onStatusClick }) {
+    const { isUpdating } = useContext(TableActionsContext);
+    return (
+        <button
+            type="button"
+            className="btn btn-ghost btn-xs px-1 btn-block flex-1"
+            onClick={(e) => onStatusClick?.(e, row.id)}
+            disabled={isUpdating}
+        >
+            <StatusBadge status={row.status} />
+        </button>
+    );
+}
+
 export function makeBakeColumns(highlightedMatch, onToggleCollapse) {
     return [
         compact(SelectColumn),
@@ -309,7 +323,7 @@ function renderCollapsedCell(key, row) {
 // — `hoveredRowId` was never referenced in the body (the drag-over row
 // highlight is applied via `rowClass` in the parent, not per-column).
 // Dropped here; update the call site accordingly.
-export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation, onEditDoable, readOnly = false) {
+export function makeColumns(isLocked, onStatusClick, onToggleCollapse, highlightedMatch, selectedLocation, onEditDoable, readOnly = false) {
     return [
         compact(SelectColumn),
         {
@@ -405,16 +419,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                             return <StatusBadge status={row.status} />;
                         }
 
-                        return (
-                            <button
-                                type="button"
-                                className="btn btn-ghost btn-xs px-1 btn-block flex-1"
-                                onClick={(e) => onStatusClick?.(e, row.id)}
-                                disabled={isUpdating}
-                            >
-                                <StatusBadge status={row.status} />
-                            </button>
-                        );
+                        return <StatusButton row={row} onStatusClick={onStatusClick} />;
                     },
                 };
             }
@@ -474,7 +479,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                                 status={row.doable_status}
                                 recipeSource={row.doable_recipe_source}
                                 overridden={row.doable_overridden}
-                                onEdit={onEditDoable && !isUpdating ? () => onEditDoable(row) : undefined}
+                                onEdit={onEditDoable ? () => onEditDoable(row) : undefined}
                             />
                         );
                     },
@@ -535,7 +540,7 @@ export function makeColumns(isUpdating, onStatusClick, onToggleCollapse, highlig
                         : col.key === "time_start" ? TimeStartEditor
                         : CellEditor,
                     editable: (row) =>
-                        !isUpdating &&
+                        !isLocked() &&
                         row.__type !== "collapsed" &&
                         row.__type !== "header" &&
                         !(row.machine === null && row.bucket_id != null) &&

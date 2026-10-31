@@ -29,9 +29,10 @@ export function useStickyGroupHeader(displayRows, gridRef, gridKey) {
             setStickyGroup(current);
         };
 
-        handleScroll();
-        el.addEventListener("scroll", handleScroll);
-        return () => el.removeEventListener("scroll", handleScroll);
+        let raf = 0;
+        const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; handleScroll(); }); };
+        el.addEventListener("scroll", onScroll, { passive: true });
+        return () => { cancelAnimationFrame(raf); el.removeEventListener("scroll", onScroll); };
     }, [groupHeaderOffsets, gridRef, gridKey]);
 
     return stickyGroup;

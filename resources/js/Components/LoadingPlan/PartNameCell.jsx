@@ -1,4 +1,6 @@
-export function PartNameCell({ partName, isBosch }) {
+import { memo } from "react";
+
+export const PartNameCell = memo(function PartNameCell({ partName, isBosch }) {
     return (
         <div className="flex items-center gap-1 min-w-0">
             <span className="truncate" title={partName ?? ""}>
@@ -11,4 +13,4 @@ export function PartNameCell({ partName, isBosch }) {
             )}
         </div>
     );
-}
+});

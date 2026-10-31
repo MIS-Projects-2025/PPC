@@ -1,21 +1,35 @@
 import { useDroppable } from "@dnd-kit/core";
 import clsx from "clsx";
-import { useCallback } from "react";
+import { memo, useCallback, useLayoutEffect, useRef } from "react";
 import { Row } from "react-data-grid";
 
-function DroppableDataRow({ rowIdxByElement, props }) {
-    const { row, rowIdx, className } = props;
+function DroppableDataRow({ rowIdxByElement, ...rowProps }) {
+    const { row, rowIdx, className } = rowProps;
     const { setNodeRef, isOver } = useDroppable({ id: `row-${row.id}` });
+    const elRef = useRef(null);
 
+    // stable callback: a changing rowIdx no longer detaches/re-attaches the droppable node
     const setRefs = useCallback((el) => {
+        elRef.current = el;
         setNodeRef(el);
-        if (el) rowIdxByElement.set(el, rowIdx);
-    }, [setNodeRef, rowIdxByElement, rowIdx]);
+    }, [setNodeRef]);
 
-    return <Row ref={setRefs} {...props} className={clsx(className, isOver && "bg-sky-500/10")} />;
+    useLayoutEffect(() => {
+        if (elRef.current) rowIdxByElement.set(elRef.current, rowIdx);
+    }, [rowIdx, rowIdxByElement]);
+
+    return (
+        <Row
+            ref={setRefs}
+            {...rowProps}
+            className={clsx(className, isOver && "!bg-pink-500 relative drop-target-row")}
+        />
+    );
 }
 
-export function DroppableRow({ rowIdxByElement, props }) {
-    if (props.row.__type === "header") return <Row {...props} />;
-    return <DroppableDataRow rowIdxByElement={rowIdxByElement} props={props} />;
+function DroppableRowImpl({ rowIdxByElement, ...rowProps }) {
+    if (rowProps.row.__type === "header") return <Row {...rowProps} />;
+    return <DroppableDataRow rowIdxByElement={rowIdxByElement} {...rowProps} />;
 }
+
+export const DroppableRow = memo(DroppableRowImpl);

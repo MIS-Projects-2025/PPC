@@ -2,7 +2,7 @@ import DateNav from "@/Components/DateNav";
 import AddEntryModal from "@/Components/LoadingPlan/AddEntriesModal";
 import { BakeSelectionToolbar } from "@/Components/LoadingPlan/BakeSelectionToolbar";
 import { BucketHeaderBar } from "@/Components/LoadingPlan/BucketHeaderBar";
-import { DATA_COLUMNS, TableActionsContext, makeBakeColumns, makeColumns } from "@/Components/LoadingPlan/columns";
+import { DATA_COLUMNS, TableActionsContext, fmtHours, makeBakeColumns, makeColumns } from "@/Components/LoadingPlan/columns";
 import DataIntegrityModal, {
     DATA_INTEGRITY_MODAL_ID,
     TabBadge,
@@ -42,7 +42,6 @@ import { useUndoRedoSync } from "@/Hooks/LoadingPlan/useUndoRedoSync";
 import { useMutation } from "@/Hooks/useMutation";
 import { useToast } from "@/Hooks/useToast";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
-import { downloadExcelBuffer, exportLoadingPlanToExcel } from "@/Lib/LoadingPlan/loadingPlanExcelExporter";
 import { applyAffectedTimings, timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 import { PartNameMultiInsertForm } from "@/Pages/PartNameMultiUpsert";
 import { createUndoStore } from "@/Store/undoStore";
@@ -52,7 +51,7 @@ import { autoUpdate, offset, useFloating } from "@floating-ui/react";
 import { Link, router } from '@inertiajs/react';
 import clsx from "clsx";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
 import { DataGrid } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import { createPortal } from "react-dom";
@@ -188,6 +187,22 @@ import { GoAlert } from "react-icons/go";
  * -----------------------------------------------------------------------
  */
 
+/**
+ * TODO: on actual production implementation
+ * a) Compression (do this first). nginx’s default gzip_types only covers text/html, so Inertia JSON responses and the 
+ * fetch calls go out uncompressed. This is highly repetitive data, so compression typically shrinks it a lot. 
+ * In your nginx config:
+    nginx
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types application/json text/css application/javascript image/svg+xml;
+ * 
+ * 
+ * 
+ * 
+*/
+
 // Must match the actual row height / header height react-data-grid uses,
 // since scroll math below (which group is "at top") depends on it.
 
@@ -200,8 +215,108 @@ import { GoAlert } from "react-icons/go";
 // column land a few px above MIN_COLUMN_WIDTH from a drag and still get
 // the hinted styling, not just an exact-match at the floor).
 const MIN_COLUMN_WIDTH = 6;
-const COLLAPSE_HINT_THRESHOLD = 28;
+const COLLAPSE_HINT_THRESHOLD = 28; // a resize at/below this snaps to the sliver = hidden
 const COLUMN_WIDTHS_STORAGE_KEY = "loadingPlan:columnWidths";
+
+// ── auto-fit ──
+const AUTO_MIN_WIDTH = 60;
+const AUTO_MAX_WIDTH = 420;
+const GRID_FONT_SIZE = 14;      // react-data-grid's --rdg-font-size
+const CELL_PADDING_X = 18;      // 8px each side + slack
+const HEADER_EXTRA_X = 12;      // resize handle / sort arrows
+const INCLUDE_HEADER_IN_FIT = true;
+const FIT_CANDIDATES = 4;       // longest N strings per column actually measured
+// Extra px for badges/icons the cell renders next to its text. Guesses; I can't
+// see TimeCell / LotIdCell / DoableCell, so tune these.
+const COLUMN_EXTRA_PX = { lot_id: 64, status: 40, doable: 44, time_start: 30, time_end: 30, part_name: 24 };
+
+const DATA_COLUMN_KEYS = new Set(DATA_COLUMNS.map((c) => c.key));
+
+function loadColumnWidths() {
+    if (typeof window === "undefined") return {};
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY) ?? "{}");
+        const out = {};
+        for (const [k, w] of Object.entries(parsed ?? {})) {
+            if (DATA_COLUMN_KEYS.has(k) && Number.isFinite(w) && w >= MIN_COLUMN_WIDTH) out[k] = w;
+        }
+        return out;
+    } catch {
+        return {};
+    }
+}
+
+function sameRecord(a, b) {
+    const ak = Object.keys(a);
+    return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k]);
+}
+
+function sameWidthMap(a, b) {
+    if (a.size !== b.size) return false;
+    for (const [k, v] of a) {
+        const o = b.get(k);
+        if (!o || o.type !== v.type || o.width !== v.width) return false;
+    }
+    return true;
+}
+
+function keepLongest(arr, text, k) {
+    if (arr.length === k && text.length <= arr[k - 1].length) return;
+    if (arr.includes(text)) return;
+    arr.push(text);
+    arr.sort((a, b) => b.length - a.length);
+    if (arr.length > k) arr.pop();
+}
+
+// What the cell actually displays (mirrors makeColumns' renderCell).
+function cellTextForFit(row, key, getMachineLabel) {
+    if (isBlockRow(row)) {
+        if (["part_name", "package_name", "status", "lot_id"].includes(key)) return row.block_label ?? "";
+        if (key === "accu_time") return fmtHours(row.accu_time);
+        if (key === "time_start" || key === "time_end") return row[key] ?? "";
+        return "";
+    }
+    if (key === "accu_time") return fmtHours(row.accu_time);
+    if (key === "machine") return getMachineLabel(row.machine ?? null);
+    const v = row[key];
+    return v == null ? "" : String(v);
+}
+
+let measureCtx = null;
+function computeAutoWidths(rows, columns, getMachineLabel) {
+    if (typeof document === "undefined") return {};
+    measureCtx ??= document.createElement("canvas").getContext("2d");
+    if (!measureCtx) return {};
+
+    const family = getComputedStyle(document.body).fontFamily || "sans-serif";
+    const bodyFont = `${GRID_FONT_SIZE}px ${family}`;
+    const headFont = `700 ${GRID_FONT_SIZE}px ${family}`;
+    const widthOf = (text, font) => {
+        measureCtx.font = font;
+        return measureCtx.measureText(text).width;
+    };
+
+    // Pass 1: longest few strings per column (by char count).
+    const candidates = columns.map(() => []);
+    for (const row of rows) {
+        for (let i = 0; i < columns.length; i++) {
+            const text = cellTextForFit(row, columns[i].key, getMachineLabel);
+            if (text) keepLongest(candidates[i], text, FIT_CANDIDATES);
+        }
+    }
+
+    // Pass 2: measure only those candidates (proportional fonts: longest != widest).
+    const out = {};
+    columns.forEach((col, i) => {
+        let body = 0;
+        for (const t of candidates[i]) body = Math.max(body, widthOf(t, bodyFont));
+        if (body) body += COLUMN_EXTRA_PX[col.key] ?? 0;
+        const header = INCLUDE_HEADER_IN_FIT ? widthOf(col.name ?? col.key, headFont) + HEADER_EXTRA_X : 0;
+        const fit = Math.ceil(Math.max(body, header) + CELL_PADDING_X);
+        out[col.key] = Math.min(AUTO_MAX_WIDTH, Math.max(AUTO_MIN_WIDTH, fit));
+    });
+    return out;
+}
 
 // readOnly mode: structural (non-data) columns dropped from the grid
 // entirely, since neither selection nor drag-reorder exist in that mode.
@@ -335,6 +450,32 @@ function RowHistoryButton({ isHidden, anchorElement, onViewHistory, buttonsRef }
     );
 }
 
+function RowHoverTools({ container, displayRows, rowIdxByElement, canInsert, onInsert, onViewHistory }) {
+    const { hoveredRow, buttonsRef, historyButtonRef, onButtonsLeave } = useRowHoverInsert(container, rowIdxByElement);
+    if (!hoveredRow) return null;
+    const row = displayRows[hoveredRow.rowIdx];
+    const isData = row?.__type === "data";
+    return (
+        <div onPointerLeave={onButtonsLeave}>
+            {canInsert && (
+                <RowInsertButtons
+                    isHidden={!(isData && row.machine !== null)}
+                    anchorElement={hoveredRow.element}
+                    buttonsRef={buttonsRef}
+                    onInsertAbove={() => onInsert("above", row)}
+                    onInsertBelow={() => onInsert("below", row)}
+                />
+            )}
+            <RowHistoryButton
+                isHidden={!(isData && row.entry_id)}
+                anchorElement={hoveredRow.element}
+                buttonsRef={historyButtonRef}
+                onViewHistory={() => onViewHistory(row)}
+            />
+        </div>
+    );
+}
+
 const ALL_PACKAGES_TAB = "ALL PACKAGE";
 const RES_TAB = "RES";
 const FOR_BAKE_TAB = "FOR BAKE";
@@ -362,7 +503,13 @@ const compareUnassigned = (a, b) => {
 // Main component
 // ---------------------------------------------------------------------
 
-const useLoadingPlanStore = createUndoStore([]);
+const useLoadingPlanStore = createUndoStore([], { limit: 20 });
+
+const getRowKey = (row) => row.id;
+const isRowLocked = (row) => row.isLocked;
+const DEFAULT_COLUMN_OPTIONS = { resizable: true };
+const MACHINE_GRID_STYLE = { blockSize: "80vh" };
+const BAKE_GRID_STYLE = { blockSize: "70vh" };
 
 export default function Deemo({
     data,
@@ -388,6 +535,8 @@ export default function Deemo({
 }) {
     // console.log("buckets:", serverBuckets.map(b => [b.id, b.label, b.machine]));
     // console.log("parked rows:", data.filter((r) => r.bucket_id != null));
+    const PartNameMultiInsertForm = lazy(() =>
+        import("@/Pages/PartNameMultiUpsert").then((m) => ({ default: m.PartNameMultiInsertForm })));
 
     const machinesByName = useMemo(
         () => Object.fromEntries(Object.values(serverMachines).map((m) => [m.name, m])),
@@ -398,15 +547,11 @@ export default function Deemo({
         () => new Set(serverMachines.map((m) => m.name)),
         [serverMachines],
     );
-    
-    const {
-        present: { rows: dataRows },
-        update,
-        undo,
-        redo,
-        canUndo,
-        canRedo
-    } = useLoadingPlanStore();
+
+    const dataRows = useLoadingPlanStore((s) => s.present.rows);
+    const update = useLoadingPlanStore((s) => s.update);
+    const canUndoNow = useLoadingPlanStore((s) => s.past.length > 0);
+    const canRedoNow = useLoadingPlanStore((s) => s.future.length > 0);
 
     const isF3 = selectedLocation === F3_FLAG;
 
@@ -417,21 +562,6 @@ export default function Deemo({
             && !knownMachineNames.has(r.machine),
         [knownMachineNames],
     );
-    
-    const orphanMachines = useMemo(
-        () => [...new Set(dataRows.filter(isOrphanRow).map((r) => r.machine))].sort(),
-        [dataRows, isOrphanRow],
-    );
-
-    const tabItems = useMemo(() => [
-        ...(readOnly ? [] : ["Unassigned"]),
-        ALL_PACKAGES_TAB,
-        ...(isF3 ? [] : [RES_TAB]),
-        FOR_BAKE_TAB,
-        ...(isF3 ? [] : [PICKUP_TAB]),
-        ...(orphanMachines.length ? [ORPHAN_TAB] : []),
-        ...(packageGroupNames ?? []),
-    ], [readOnly, isF3, orphanMachines.length, packageGroupNames]);
 
     // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
     // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
@@ -441,8 +571,11 @@ export default function Deemo({
     const [isRunningScheduler, setIsRunningScheduler] = useState(false);
     const [highlightedMatch, setHighlightedMatch] = useState(null); // { rowId, columnKey }
 
-    const [activePackage, setActivePackage] = useState(() =>
+    const [activeTab, setActiveTab] = useState(() =>
         (packageGroupNames ?? []).includes("LGA") ? "LGA" : ALL_PACKAGES_TAB);
+    const activePackage = useDeferredValue(activeTab);   // everything else keeps reading this
+    const isTabSwitching = activeTab !== activePackage;
+
     const [selectedRows, setSelectedRows] = useState(() => new Set());
     const [selectedBakeRows, setSelectedBakeRows] = useState(() => new Set());
     // console.log("🚀 ~ Deemo ~ selectedRows:", selectedRows)
@@ -455,19 +588,29 @@ export default function Deemo({
     // way collapsedMachines/collapsedOvens do (localStorage), just as a
     // plain key->width map instead of a Set, since usePersistedSet only
     // handles Sets.
-    const [columnWidths, setColumnWidths] = useState(() => {
-        if (typeof window === "undefined") return {};
-        try {
-            const raw = window.localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY);
-            return raw ? JSON.parse(raw) : {};
-        } catch {
-            return {};
-        }
-    });
+    
+    const [columnWidths, setColumnWidths] = useState(loadColumnWidths);
+    const columnWidthsRef = useRef(columnWidths);
+    columnWidthsRef.current = columnWidths;
+
+    const [measuredWidths, setMeasuredWidths] = useState(() => new Map());
+    const measuredWidthsRef = useRef(measuredWidths);
+    measuredWidthsRef.current = measuredWidths;
+
+    const [fontTick, setFontTick] = useState(0);
+    useEffect(() => {
+        document.fonts?.ready?.then(() => setFontTick((t) => t + 1));
+    }, []);
 
     useEffect(() => {
         const t = setTimeout(() => {
-            try { window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths)); } catch {}
+            try {
+                if (Object.keys(columnWidths).length) {
+                    window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths));
+                } else {
+                    window.localStorage.removeItem(COLUMN_WIDTHS_STORAGE_KEY);
+                }
+            } catch {}
         }, 300);
         return () => clearTimeout(t);
     }, [columnWidths]);
@@ -615,7 +758,6 @@ export default function Deemo({
         useLoadingPlanStore.getState().reset(seeded);
     }, [data]);
 
-
     const machines = useMemo(() => {
         return [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)];
     }, [serverMachines]);
@@ -727,14 +869,6 @@ export default function Deemo({
         [nonMachineList],
     );
 
-    const nonMachineRowCounts = useMemo(() => {
-        const c = {};
-        dataRows.forEach((r) => {
-            if (isNonMachineKey(r.machine)) c[r.machine] = (c[r.machine] ?? 0) + 1;
-        });
-        return c;
-    }, [dataRows]);
-
     const clearBakeSelection = useCallback(() => setSelectedBakeRows(new Set()), []);
 
     // ── Status dropdown (ported from LoadingPlanTable.jsx) ──────────────────
@@ -742,10 +876,10 @@ export default function Deemo({
         (e, rowId) => {
             e.stopPropagation();
             if (readOnly) return;
-            if (writesLocked) return;
+            if (isLocked()) return;
             setStatusMenu({ rowId, anchor: e.currentTarget });
         },
-        [readOnly, writesLocked],
+        [readOnly, isLocked],
     );
 
     const autoSortMachine = async ({ machine }) => {
@@ -1100,16 +1234,17 @@ export default function Deemo({
     }, [serverMachines]);
 
     const onEditDoable = useCallback((row) => {
-        if (readOnly || writesLocked || isBlockRow(row)) return;
-        if (document.getElementById("doable_edit_modal")?.open) return; // click + onEdit can both fire
+        if (readOnly || isLocked() || isBlockRow(row)) return;
+        if (document.getElementById("doable_edit_modal")?.open) return;
         setDoableEditId(row.id);
         openDoableEditModal();
-    }, [readOnly, writesLocked]);
+    }, [readOnly, isLocked]);
 
     const rawColumns = useMemo(
-        () => makeColumns(writesLocked, readOnly ? undefined : handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly ? undefined : onEditDoable, readOnly),
-        [writesLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly, onEditDoable],
+        () => makeColumns(isLocked, readOnly ? undefined : handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly ? undefined : onEditDoable, readOnly),
+        [isLocked, handleStatusClick, toggleMachineCollapsed, highlightedMatch, selectedLocation, readOnly, onEditDoable],
     );
+    
     const columns = useMemo(
         () => (readOnly ? toReadOnlyColumns(rawColumns) : rawColumns),
         [readOnly, rawColumns],
@@ -1119,10 +1254,26 @@ export default function Deemo({
     // Only the real data columns (DATA_COLUMNS) get width overrides / the
     // collapsed hint — the leading SelectColumn (checkbox) and dragHandle
     // (grip) columns are structural, not user data, and are left alone.
-    const dataColumnKeys = useMemo(() => new Set(DATA_COLUMNS.map((c) => c.key)), []);
+    // ── Auto-fit widths (from cell content) ──────────────────────────────────
+    const getMachineLabel = useCallback(
+        (m) => (m === null ? "Unassigned" : m === MACHINE_MANUAL ? "MANUAL" : (nonMachineNameByKey.get(m) ?? m)),
+        [nonMachineNameByKey],
+    );
 
-    // Double-click a header to pop that column back to its default width
-    // (handy after shrinking/hiding it down to the MIN_COLUMN_WIDTH sliver).
+    const autoWidthsRef = useRef({});
+    const autoWidths = useMemo(() => {
+        const next = computeAutoWidths(data ?? [], DATA_COLUMNS, getMachineLabel);
+        if (sameRecord(autoWidthsRef.current, next)) return autoWidthsRef.current;
+        autoWidthsRef.current = next;
+        return next;
+    }, [data, getMachineLabel, fontTick]);
+
+    const isColumnHidden = useCallback(
+        (key) => (columnWidths[key] ?? Infinity) <= COLLAPSE_HINT_THRESHOLD,
+        [columnWidths],
+    );
+
+    // Double-click a header: drop the override -> back to auto-fit width.
     const handleHeaderDoubleClick = useCallback((columnKey) => {
         setColumnWidths((prev) => {
             if (!(columnKey in prev)) return prev;
@@ -1132,72 +1283,62 @@ export default function Deemo({
         });
     }, []);
 
-    // Feed the grid our widths so it has no private copy to disagree with.
-    const gridColumnWidths = useMemo(
-        () =>
-            new Map(
-                Object.entries(columnWidths).map(([key, width]) => [
-                    key,
-                    { type: "resized", width },
-                ]),
-            ),
-        [columnWidths],
-    );
+    // Controlled map handed to the grid: our overrides + the grid's own measured entries.
+    const gridColumnWidths = useMemo(() => {
+        const m = new Map(measuredWidths);
+        for (const [key, width] of Object.entries(columnWidths)) m.set(key, { type: "resized", width });
+        return m;
+    }, [measuredWidths, columnWidths]);
 
-    // The grid reports drag-resizes here as a full Map.
-    const handleColumnWidthsChange = useCallback(
-        (next) => {
-            setColumnWidths((prev) => {
-                const out = { ...prev };
-                let changed = false;
-                next.forEach((entry, key) => {
-                    if (!dataColumnKeys.has(key) || entry.type !== "resized") return;
-                    const w = Math.max(MIN_COLUMN_WIDTH, entry.width);
-                    if (out[key] !== w) { out[key] = w; changed = true; }
-                });
-                return changed ? out : prev;
-            });
-        },
-        [dataColumnKeys],
-    );
+    // The grid reports its full map here. Split it, normalise, and only touch state if
+    // something really changed (this is what stops the update loop).
+    const handleColumnWidthsChange = useCallback((next) => {
+        const resized = {};
+        const measured = new Map();
+        next.forEach((entry, key) => {
+            if (DATA_COLUMN_KEYS.has(key) && entry.type === "resized") {
+                // dragged to the smallest size -> snap to the sliver = hidden
+                resized[key] = entry.width <= COLLAPSE_HINT_THRESHOLD ? MIN_COLUMN_WIDTH : entry.width;
+            } else {
+                measured.set(key, entry);
+            }
+        });
+        if (!sameRecord(columnWidthsRef.current, resized)) setColumnWidths(resized);
+        if (!sameWidthMap(measuredWidthsRef.current, measured)) setMeasuredWidths(measured);
+    }, []);
 
-    // Toggle a column between its default width and the collapsed sliver.
-    // Used by the "Columns" visibility modal below. "Hidden" and "shrunk to
-    // the smallest resize size" are deliberately the same underlying state,
-    // so a column hidden from the modal still shows the same thin hint the
-    // manual-drag-to-shrink path leaves behind — nothing disappears outright.
-    const toggleColumnVisibility = useCallback(
-        (key) => {
-            setColumnWidths((prev) => {
-                const col = columns.find((c) => c.key === key);
-                const currentWidth = prev[key] ?? col?.width ?? 120;
-                const isHidden = currentWidth <= COLLAPSE_HINT_THRESHOLD;
-                const next = { ...prev };
-                if (isHidden) {
-                    delete next[key];
-                } else {
-                    next[key] = MIN_COLUMN_WIDTH;
-                }
-                return next;
-            });
-        },
-        [columns],
-    );
+    const toggleColumnVisibility = useCallback((key) => {
+        setColumnWidths((prev) => {
+            const next = { ...prev };
+            if ((prev[key] ?? Infinity) <= COLLAPSE_HINT_THRESHOLD) delete next[key]; // back to auto-fit
+            else next[key] = MIN_COLUMN_WIDTH;
+            return next;
+        });
+    }, []);
 
-    // Wraps `columns` with the width overrides + collapsed-hint styling
-    // above. This is what actually gets passed to the main <DataGrid />.
+    const showAllColumns = useCallback(() => {
+        setColumnWidths((prev) => {
+            const next = {};
+            let changed = false;
+            for (const [k, w] of Object.entries(prev)) {
+                if (w <= COLLAPSE_HINT_THRESHOLD) changed = true;
+                else next[k] = w;
+            }
+            return changed ? next : prev;
+        });
+    }, []);
+
     const decoratedColumns = useMemo(() => {
         return columns.map((col) => {
-            if (!col.key || !dataColumnKeys.has(col.key)) return col; // leave checkbox/grip columns untouched
-            const width = columnWidths[col.key];
-            const isCollapsed = width !== undefined && width <= COLLAPSE_HINT_THRESHOLD;
+            if (!col.key || !DATA_COLUMN_KEYS.has(col.key)) return col;
+            const override = columnWidths[col.key];
+            const isCollapsed = override !== undefined && override <= COLLAPSE_HINT_THRESHOLD;
             const OriginalHeader = col.renderHeaderCell;
 
             return {
                 ...col,
-                width: width ?? col.width ?? DEFAULT_COL_WIDTH,
+                width: override ?? autoWidths[col.key] ?? col.width ?? DEFAULT_COL_WIDTH,
                 minWidth: MIN_COLUMN_WIDTH,
-                maxWidth: isCollapsed ? MIN_COLUMN_WIDTH : col.maxWidth,
                 resizable: col.resizable ?? true,
                 headerCellClass: clsx(col.headerCellClass, isCollapsed && "bg-warning/20"),
                 cellClass: (row) =>
@@ -1209,11 +1350,7 @@ export default function Deemo({
                     <div
                         className="h-full w-full flex items-center overflow-hidden select-none"
                         onDoubleClick={() => handleHeaderDoubleClick(col.key)}
-                        title={
-                            isCollapsed
-                                ? `${col.name ?? col.key} — collapsed, double-click to restore`
-                                : undefined
-                        }
+                        title={isCollapsed ? `${col.name ?? col.key} — hidden, double-click to restore` : undefined}
                     >
                         {isCollapsed ? (
                             <span className="mx-auto w-1 h-3.5 rounded-full bg-warning" />
@@ -1226,7 +1363,7 @@ export default function Deemo({
                 ),
             };
         });
-    }, [columns, columnWidths, dataColumnKeys, handleHeaderDoubleClick]);
+    }, [columns, columnWidths, autoWidths, handleHeaderDoubleClick]);
 
     const rawBakeColumns = useMemo(
         () => makeBakeColumns(highlightedMatch, toggleOvenCollapsed),
@@ -1236,28 +1373,6 @@ export default function Deemo({
         () => (readOnly ? toReadOnlyColumns(rawBakeColumns) : rawBakeColumns),
         [readOnly, rawBakeColumns],
     );
-
-    const machineTotalDoable = useMemo(() => {
-        const result = {};
-        dataRows.forEach((r) => {
-            if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
-            if (isBlockRow(r)) return;
-            if (r?.is_rework) return;
-            result[r.machine] =
-                (result[r.machine] || 0) + (Number(r.doable) || 0);
-        });
-        return result;
-    }, [dataRows]);
-
-    const machineTotalQuantity = useMemo(() => {
-        const result = {};
-        dataRows.forEach((r) => {
-            if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
-            if (isBlockRow(r)) return;
-            result[r.machine] = (result[r.machine] || 0) + (Number(r.qty) || 0);
-        });
-        return result;
-    }, [dataRows]);
 
     const isOtherLoc = useCallback(
         (r) => !isBlockRow(r) && r.location != null && r.location !== selectedLocation,
@@ -1279,43 +1394,90 @@ export default function Deemo({
         return rowInActiveTabOwn(r);
     }, [isOtherLoc, rowInActiveTabOwn]);
 
-    const otherLocationCounts = useMemo(() => {
-        const result = {};
-        dataRows.forEach((r) => {
-            if (r.machine === null || isBlockRow(r) || isParked(r) || !isOtherLoc(r)) return;
-            result[r.machine] = (result[r.machine] ?? 0) + 1;
-        });
-        return result;
-    }, [dataRows, isParked, isOtherLoc]);
+    const {
+        rowsByMachine, rowsByBucket, machineTotalDoable, machineTotalQuantity,
+        nonMachineRowCounts, orphanMachines, missingPartCount,
+    } = useMemo(() => {
+        const byMachine = new Map();
+        const byBucket = new Map();
+        const totalDoable = {};
+        const totalQty = {};
+        const nmCounts = {};
+        const orphans = new Set();
+        const missing = new Set();
 
-    // ── Migrated from LoadingPlanTable.jsx: otherPackageCounts ─────────────
-    // How many rows sit on a machine but are hidden by the current package
-    // tab (they belong to some OTHER package group). Unassigned ignores the
-    // package filter entirely (see displayRows below), so it's never
-    // counted here — same contract as LoadingPlanTable.jsx.
-    const otherPackageCounts = useMemo(() => {
-        const result = {};
-        dataRows.forEach((r) => {
-            if (r.machine === null) return;
-            if (isBlockRow(r) || isParked(r) || isOtherLoc(r)) return;
-            if (rowInActiveTab(r)) return;
-            result[r.machine] = (result[r.machine] ?? 0) + 1;
-        });
-        return result;
-    }, [dataRows, rowInActiveTab, isParked, isOtherLoc]);
+        for (const r of dataRows) {
+            const m = r.machine;
+            const block = isBlockRow(r);
 
-    const machineSectionDoable = useMemo(() => {
-        const result = {};
-        dataRows.forEach((r) => {
-            if (!r.machine || !(isNonMachineKey(r.machine) || hasTimeline(r.machine))) return;
-            if (isBlockRow(r) || isParked(r) || r.is_rework) return;
-            if (!rowInActiveTab(r)) return;
-            result[r.machine] = (result[r.machine] || 0) + (Number(r.doable) || 0);
-        });
-        return result;
-    }, [dataRows, rowInActiveTab, isParked]);
+            let list = byMachine.get(m);
+            if (!list) byMachine.set(m, (list = []));
+            list.push(r);
 
-        // ── Commit vs capacity, all machines (overview modal) ──────────────────
+            if (r.bucket_id != null) {
+                let bl = byBucket.get(r.bucket_id);
+                if (!bl) byBucket.set(r.bucket_id, (bl = []));
+                bl.push(r);
+            }
+
+            if (m) {
+                const nm = isNonMachineKey(m);
+                if (nm) nmCounts[m] = (nmCounts[m] ?? 0) + 1;
+                else if (m !== MACHINE_MANUAL && !knownMachineNames.has(m)) orphans.add(m);
+
+                if (!block && (nm || hasTimeline(m))) {
+                    totalQty[m] = (totalQty[m] ?? 0) + (Number(r.qty) || 0);
+                    if (!r.is_rework) totalDoable[m] = (totalDoable[m] ?? 0) + (Number(r.doable) || 0);
+                }
+            }
+
+            if (!block && r.source !== "f3" && r.doable_status === "no_recipe") missing.add(r.part_name);
+        }
+
+        return {
+            rowsByMachine: byMachine,
+            rowsByBucket: byBucket,
+            machineTotalDoable: totalDoable,
+            machineTotalQuantity: totalQty,
+            nonMachineRowCounts: nmCounts,
+            orphanMachines: [...orphans].sort(),
+            missingPartCount: missing.size,
+        };
+    }, [dataRows, knownMachineNames]);
+
+    const tabItems = useMemo(() => [
+        ...(readOnly ? [] : ["Unassigned"]),
+        ALL_PACKAGES_TAB,
+        ...(isF3 ? [] : [RES_TAB]),
+        FOR_BAKE_TAB,
+        ...(isF3 ? [] : [PICKUP_TAB]),
+        ...(orphanMachines.length ? [ORPHAN_TAB] : []),
+        ...(packageGroupNames ?? []),
+    ], [readOnly, isF3, orphanMachines.length, packageGroupNames]);
+
+    const { otherLocationCounts, otherPackageCounts, machineSectionDoable } = useMemo(() => {
+        const otherLoc = {};
+        const otherPkg = {};
+        const sectionDoable = {};
+
+        for (const r of dataRows) {
+            const m = r.machine;
+            if (m === null || isBlockRow(r) || isParked(r)) continue;
+
+            const other = isOtherLoc(r);
+            const inTab = rowInActiveTab(r);
+
+            if (other) otherLoc[m] = (otherLoc[m] ?? 0) + 1;
+            else if (!inTab) otherPkg[m] = (otherPkg[m] ?? 0) + 1;
+
+            if (inTab && m && !r.is_rework && (isNonMachineKey(m) || hasTimeline(m))) {
+                sectionDoable[m] = (sectionDoable[m] ?? 0) + (Number(r.doable) || 0);
+            }
+        }
+        return { otherLocationCounts: otherLoc, otherPackageCounts: otherPkg, machineSectionDoable: sectionDoable };
+    }, [dataRows, isParked, isOtherLoc, rowInActiveTab]);
+
+    // ── Commit vs capacity, all machines (overview modal) ──────────────────
     // machineCapacity is a Deferred prop: undefined until it loads.
     const capacityLoading = machineCapacity === undefined;
 
@@ -1353,25 +1515,6 @@ export default function Deemo({
                 return String(a).localeCompare(String(b));
             });
     }, [bakeLots]);
-
-    const rowsByMachine = useMemo(() => {
-        const m = new Map();
-        for (const r of dataRows) {
-            if (!m.has(r.machine)) m.set(r.machine, []);
-            m.get(r.machine).push(r);
-        }
-        return m;
-    }, [dataRows]);
-
-    const rowsByBucket = useMemo(() => {
-        const m = new Map();
-        for (const r of dataRows) {
-            if (r.bucket_id == null) continue;
-            if (!m.has(r.bucket_id)) m.set(r.bucket_id, []);
-            m.get(r.bucket_id).push(r);
-        }
-        return m;
-    }, [dataRows]);
 
     const dataRowCache = useRef(new WeakMap());
     const asDataRow = useCallback((r, machineLabel) => {
@@ -1683,6 +1826,9 @@ export default function Deemo({
     async function handleExport() {
         setIsExporting(true);
         try {
+            const { exportLoadingPlanToExcel, downloadExcelBuffer } =
+                await import("@/Lib/LoadingPlan/loadingPlanExcelExporter");
+
             const buffer = await exportLoadingPlanToExcel({
                 dataRows,
                 machines: [...machines, ...nonMachineKeys], // unassigned still show on view-only
@@ -1714,8 +1860,10 @@ export default function Deemo({
     //     }
     // }
 
-    const stickyMachine = useStickyGroupHeader(displayRows, gridRef, activePackage === FOR_BAKE_TAB);
-    const stickyOven = useStickyGroupHeader(bakeDisplayRows, gridRef, activePackage === FOR_BAKE_TAB);
+    const EMPTY = [];
+    const onBake = activePackage === FOR_BAKE_TAB;
+    const stickyMachine = useStickyGroupHeader(onBake ? EMPTY : displayRows, gridRef, onBake);
+    const stickyOven = useStickyGroupHeader(onBake ? bakeDisplayRows : EMPTY, gridRef, onBake);
 
     // Deemo always renders a machine section once it has rows (see
     // displayRows above) — "idle" here just means a real machine from
@@ -1742,7 +1890,7 @@ export default function Deemo({
     );
 
     const goToTab = useCallback((pkg) => {
-        setActivePackage(pkg);
+        setActiveTab(pkg);
         clearSelection();
         clearBakeSelection();
     }, [clearSelection, clearBakeSelection]);
@@ -1847,10 +1995,8 @@ export default function Deemo({
     const {
         sensors,
         collisionDetection,
-        hoveredRowId,
         draggedRow,
         handleDragStart,
-        handleDragOver,
         handleDragEnd,
         draggedCount,
         handleDragCancel,
@@ -1877,27 +2023,20 @@ export default function Deemo({
         selectedLocation
     });
 
-    const rowClass = useCallback(
-        (row) => {
-            const isData = row.__type === "data";
-            const scm = isData && row.is_scm && !selectedRows.has(row.id) ? "bg-error/25" : "";
-
-            const other = isData && isOtherLoc(row) ? "bg-secondary/10" : "";
-            const rowDropId = `row-${row.id}`;
-            if (!readOnly && hoveredRowId === rowDropId)
-                return "bg-pink-500 relative drop-target-row";
-            if (row.__headerKind === "bucket")
-                return "text-xs border-t-2 border-info/50 flex machine-header-row";
-            if (row.__type === "header")
-                return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
-            if (isBlockRow(row) && !selectedRows.has(row.id))
-                return "block-row-bg border-l-4 border-warning/60";
-            if (row.is_rework && !selectedRows.has(row.id))
-                return clsx("border-l-4 border-info/60", scm || other);
-            return clsx(scm || other) || undefined;
-        },
-        [readOnly, hoveredRowId, selectedRows, isOtherLoc],
-    );
+    const rowClass = useCallback((row) => {
+        const isData = row.__type === "data";
+        const scm = isData && row.is_scm ? "bg-error/25" : "";
+        const other = isData && isOtherLoc(row) ? "bg-secondary/10" : "";
+        if (row.__headerKind === "bucket")
+            return "text-xs border-t-2 border-info/50 flex machine-header-row";
+        if (row.__type === "header")
+            return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
+        if (isBlockRow(row))
+            return "block-row-bg border-l-4 border-warning/60";
+        if (row.is_rework)
+            return clsx("border-l-4 border-info/60", scm || other);
+        return clsx(scm || other) || undefined;
+    }, [isOtherLoc]);
 
     const [bucketModalMachine, setBucketModalMachine] = useState(null);
     const [bucketLabel, setBucketLabel] = useState("");
@@ -1974,6 +2113,12 @@ export default function Deemo({
         handleButtonsPointerLeave,
         handleGridScroll,
     } = useRowHoverInsert(displayRows);
+
+    const renderers = useMemo(() => ({
+        renderRow: (key, props) => (
+            <DroppableRow key={key} rowIdxByElement={rowIdxByElement} {...props} />
+        ),
+    }), [rowIdxByElement]);
 
     const hoveredRowData = displayRows[hoveredRow?.rowIdx] ?? null;
     const isInsertRowButtonVisible = !readOnly && hoveredRowData && hoveredRowData?.machine !== null && hoveredRowData?.__type === "data" && !writesLocked;
@@ -2063,12 +2208,6 @@ export default function Deemo({
 
     // ── missing part names ──
     const [missingParts, setMissingParts] = useState(null);
-    const missingPartCount = useMemo(
-        () => new Set(dataRows
-            .filter((r) => !isBlockRow(r) && r.source !== "f3" && r.doable_status === "no_recipe")
-            .map((r) => r.part_name)).size,
-        [dataRows],
-    );
 
     const openMissingParts = useCallback(async (partName = null) => {
         try {
@@ -2147,10 +2286,25 @@ export default function Deemo({
     }, [beginWrite, holdLock, mutate, date, toast, reportError]);
 
     useEffect(() => {
-        if (!tabItems.includes(activePackage)) goToTab(ALL_PACKAGES_TAB);
-    }, [tabItems, activePackage, goToTab]);
+        if (!tabItems.includes(activeTab)) goToTab(ALL_PACKAGES_TAB);
+    }, [tabItems, activeTab, goToTab]);
 
     useEffect(() => { setSelectedDate(dayjs(date).toDate()); }, [date]);
+
+    const [containerEl, setContainerEl] = useState(null);
+    const [insertAnchorRow, setInsertAnchorRow] = useState(null);
+
+    const handleInsert = useCallback((position, row) => {
+        setPlacementOfNewEntry(position);
+        setInsertAnchorRow(row);                 // replaces lastHoveredRow
+        setSelectedRows(new Set([row.id]));
+        addEntryModalRef.current?.showModal();
+    }, []);
+
+    const handleViewHistory = useCallback((row) => {
+        setHistoryEntryId(row.entry_id);
+        historyModalRef.current?.showModal();
+    }, []);
 
     return (
         <div
@@ -2244,10 +2398,10 @@ export default function Deemo({
 
                                     <button
                                         onClick={handleUndo}
-                                        disabled={!canUndo() || writesLocked}
+                                        disabled={!canUndoNow || writesLocked}
                                         className={clsx(
                                             "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
-                                            interactiveCursorClasses(!canUndo() || writesLocked),
+                                            interactiveCursorClasses(!canUndoNow || writesLocked),
                                         )}
                                         title="Undo (Ctrl+Z)"
                                     >
@@ -2255,10 +2409,10 @@ export default function Deemo({
                                     </button>
                                     <button
                                         onClick={handleRedo}
-                                        disabled={!canRedo() || writesLocked}
+                                        disabled={!canRedoNow || writesLocked}
                                         className={clsx(
                                             "btn btn-ghost px-2 py-1 text-xs rounded border border-base-300 text-base-content/60 disabled:opacity-30 hover:bg-base-200",
-                                            interactiveCursorClasses(!canRedo() || writesLocked),
+                                            interactiveCursorClasses(!canRedoNow || writesLocked),
                                         )}
                                         title="Redo (Ctrl+Y)"
                                     >
@@ -2376,7 +2530,7 @@ export default function Deemo({
                     <div className="flex flex-wrap justify-between gap-2">
                         <ScrollableTabs
                             items={tabItems}
-                            active={activePackage}
+                            active={activeTab}
                             onChange={(pkg) => goToTab(pkg)}
                             storageKey="loadingPlan:packageTabs:active"
                         />
@@ -2461,7 +2615,7 @@ export default function Deemo({
                 <TableInteractionContext.Provider
                     value={tableInteractionValue}
                 >
-                    <div style={{ position: "relative" }}>
+                    <div style={{ position: "relative" }} className={clsx(isTabSwitching && "opacity-60 transition-opacity")}>
                         {search.searchOpen && (
                             <SearchBar
                                 query={search.searchQuery}
@@ -2488,7 +2642,7 @@ export default function Deemo({
                                     ref={gridRef}
                                     columns={bakeColumns}
                                     rows={bakeDisplayRows}
-                                    rowKeyGetter={(row) => row.id}
+                                    rowKeyGetter={getRowKey}
                                     selectedRows={readOnly ? undefined : selectedBakeRows}
                                     onSelectedRowsChange={readOnly ? undefined : setSelectedBakeRows}
                                     rowClass={(row) =>
@@ -2498,11 +2652,10 @@ export default function Deemo({
                                     }
                                     rowHeight={ROW_HEIGHT}
                                     headerRowHeight={HEADER_ROW_HEIGHT}
-                                    defaultColumnOptions={{ resizable: true }}
-                                    isRowSelectionDisabled={(row) => row.isLocked}
-                                    onScroll={handleGridScroll}
+                                    defaultColumnOptions={DEFAULT_COLUMN_OPTIONS}
+                                    isRowSelectionDisabled={isRowLocked}
                                     className="bg-base-100"
-                                    style={{ blockSize: "70vh" }}
+                                    style={BAKE_GRID_STYLE}
                                 />
 
                                 {stickyOven && (
@@ -2537,72 +2690,41 @@ export default function Deemo({
                                 measuring={{
                                     droppable: { strategy: MeasuringStrategy.BeforeDragging },
                                 }}
-                                onDragOver={readOnly ? undefined : handleDragOver}
                                 sensors={readOnly || staleInfo ? [] : sensors}
                                 onDragStart={readOnly ? undefined : handleDragStart}
                                 onDragEnd={readOnly ? undefined : handleDragEnd}
                                 onDragCancel={readOnly ? undefined : handleDragCancel}
                             >
-                            <div ref={containerRef} className="border-none" style={{ position: "relative" }}>
+                                <div ref={setContainerEl} className="border-none" style={{ position: "relative" }}>
                                     <DataGrid
                                         ref={gridRef}
                                         columns={decoratedColumns}
                                         rows={displayRows}
-                                        // columnWidths={gridColumnWidths} // this causes Error: Maximum update depth exceeded on console. so i remove it. no solution found yet.
-                                        renderers={{
-                                            renderRow: (key, props) => (
-                                                <DroppableRow key={key} rowIdxByElement={rowIdxByElement} props={props}/>
-                                            ),
-                                        }}
-                                        onRowsChange={readOnly ? undefined : handleRowsChange}
+                                        columnWidths={gridColumnWidths}
                                         onColumnWidthsChange={handleColumnWidthsChange}
-                                        rowKeyGetter={(row) => row.id}
+                                        renderers={renderers}
+                                        onRowsChange={readOnly ? undefined : handleRowsChange}
+                                        rowKeyGetter={getRowKey}
                                         selectedRows={readOnly ? undefined : selectedRows}
                                         onSelectedRowsChange={readOnly ? undefined : setSelectedRows}
-                                        rowClass={(row) => rowClass(row)}
+                                        rowClass={rowClass}
                                         rowHeight={ROW_HEIGHT}
                                         headerRowHeight={HEADER_ROW_HEIGHT}
-                                        defaultColumnOptions={{ resizable: true }}
+                                        defaultColumnOptions={DEFAULT_COLUMN_OPTIONS}
                                         isRowSelectionDisabled={(row) =>
                                             row.isLocked
                                         }
-                                        onScroll={handleGridScroll}
                                         className="bg-base-100"
-                                        style={{ blockSize: "80vh" }}
+                                        style={MACHINE_GRID_STYLE}
                                     />
-
-                                    {hoveredRow && (
-                                        <div onPointerLeave={handleButtonsPointerLeave}>
-                                            {!readOnly && (
-                                                <RowInsertButtons
-                                                    isHidden={!isInsertRowButtonVisible}
-                                                    anchorElement={hoveredRow.element}
-                                                    buttonsRef={buttonsRef}
-                                                    onInsertAbove={() => {
-                                                        setPlacementOfNewEntry("above");
-                                                        setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
-                                                        addEntryModalRef.current?.showModal()
-                                                    }}
-                                                    onInsertBelow={() => {
-                                                        setPlacementOfNewEntry("below");
-                                                        setSelectedRows(new Set([displayRows[hoveredRow.rowIdx].id]));
-                                                        addEntryModalRef.current?.showModal()
-                                                    }}
-                                                />
-                                            )}
-
-                                            <RowHistoryButton
-                                                isHidden={!isHistoryButtonVisible}
-                                                anchorElement={hoveredRow.element}
-                                                buttonsRef={historyButtonRef}
-                                                onViewHistory={() => {
-                                                    const entry = displayRows[hoveredRow.rowIdx];
-                                                    setHistoryEntryId(entry.entry_id);
-                                                    historyModalRef.current?.showModal();
-                                                }}
-                                            />
-                                        </div>
-                                    )}
+                                    <RowHoverTools
+                                        container={containerEl}
+                                        displayRows={displayRows}
+                                        rowIdxByElement={rowIdxByElement}
+                                        canInsert={!readOnly && !writesLocked}
+                                        onInsert={handleInsert}
+                                        onViewHistory={handleViewHistory}
+                                    />
 
                                     {/* Sticky stand-in for whichever machine group's real header
                                         row has scrolled out of view. Also carries the Add
@@ -2656,7 +2778,7 @@ export default function Deemo({
                                             </div>
                                         </div>
                                     )}
-                            </div>
+                                </div>
 
                             <DragOverlay>
                                 {!readOnly && draggedRow ? (
@@ -2721,7 +2843,7 @@ export default function Deemo({
                         <AddEntryModal
                             ref={addEntryModalRef}
                             placement={placementOfNewEntry}
-                            anchorRow={lastHoveredRow}
+                            anchorRow={insertAnchorRow}
                             onClose={() => {
                                 addEntryModalRef.current?.close();
                                 setPlacementOfNewEntry(null);
@@ -2770,7 +2892,9 @@ export default function Deemo({
                     <dialog id="missing_parts_modal" className="modal">
                         <div className="modal-box bg-base-300 w-11/12 max-w-6xl">
                             {missingParts && (
-                                <PartNameMultiInsertForm parts={missingParts} onSaved={handleMissingPartsSaved} />
+                                <Suspense fallback={<span className="loading loading-spinner" />}>
+                                    <PartNameMultiInsertForm parts={missingParts} onSaved={handleMissingPartsSaved} />
+                                </Suspense>
                             )}
                             <div className="modal-action"><form method="dialog"><button className="btn btn-ghost btn-sm">Close</button></form></div>
                         </div>
@@ -3146,33 +3270,30 @@ export default function Deemo({
                 Kept in readOnly mode too — it's a local view preference, not a
                 mutation of loading-plan data. */}
             {(() => null)()}
-            <dialog id="column_visibility_modal" className="modal">
-                {(() => {
-                    const visibleCols = columns.filter((col) => dataColumnKeys.has(col.key));
-                    const isColHidden = (key) => {
-                        const w = columnWidths[key];
-                        return w !== undefined && w <= COLLAPSE_HINT_THRESHOLD;
-                    };
-                    const hiddenCount = visibleCols.filter((col) => isColHidden(col.key)).length;
+                <dialog id="column_visibility_modal" className="modal">
+                    {(() => {
+                        const visibleCols = columns.filter((col) => DATA_COLUMN_KEYS.has(col.key));
+                        const hiddenCount = visibleCols.filter((col) => isColumnHidden(col.key)).length;
 
-                    return (
-                        <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="font-bold text-lg">Column Visibility</h3>
-                                <span
-                                    className={`badge badge-sm ${
-                                        hiddenCount > 0 ? 'badge-warning' : 'badge-ghost'
-                                    }`}
-                                >
-                                    {hiddenCount > 0
-                                        ? `${hiddenCount} hidden`
-                                        : 'All visible'}
-                                </span>
-                            </div>
+                        return (
+                            <div className="modal-box bg-base-300 max-h-[80vh] flex flex-col">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="font-bold text-lg">Column Visibility</h3>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`badge badge-sm ${hiddenCount > 0 ? "badge-warning" : "badge-ghost"}`}>
+                                            {hiddenCount > 0 ? `${hiddenCount} hidden` : "All visible"}
+                                        </span>
+                                        {hiddenCount > 0 && (
+                                            <button type="button" className="btn btn-warning btn-xs" onClick={showAllColumns}>
+                                                Show all
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
 
-                            <div className="flex flex-col overflow-y-auto pr-1">
-                                {visibleCols.map((col) => {
-                                    const isHidden = isColHidden(col.key);
+                                <div className="flex flex-col overflow-y-auto pr-1">
+                                    {visibleCols.map((col) => {
+                                        const isHidden = isColumnHidden(col.key);
                                     return (
                                         <label
                                             key={col.key}

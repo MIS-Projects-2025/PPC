@@ -35,12 +35,6 @@ export function useDragReorder({
 
     const handleDragCancel = useCallback(() => {
         setActiveId(null);
-        setHoveredRowId(null);
-    }, []);
-
-    const handleDragOver = useCallback((event) => {
-        const overId = event.over ? event.over.id : null;
-        setHoveredRowId((prev) => (prev !== overId ? overId : prev));
     }, []);
 
     const refusedRef = useRef(false);
@@ -168,14 +162,14 @@ export function useDragReorder({
 
             const build = (prev) => {
                 const order = new Map(group.map((r, i) => [r.id, i]));
-                const next = prev.map((r) => ({ ...r }));
+                const next = prev.slice();
                 const idxOf = (id) => next.findIndex((r) => String(r.id) === String(id));
 
                 const isTransfer = group.some((r) => r.machine !== toMachine);
                 const targetIdx = target ? idxOf(target.id) : -1;
                 const down = !!target && !isTransfer && group.every((r) => idxOf(r.id) < targetIdx);
 
-                const moved = next.filter((r) => order.has(r.id)).sort((a, b) => order.get(a.id) - order.get(b.id));
+                const moved = next.filter((r) => order.has(r.id)).sort((a, b) => order.get(a.id) - order.get(b.id)).map((r) => ({ ...r }));
                 const rest = next.filter((r) => !order.has(r.id));
 
                 let insertAt;
@@ -264,7 +258,6 @@ export function useDragReorder({
     const handleDragEnd = useCallback(
         (event) => {
             setActiveId(null);
-            setHoveredRowId(null);
             if (refusedRef.current) { refusedRef.current = false; return; }
             const { active, over } = event;
             if (!over) return;
@@ -333,7 +326,7 @@ export function useDragReorder({
             let pending = null;
 
             const build = (prev) => {
-                const next = prev.map((r) => ({ ...r }));
+                const next = prev.slice();
                 const fromIndex = next.findIndex((r) => r.id === draggedRowId);
                 if (fromIndex === -1) return prev;
                 
@@ -342,7 +335,7 @@ export function useDragReorder({
 
                 if (overId.startsWith("machine-")) {
                     const targetMachine = droppableMachineFromToken(overId);
-                    [moved] = next.splice(fromIndex, 1);
+                    moved = { ...next.splice(fromIndex, 1)[0] };
                     fromMachine = moved.machine;
                     toMachine = targetMachine;
                     isTransfer = fromMachine !== toMachine;
@@ -369,7 +362,7 @@ export function useDragReorder({
                     isTransfer = fromMachine !== toMachine;
                     const draggingDown = fromIndex < targetIndex;
 
-                    [moved] = next.splice(fromIndex, 1);
+                    moved = { ...next.splice(fromIndex, 1)[0] };
                     if (isTransfer) moved.machine = toMachine;
 
                     let insertAt;
@@ -498,11 +491,9 @@ export function useDragReorder({
     return {
         sensors,
         collisionDetection: pointerWithin,
-        hoveredRowId,
         draggedRow,
         draggedCount,
         handleDragStart,
-        handleDragOver,
         handleDragEnd,
         handleDragCancel,
     };

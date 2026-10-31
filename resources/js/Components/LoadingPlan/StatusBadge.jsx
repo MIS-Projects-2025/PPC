@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 const TONE = {
     neutral: "bg-base-content/10 text-base-content/80 border-base-content/50",
     progress: "bg-info/50 text-base-content border-info",
@@ -53,7 +55,7 @@ const STATUS_STYLES = {
     REWORK: TONE.rework,
 };
 
-export function StatusBadge({ status }) {
+export const StatusBadge = memo(function StatusBadge({ status }) {
     const cls =
         STATUS_STYLES[status] ??
         "bg-base-content/10 text-base-content/60 border-base-content/50";
@@ -64,4 +66,4 @@ export function StatusBadge({ status }) {
             {status}
         </span>
     );
-}
+});

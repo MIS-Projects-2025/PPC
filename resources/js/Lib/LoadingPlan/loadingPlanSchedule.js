@@ -4,12 +4,35 @@ import dayjs from "dayjs"; // or whatever date lib is already available
 
 const GAP_LABEL = "Gap";
 
+const DT_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/;
+const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})/;
+const MS_PER_DAY = 86400000;
+
+function dayNumber(referenceDate) {
+    if (typeof referenceDate === "string") {
+        const m = DAY_RE.exec(referenceDate);
+        if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]) / MS_PER_DAY;
+    }
+    const d = dayjs(referenceDate);
+    return Date.UTC(d.year(), d.month(), d.date()) / MS_PER_DAY;
+}
+
+function splitDatetime(v, refDay) {
+    if (!v) return [null, 0];
+    if (typeof v === "string") {
+        const m = DT_RE.exec(v);
+        if (m) {
+            return [`${m[4]}:${m[5]}`, Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / MS_PER_DAY - refDay)];
+        }
+    }
+    const d = dayjs(v);
+    return [d.format("HH:mm"), Math.round(Date.UTC(d.year(), d.month(), d.date()) / MS_PER_DAY - refDay)];
+}
+
 export function timeFieldsFromDatetimes(startAt, endAt, referenceDate) {
-    const ref = dayjs(referenceDate).startOf("day");
-    const part = (v) =>
-        v ? [dayjs(v).format("HH:mm"), dayjs(v).startOf("day").diff(ref, "day")] : [null, 0];
-    const [time_start, time_start_day_offset] = part(startAt);
-    const [time_end, time_end_day_offset] = part(endAt);
+    const refDay = dayNumber(referenceDate);
+    const [time_start, time_start_day_offset] = splitDatetime(startAt, refDay);
+    const [time_end, time_end_day_offset] = splitDatetime(endAt, refDay);
     return {
         time_start, time_start_day_offset,
         time_end, time_end_day_offset,
