@@ -7,7 +7,7 @@ export function BucketHeaderBar({ row, onToggleCollapse, isOver, innerRef }) {
     const { readOnly, onRenameBucket, onDeleteBucket } = useContext(TableInteractionContext) ?? {};
     return (
         <div ref={innerRef} className={clsx(
-            "w-full h-full flex items-center bg-info/10",
+            "w-full h-full text-xs flex items-center bg-info/10",
             row.nested && "pl-6",
             isOver && "outline-2 outline-dashed outline-[#7dd3fc] outline-offset-[-2px]",
         )}>

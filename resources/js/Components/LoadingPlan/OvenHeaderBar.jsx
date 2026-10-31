@@ -8,7 +8,7 @@ export function OvenHeaderBar({ row, rowCount, isCollapsed, onToggleCollapse }) 
     const { readOnly } = useContext(TableInteractionContext) ?? {};
 
     return (
-        <div className="w-full h-full border-opposite-100 font-semibold flex items-center box-border">
+        <div className="w-full h-full text-xs border-opposite-100 font-semibold flex items-center box-border">
             <div className={clsx("sticky flex gap-2 h-full items-center", readOnly ? "left-0" : "left-9")}>
                 <div className="w-84 h-full font-extrabold whitespace-nowrap flex items-center gap-2">
                     <button

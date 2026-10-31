@@ -130,15 +130,15 @@ export function MachineHeaderBar({
 
     return (
         <div
-            className={`w-full ${factoryColor} h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
+            className={`w-full text-xs ${factoryColor} h-full border-opposite-100 font-semibold flex items-center box-border transition-colors duration-100 ${
                 isOver
                     ? "outline-2 outline-dashed outline-[#7dd3fc] outline-offset-[-2px]"
                     : "outline-none"
             }`}
             ref={innerRef}
         >
-			<div className={clsx("sticky flex gap-2 h-full items-center", readOnly ? "left-0" : "left-9")}>
-				<div className="w-80 h-full font-extrabold whitespace-nowrap flex justify-between items-center gap-2">
+			<div className={clsx("sticky flex pl-8 gap-2 h-full items-center", readOnly ? "left-0" : "left-9")}>
+				<div className="w-60 h-full font-extrabold whitespace-nowrap flex justify-between items-center gap-2">
 					{editing ? (
 						<input
 							autoFocus
@@ -174,7 +174,7 @@ export function MachineHeaderBar({
 							>
 								{machineLabel}
 							</span>
-							{row?.machineLocation && <span className="badge badge-outline badge-sm font-mono">{row.machineLocation}</span>}
+							{row?.machineLocation && <span className="font-mono opacity-50">{row.machineLocation}</span>}
 						</button>
 					)}
                     
@@ -268,94 +268,96 @@ export function MachineHeaderBar({
 						{showingOtherLoc ? "Hide" : "Show"} +{otherLocCount} other location
 					</button>
 				)}
-
-				{/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
-				{!isUnassigned && !isManual && !isNonMachine && (
-					<Deferred
-						data="machineCapacity"
-						fallback={
-							<div className="flex flex-col min-w-[170px]">
-								<div className="h-6 w-full rounded-md animate-pulse flex items-center text-[10px] text-base-content/40 font-mono">
-									<span className="loading loading-spinner loading-xs mr-2"></span>
-									Loading capacity...
-								</div>
-							</div>
-						}
-					>
-						<div className="flex flex-col h-full min-w-[300px]">
-							<HoverCell
-								trigger={
-									<div
-										className={`bg-puple-500 shadow-md border border-opposite-100/20 relative w-full h-full overflow-hidden flex cursor-pointer ${
-											isExceeded ? "ring-1 ring-error" : ""
-										}`}
-									>
-										<div
-											className={`h-full transition-all duration-300 ${
-												isExceeded
-													? "bg-error"
-													: sectionPct + otherPct > 85
-													? "bg-warning/50"
-													: "bg-lime-300/50"
-											}`}
-											style={{ width: `${sectionPct}%` }}
-										/>
-										<div
-											className={`h-full transition-all duration-300 ${
-												isExceeded
-													? "bg-error"
-													: sectionPct + otherPct > 85
-													? "bg-warning/50"
-													: "bg-lime-300"
-											}`}
-											style={{ width: `${otherPct}%` }}
-										/>
-										<div className="absolute inset-0 flex items-center justify-between px-2 font-mono text-[11px] z-10 pointer-events-none whitespace-nowrap">
-											<div className="flex items-center gap-1.5">
-												<span className="text-base-content bg-base-300 rounded px-1 font-black">
-													{overallDoable.toLocaleString()}{" "}
-												</span>
-												<span className="text-base-content text-[10px] font-normal">
-													({sectionDoable.toLocaleString()} here)
-												</span>
-											</div>
-											<span className="text-base-content text-[10px] font-normal">
-												/ {CAPACITY.toLocaleString()}
-											</span>
-										</div>
-									</div>
-								}
-							>
-								<div className="text-xs font-mono rounded-lg text-base-100 space-y-1.5 min-w-[180px] text-left">
-									<div className="flex justify-between items-center gap-3">
-										<span className="text-primary font-bold">This Section:</span>
-										<span className="font-bold bg-primary px-1.5 py-0.5 rounded text-[11px]">
-											{sectionDoable.toLocaleString()}
-										</span>
-									</div>
-									<div className="flex justify-between items-center gap-3">
-										<span className="opacity-70">Machine Total:</span>
-										<span className="font-semibold">
-											{overallDoable.toLocaleString()}
-										</span>
-									</div>
-									<div className="flex justify-between items-center gap-3 border-t border-neutral-content/15 pt-1">
-										<span className="opacity-70">Capacity:</span>
-										<span className="font-semibold">
-											{CAPACITY.toLocaleString()}
-										</span>
-									</div>
-									{effectiveFrom && (
-										<div className="text-[10px] opacity-50 pt-0.5 border-t border-neutral-content/10">
-											Effective: {effectiveFrom}
-										</div>
-									)}
-								</div>
-							</HoverCell>
-						</div>
-					</Deferred>
-				)}
 			</div>
+
+            {/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
+            {!isUnassigned && !isManual && !isNonMachine && (
+                <div className="sticky right-0 z-10 ml-auto h-full shrink-0 bg-base-100">
+                    <Deferred
+                        data="machineCapacity"
+                        fallback={
+                            <div className="flex flex-col min-w-[170px]">
+                                <div className="h-6 w-full rounded-md animate-pulse flex items-center text-[10px] text-base-content/40 font-mono">
+                                    <span className="loading loading-spinner loading-xs mr-2"></span>
+                                    Loading capacity...
+                                </div>
+                            </div>
+                        }
+                    >
+                        <div className="flex flex-col h-full min-w-[300px]">
+                            <HoverCell
+                                trigger={
+                                    <div
+                                        className={`bg-puple-500 shadow-md border border-opposite-100/20 relative w-full h-full overflow-hidden flex cursor-pointer ${
+                                            isExceeded ? "ring-1 ring-error" : ""
+                                        }`}
+                                    >
+                                        <div
+                                            className={`h-full transition-all duration-300 ${
+                                                isExceeded
+                                                    ? "bg-error"
+                                                    : sectionPct + otherPct > 85
+                                                    ? "bg-warning"
+                                                    : "bg-lime-300"
+                                            }`}
+                                            style={{ width: `${sectionPct}%` }}
+                                        />
+                                        <div
+                                            className={`h-full transition-all duration-300 ${
+                                                isExceeded
+                                                    ? "bg-error"
+                                                    : sectionPct + otherPct > 85
+                                                    ? "bg-warning"
+                                                    : "bg-lime-300"
+                                            }`}
+                                            style={{ width: `${otherPct}%` }}
+                                        />
+                                        <div className="absolute inset-0 flex items-center justify-between px-2 font-mono text-[11px] z-10 pointer-events-none whitespace-nowrap">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-base-content bg-base-300 rounded px-1 font-black">
+                                                    {overallDoable.toLocaleString()}{" "}
+                                                </span>
+                                                <span className="text-base-content text-[10px] font-normal">
+                                                    ({sectionDoable.toLocaleString()} here)
+                                                </span>
+                                            </div>
+                                            <span className="text-base-content text-[10px] font-normal">
+                                                / {CAPACITY.toLocaleString()}
+                                            </span>
+                                        </div>
+                                    </div>
+                                }
+                            >
+                                <div className="text-xs font-mono rounded-lg text-base-100 space-y-1.5 min-w-[180px] text-left">
+                                    <div className="flex justify-between items-center gap-3">
+                                        <span className="text-primary font-bold">This Section:</span>
+                                        <span className="font-bold bg-primary px-1.5 py-0.5 rounded text-[11px]">
+                                            {sectionDoable.toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center gap-3">
+                                        <span className="opacity-70">Machine Total:</span>
+                                        <span className="font-semibold">
+                                            {overallDoable.toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center gap-3 border-t border-neutral-content/15 pt-1">
+                                        <span className="opacity-70">Capacity:</span>
+                                        <span className="font-semibold">
+                                            {CAPACITY.toLocaleString()}
+                                        </span>
+                                    </div>
+                                    {effectiveFrom && (
+                                        <div className="text-[10px] opacity-50 pt-0.5 border-t border-neutral-content/10">
+                                            Effective: {effectiveFrom}
+                                        </div>
+                                    )}
+                                </div>
+                            </HoverCell>
+                        </div>
+                    </Deferred>
+                </div>
+            )}
         </div>
     );
 }

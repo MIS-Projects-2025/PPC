@@ -7,7 +7,7 @@ import { FaTrash } from "react-icons/fa";
 import { GoGitMerge, GoRepoForked } from "react-icons/go";
 import MergeModal from "./MergeModal";
 import SplitModal from "./SplitModal";
-import { STATUS_OPTIONS } from "./StatusMenu.jsx";
+import StatusMenu from "./StatusMenu.jsx";
 import TransferModal from "./TransferModal";
 
 const isTyping = (el) => {
@@ -46,7 +46,7 @@ export default function SelectionToolbar({
     const count = selectedIds.size;
     const [transferOpen, setTransferOpen] = useState(false);
     const [statusOpen, setStatusOpen] = useState(false);
-
+    const [statusAnchor, setStatusAnchor] = useState(null);
     const transferModalRef = useRef(null);
     const splitModalRef = useRef(null);
     const mergeModalRef = useRef(null);
@@ -65,6 +65,12 @@ export default function SelectionToolbar({
         fn();
     };
 
+    const toggleStatus = () => {
+        transferModalRef.current?.close();
+        setTransferOpen(false);
+        setStatusOpen((v) => !v);
+    };
+
     const shortcutsRef = useRef({});
     shortcutsRef.current = {
         g: () => run(reasons.group, () => document.getElementById("bucket-popover")?.togglePopover?.()),
@@ -72,11 +78,7 @@ export default function SelectionToolbar({
         // s: () => run(reasons.split, () => splitModalRef.current?.showModal()), // SPLIT disabled for now 
         m: () => run(reasons.merge, () => mergeModalRef.current?.showModal()),
         r: () => run(reasons.rework, () => onRework(selectedRow)),
-        u: () => run(reasons.bulk, () => {
-            transferModalRef.current?.close();
-            setStatusOpen((v) => !v);
-            setTransferOpen(false);
-        }),
+        u: () => run(reasons.bulk, toggleStatus),
         t: () => run(busy, () => {
             setTransferOpen(true);
             transferModalRef.current?.showModal();
@@ -94,8 +96,7 @@ export default function SelectionToolbar({
             if (document.querySelector("dialog[open]")) return;
 
             const el = e.target;
-            if (el.isContentEditable || isTyping(e.target)) return;
-            if (document.querySelector("dialog[open]")) return; // a modal is open
+            if (el.isContentEditable) return;
 
             const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
             const fn = shortcutsRef.current[key];
@@ -186,6 +187,11 @@ export default function SelectionToolbar({
             || (!canDelete ? "Unassigned rows cannot be deleted." : null),
     };
 
+    const commonStatus = useMemo(() => {
+        const s = new Set(selectedRows.map((r) => r.status ?? "NONE"));
+        return s.size === 1 ? [...s][0] : ""; // "" survives the `??` in StatusMenu, so nothing is highlighted
+    }, [selectedRows]);
+
     const transferLotIds = useMemo(
         () => [...new Set(selectedRows.map((r) => r.lot_id).filter(Boolean))],
         [selectedRows],
@@ -197,13 +203,6 @@ export default function SelectionToolbar({
 
     return (
         <div className="sticky bottom-0 z-99">
-            {statusOpen && (
-                <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setStatusOpen(false)}
-                />
-            )}
-
             <div className="flex-none flex items-center justify-center px-4 py-2 border-t border-base-300 bg-base-200">
                 <div className="relative flex items-center gap-2 px-4 py-2 bg-base-100 text-base-content rounded-md shadow-lg border border-base-content/10 select-none">
                     <span className="text-xs font-semibold bg-info text-info-content px-2 py-0.5 rounded-full mr-1">
@@ -392,46 +391,17 @@ export default function SelectionToolbar({
                     </div>
 
                     {/* Bulk status */}
-                    <div className="relative">
-                        <button
-                            onClick={guard(reasons.bulk, () => {
-                                transferModalRef.current?.close();
-                                setStatusOpen((v) => !v);
-                                setTransferOpen(false);
-                            })}
-                            className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.bulk)}`}
-                            disabled={disabled || hasGroupedSelected}
-                        >
-                            Set status <kbd className="kbd rounded-sm kbd-xs">u</kbd>
-                            <svg
-                                width="10"
-                                height="10"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2.5"
-                            >
-                                <polyline points="6 9 12 15 18 9" />
-                            </svg>
-                        </button>
-                        {statusOpen && (
-                            <div className="absolute bottom-full mb-1 left-0 bg-base-100 border border-base-300 rounded-lg shadow-lg py-1 min-w-36 z-50">
-                                {STATUS_OPTIONS.map((s) => (
-                                    <button
-                                        key={s}
-                                        className="btn btn-ghost w-full text-left px-3 py-1.5 text-sm hover:bg-base-200 flex items-center gap-2"
-                                        onClick={() => {
-                                            onStatusChange(s);
-                                            setStatusOpen(false);
-                                        }}
-                                        disabled={disabled}
-                                    >
-                                        <StatusBadge status={s} />
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                    <button
+                        ref={setStatusAnchor}
+                        onClick={guard(reasons.bulk, toggleStatus)}
+                        aria-disabled={!!reasons.bulk}
+                        className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.bulk)}`}
+                    >
+                        Set status <kbd className="kbd rounded-sm kbd-xs">u</kbd>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </button>
 
                     <div className="w-px h-5 bg-base-content/20" />
 
@@ -493,6 +463,20 @@ export default function SelectionToolbar({
                     </button>
                 </div>
             </div>
+
+            {statusOpen && statusAnchor && (
+                <StatusMenu
+                    anchor={statusAnchor}
+                    current={commonStatus}
+                    disabled={disabled}
+                    zIndex={100}
+                    onPick={(s) => {
+                        onStatusChange(s);
+                        setStatusOpen(false);
+                    }}
+                    onClose={() => setStatusOpen(false)}
+                />
+            )}
 
             <TransferModal
                 ref={transferModalRef}

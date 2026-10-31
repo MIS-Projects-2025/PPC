@@ -8,7 +8,6 @@ import DataIntegrityModal, {
     TabBadge,
 } from "@/Components/LoadingPlan/DataIntegrityModal";
 import DisseminationSummaryModal, {
-    DISSEMINATION_MODAL_ID,
 } from "@/Components/LoadingPlan/DisseminationSummary";
 import DoableEditModal, { openDoableEditModal } from "@/Components/LoadingPlan/DoableEditModal";
 import { DroppableRow } from "@/Components/LoadingPlan/DroppableRow";
@@ -26,7 +25,7 @@ import { SearchBar } from "@/Components/LoadingPlan/SearchBar";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import StatusMenu from "@/Components/LoadingPlan/StatusMenu";
-import { ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
+import { ROW_HEIGHT, HEADER_ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
 import { packagesInGroup } from "@/Constants/loadingPlanPackageGroups.js";
 import { MACHINE_MANUAL, hasTimeline } from "@/Constants/machines.js";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
@@ -50,17 +49,15 @@ import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
 import { autoUpdate, offset, useFloating } from "@floating-ui/react";
-import { Deferred, Link, router } from '@inertiajs/react';
+import { Link, router } from '@inertiajs/react';
 import clsx from "clsx";
 import dayjs from "dayjs";
-import { createContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DataGrid } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import { createPortal } from "react-dom";
 import { BsGear, BsSearch } from "react-icons/bs";
-import { FaGear } from "react-icons/fa6";
 import { GoAlert } from "react-icons/go";
-import { PiOvenDuotone } from "react-icons/pi";
 
 /**
  * DEMO: machine-grouped lot table (react-data-grid based)
@@ -193,7 +190,6 @@ import { PiOvenDuotone } from "react-icons/pi";
 
 // Must match the actual row height / header height react-data-grid uses,
 // since scroll math below (which group is "at top") depends on it.
-const HEADER_ROW_HEIGHT = 35;
 
 // Column-header multi-select + Excel-style linked-resize (see
 // handleHeaderClick / handleColumnResize below). MIN_COLUMN_WIDTH is the
@@ -250,30 +246,24 @@ function buildExportGroups(dataRows, machines) {
         .filter((g) => g.rows.length > 0);
 }
 
+const INSERT_BTN_H = 20; // height of each button, px
+
 function RowInsertButtons({ isHidden = false, anchorElement, onInsertAbove, onInsertBelow, buttonsRef }) {
+    // How far the whole stack sticks out past each edge of the row
+    const overhang = ({ rects }) => (2 * INSERT_BTN_H - rects.reference.height) / 2;
+
     const above = useFloating({
-        // Places floating element to the left, aligned with top of anchor
-        placement: "left-start", 
+        placement: "left-start",
         strategy: "fixed",
         whileElementsMounted: autoUpdate,
-        // Moves button slightly inside or flush with the row's top/left boundary
-        middleware: [
-            offset(({ rects }) => ({
-                // Negate floating width if you want top-right edge flush with left edge
-                // Or adjust mainAxis/crossAxis offset to fine-tune exact positioning
-                mainAxis: 0,
-            })),
-        ],
+        middleware: [offset((state) => ({ mainAxis: 0, crossAxis: -overhang(state) }))], // up
     });
 
     const below = useFloating({
-        // Places floating element to the left, aligned with bottom of anchor
-        placement: "left-end", 
+        placement: "left-end",
         strategy: "fixed",
         whileElementsMounted: autoUpdate,
-        middleware: [
-            offset({ mainAxis: 0 }),
-        ],
+        middleware: [offset((state) => ({ mainAxis: 0, crossAxis: overhang(state) }))], // down
     });
 
     useEffect(() => {
@@ -283,20 +273,22 @@ function RowInsertButtons({ isHidden = false, anchorElement, onInsertAbove, onIn
 
     if (isHidden) return null;
 
+    const btnStyle = { height: INSERT_BTN_H, minHeight: INSERT_BTN_H, zIndex: 9999 };
+
     return createPortal(
-        <div className="join join-vertical rounded-r-none flex flex-col" ref={buttonsRef}>
+        <div ref={buttonsRef}>
             <button
                 ref={above.refs.setFloating}
-                style={{ ...above.floatingStyles, zIndex: 9999 }}
-                className="btn btn-xs join-item border border-opposite-100/25 insert-row-btn rounded-r-none h-[18px] min-h-[18px] flex-1 flex items-center justify-center"
+                style={{ ...above.floatingStyles, ...btnStyle }}
+                className="btn btn-xs border border-opposite-100/25 insert-row-btn rounded-r-none rounded-bl-none flex items-center justify-center"
                 onClick={onInsertAbove}
             >
                 ↓<span className="font-thin text-xs ml-0.5">+</span>
             </button>
             <button
                 ref={below.refs.setFloating}
-                style={{ ...below.floatingStyles, zIndex: 9999 }}
-                className="btn btn-xs join-item border border-opposite-100/25 insert-row-btn rounded-r-none h-[18px] min-h-[18px] flex-1 flex items-center justify-center"
+                style={{ ...below.floatingStyles, ...btnStyle }}
+                className="btn btn-xs border border-opposite-100/25 insert-row-btn rounded-r-none rounded-tl-none flex items-center justify-center"
                 onClick={onInsertBelow}
             >
                 ↑<span className="font-thin text-xs ml-0.5">+</span>
@@ -432,13 +424,14 @@ export default function Deemo({
     );
 
     const tabItems = useMemo(() => [
-        "Unassigned", ALL_PACKAGES_TAB,
+        ...(readOnly ? [] : ["Unassigned"]),
+        ALL_PACKAGES_TAB,
         ...(isF3 ? [] : [RES_TAB]),
         FOR_BAKE_TAB,
         ...(isF3 ? [] : [PICKUP_TAB]),
         ...(orphanMachines.length ? [ORPHAN_TAB] : []),
         ...(packageGroupNames ?? []),
-    ], [isF3, orphanMachines.length, packageGroupNames]);
+    ], [readOnly, isF3, orphanMachines.length, packageGroupNames]);
 
     // console.log("LOG ~ Deemo.jsx:871 ~ Deemo ~ bakeLots:", bakeLots);
     // console.log("LOG ~ Deemo.jsx:683 ~ Deemo ~ data:", data);
@@ -1488,7 +1481,7 @@ export default function Deemo({
             });
 
         // ── "Unassigned" tab: every unplanned, non-parked lot across all packages ──
-        if (activePackage === "Unassigned") {
+        if (activePackage === "Unassigned" && !readOnly) {
             const rowsForMachine = (rowsByMachine.get(null) ?? [])
                 .filter((r) => r.machine === null && !isResRow(r) && !isParked(r) && !isOtherLoc(r))
                 .sort(compareUnassigned);
@@ -1521,6 +1514,7 @@ export default function Deemo({
 
         const machineSections = [...machines, ...nonMachineKeys].flatMap((m) => {
             const isUnassigned = m === null;
+            if (isUnassigned && readOnly) return [];
             const isManual = m === MACHINE_MANUAL;
             const isOrphan = orphanMachines.includes(m);
             const isNonMachine = isNonMachineKey(m);
@@ -1624,6 +1618,7 @@ export default function Deemo({
         return [...machineSections, ...orphans, ...bucketSections(null, visible)];
     }, [
         rowsByBucket,
+        readOnly,
         asDataRow,
         showAllMachines,
         rowsByMachine,
@@ -1690,7 +1685,7 @@ export default function Deemo({
         try {
             const buffer = await exportLoadingPlanToExcel({
                 dataRows,
-                machines: [...machines, ...nonMachineKeys],
+                machines: [...machines, ...nonMachineKeys], // unassigned still show on view-only
                 groupNames: packageGroupNames ?? [],
                 buckets: bucketList,
                 selectedLocation,
@@ -2160,7 +2155,7 @@ export default function Deemo({
     return (
         <div
             className="bg-base-100"
-            style={{ paddingLeft: 8, paddingRight: 8, minHeight: "90vh" }}
+            style={{ paddingLeft: 8, paddingRight: 8, minHeight: "93vh" }}
         >
             <SavingCursorBadge active={isUpdating} />
             
@@ -2489,7 +2484,6 @@ export default function Deemo({
                         )}
                         {activePackage === FOR_BAKE_TAB ? (
                             <div className="border-none" style={{ position: "relative" }}>
-
                                 <DataGrid
                                     ref={gridRef}
                                     columns={bakeColumns}
@@ -2634,7 +2628,7 @@ export default function Deemo({
                                                     readOnly ? "pl-1" : "pl-9",
                                                 )}
                                             >
-                                                <div className="flex items-center h-full gap-2 min-w-0">
+                                                <div className="flex items-center h-full gap-2 min-w-0 flex-1">
                                                     {stickyMachine.__headerKind === "bucket" ? (
                                                         <BucketHeaderBar row={stickyMachine} onToggleCollapse={toggleMachineCollapsed} />
                                                     ) : (
