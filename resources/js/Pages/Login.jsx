@@ -21,11 +21,11 @@ export default function Login() {
         <>
             <Head title="Login" />
 
-            <main className="relative flex min-h-[100%] items-center justify-center overflow-hidden bg-slate-50 px-4 py-12">
+            <main className="relative flex min-h-[100%] items-center justify-center overflow-hidden px-4 py-12">
                 <div className="relative w-full max-w-md">
                     {/* Header */}
                     <div className="mb-8 text-center">
-                        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-pink-600 text-white shadow-lg shadow-pink-600/20">
+                        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-white shadow-lg shadow-primary/20">
                             <svg
                                 xmlns="http://www.w3.org/2000/svg"
                                 viewBox="0 0 24 24"
@@ -48,7 +48,7 @@ export default function Login() {
                             </svg>
                         </div>
 
-                        <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                        <h1 className="text-3xl font-bold tracking-tight text-base-content">
                             PPC PORTAL
                         </h1>
 
@@ -58,21 +58,21 @@ export default function Login() {
                     </div>
 
                     {/* Login card */}
-                    <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xl shadow-slate-900/5 sm:p-8">
+                    <div className="rounded-2xl border border-slate-200/40 bg-base-100 p-6 shadow-xl shadow-slate-900/5 sm:p-8">
                         <form onSubmit={submit} className="space-y-5">
                             {/* Employee ID */}
                             <div>
                                 <InputLabel
                                     htmlFor="employeeID"
                                     value="Employee ID"
-                                    className="mb-1.5 text-sm font-medium text-slate-700"
+                                    className="mb-1.5 text-sm font-medium text-base-content"
                                 />
 
                                 <TextInput
                                     id="employeeID"
                                     name="employeeID"
                                     value={data.employeeID}
-                                    className="block w-full rounded-lg border-slate-300 py-2.5 shadow-sm transition placeholder:text-slate-400 focus:border-pink-500 focus:ring-4 focus:ring-pink-500/10"
+                                    className="block w-full px-3 rounded-lg border-slate-300 py-2.5 shadow-sm transition placeholder:text-slate-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
                                     placeholder="Enter your employee ID"
                                     autoComplete="username"
                                     autoFocus
@@ -94,7 +94,7 @@ export default function Login() {
                                 <InputLabel
                                     htmlFor="password"
                                     value="Password"
-                                    className="mb-1.5 text-sm font-medium text-slate-700"
+                                    className="mb-1.5 text-sm font-medium text-base-content"
                                 />
 
                                 <TextInput
@@ -102,7 +102,7 @@ export default function Login() {
                                     type="password"
                                     name="password"
                                     value={data.password}
-                                    className="block w-full rounded-lg border-slate-300 py-2.5 shadow-sm transition placeholder:text-slate-400 focus:border-pink-500 focus:ring-4 focus:ring-pink-500/10"
+                                    className="block w-full px-3 rounded-lg border-slate-300 py-2.5 shadow-sm transition placeholder:text-slate-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
                                     placeholder="Enter your password"
                                     autoComplete="current-password"
                                     required
@@ -122,7 +122,7 @@ export default function Login() {
                             <button
                                 type="submit"
                                 disabled={processing}
-                                className="flex w-full items-center justify-center gap-2 rounded-lg bg-pink-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition duration-200 hover:bg-pink-700 focus:outline-none focus:ring-4 focus:ring-pink-500/25 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100"
+                                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition duration-200 hover:bg-primary focus:outline-none focus:ring-4 focus:ring-primary/25 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100"
                             >
                                 {processing && (
                                     <svg

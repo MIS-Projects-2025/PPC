@@ -25,7 +25,7 @@ export default function NavBar() {
 	return (
 		<nav className="">
 			<div className="px-4">
-				<div className="flex justify-end h-12.5">
+				<div className="flex justify-end h-8">
 					<div className="items-center space-x-1 font-semibold md:flex">
 						<div className="dropdown dropdown-end">
 							<div tabIndex={0} role="button" className="btn btn-sm">
