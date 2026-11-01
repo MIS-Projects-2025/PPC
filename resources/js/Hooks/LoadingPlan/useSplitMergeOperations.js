@@ -4,45 +4,47 @@ import {
     callRevertMerge,
     callRevertSplit,
     callSplit,
-    callUnrevertMerge,
-    callUnrevertSplit,
-    reconcileMergeCreate, reconcileMergeRevert,
-    reconcileSplitCreate, reconcileSplitRevert,
+    reconcileMergeCreate,
+    reconcileMergeRevert,
+    reconcileSplitCreate,
+    reconcileSplitRevert,
 } from "@/Lib/LoadingPlan/splitMergeApi";
 import { useCallback, useState } from "react";
-/**
- * FIX (carried over): the original handleShowMergeHistory set
- * `historyLoading` back to `false` immediately after setting it `true`,
- * with a "stub: avoid a perma-spinner while stubbed" comment — but the
- * `return;` right after it was already commented out, so the fetch below
- * still ran anyway. Net effect was a loading-spinner flicker (true, then
- * immediately false, then false again in `finally`) rather than an actual
- * stub. Removed here; loadMergeHistory now behaves like loadSplitHistory
- * (loading stays true until the fetch settles).
- */
-export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpdating, mutate, date, toast, setIsDirty, syncServerFields }) {
+
+const lockPatch = (entry) => entry && { dndId: `entry-${entry.entry_id}`, fields: { lock_version: entry.lock_version } };
+
+export function useSplitMergeOperations({
+    dataRows,
+    update,
+    beginWrite,
+    withUpdating,
+    mutate,
+    date,
+    toast,
+    setIsDirty,
+    syncServerFields,
+}) {
     const [currentLotId, setCurrentLotId] = useState(null);
+    const [currentLotRole, setCurrentLotRole] = useState({ isParent: false, isChild: false });
     const [splitHistoryData, setSplitHistoryData] = useState(null);
     const [mergeHistoryData, setMergeHistoryData] = useState(null);
-    const [currentLotRole, setCurrentLotRole] = useState({ isParent: false, isChild: false });
     const [historyLoading, setHistoryLoading] = useState(false);
 
-    const loadSplitHistory = useCallback(
-        async (rootLotId, isParent, isChild, { onOpen, onError, lotId } = {}) => {
+    // ── history ──────────────────────────────────────────────────────────
+    const loadHistory = useCallback(
+        async ({ url, setData, label, isParent, isChild, lotId, onOpen, onError }) => {
             onOpen?.();
             setCurrentLotId(lotId ?? null);
             setHistoryLoading(true);
-            setSplitHistoryData(null);
+            setData(null);
             setCurrentLotRole({ isParent, isChild });
             try {
-                const res = await fetch(route("loading-plan.splits.history", rootLotId), {
-                    headers: { Accept: "application/json" },
-                });
+                const res = await fetch(url, { headers: { Accept: "application/json" } });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                setSplitHistoryData(await res.json());
+                setData(await res.json());
             } catch (err) {
-                console.error("Failed to load split history:", err);
-                toast?.error?.("Couldn't load split history — please try again.");
+                console.error(`Failed to load ${label} history:`, err);
+                toast?.error?.(`Couldn't load ${label} history — please try again.`);
                 onError?.();
             } finally {
                 setHistoryLoading(false);
@@ -51,28 +53,53 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
         [toast],
     );
 
+    const loadSplitHistory = useCallback(
+        (rootLotId, isParent, isChild, opts = {}) =>
+            loadHistory({
+                url: route("loading-plan.splits.history", rootLotId),
+                setData: setSplitHistoryData,
+                label: "split",
+                isParent,
+                isChild,
+                ...opts,
+            }),
+        [loadHistory],
+    );
+
     const loadMergeHistory = useCallback(
-        async (targetLotId, isParent, isChild, { onOpen, onError, lotId } = {}) => {
-            onOpen?.();
-            setCurrentLotId(lotId ?? null);
-            setHistoryLoading(true);
-            setMergeHistoryData(null);
-            setCurrentLotRole({ isParent, isChild });
-            try {
-                const res = await fetch(route("loading-plan.merges.history", { targetLotId }), {
-                    headers: { Accept: "application/json" },
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                setMergeHistoryData(await res.json());
-            } catch (err) {
-                console.error("Failed to load merge history:", err);
-                toast?.error?.("Couldn't load merge history — please try again.");
-                onError?.();
-            } finally {
-                setHistoryLoading(false);
-            }
+        (targetLotId, isParent, isChild, opts = {}) =>
+            loadHistory({
+                url: route("loading-plan.merges.history", { targetLotId }),
+                setData: setMergeHistoryData,
+                label: "merge",
+                isParent,
+                isChild,
+                ...opts,
+            }),
+        [loadHistory],
+    );
+
+    // ── writes ───────────────────────────────────────────────────────────
+    const runWrite = useCallback(
+        (request, { onSuccess, failMessage, onDone }) =>
+            withUpdating(request)
+                .then(onSuccess)
+                .catch((err) => {
+                    console.error(failMessage, err);
+                    toast?.error?.(err?.message ?? failMessage);
+                })
+                .finally(() => onDone?.()),
+        [withUpdating, toast],
+    );
+
+    /** Common tail of every successful split/merge write. */
+    const afterWrite = useCallback(
+        (result, patches) => {
+            applyAffectedTimings(update, result.affected_timings, date);
+            syncServerFields?.(patches.filter(Boolean));
+            setIsDirty(true);
         },
-        [toast],
+        [update, date, syncServerFields, setIsDirty],
     );
 
     const revertSplit = useCallback(
@@ -85,55 +112,21 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
                 return;
             }
 
-            withUpdating(
-                mutate(route("loading-plan.splits.destroy", splitId), {
-                    method: "delete",
-                    body: { reverted_by: revertedBy },
-                }),
-            )
-                .then((result) => {
-                    update((prev) => reconcileSplitRevert(prev, result, { childEntryId: childRow.entry_id }),
-                        false, { type: "split", splitId, resultingState: "reverted" });
-                    // update(
-                    //     (prev) => {
-                    //         const next = prev
-                    //             .filter((r) => r.lot_id !== result.deleted)
-                    //             .map((r) =>
-                    //                 result.parent && r.lot_id === result.parent.lot_id
-                    //                     ? {
-                    //                           ...r,
-                    //                           qty: result.parentQty ?? r.qty,
-                    //                           doable: result.parentDoable ?? r.doable,
-                    //                           doable_status: result.parentDoableStatus ?? r.doable_status,
-                    //                           capacity_uph: result.parentCapacityUph ?? r.capacity_uph,
-                    //                           lock_version: result.parent.lock_version,
-                    //                           split_info: result.parentSplitInfo,
-                    //                       }
-                    //                     : r,
-                    //             );
-
-                    //         return next;
-                    //     },
-                    //     false,
-                    //     { type: "split", splitId, resultingState: "reverted" },
-                    // );
-                    applyAffectedTimings(update, result.affected_timings, date);
-                    // parent survives the operation — its lock_version needs to
-                    // reach past/future snapshots too, same as any field patch
-                    if (result.parent) {
-                        syncServerFields?.([
-                            { dndId: `entry-${result.parent.entry_id}`, fields: { lock_version: result.parent.lock_version } },
-                        ]);
-                    }
-                    setIsDirty(true);
-                })
-                .catch((err) => {
-                    console.error("Failed to revert split:", err);
-                    toast?.error?.("Couldn't revert the split — please try again.");
-                })
-                .finally(() => onDone?.());
+            runWrite(callRevertSplit(mutate, splitId, revertedBy), {
+                failMessage: "Couldn't revert the split — please try again.",
+                onDone,
+                onSuccess: (result) => {
+                    update(
+                        (prev) => reconcileSplitRevert(prev, result, { childEntryId: childRow.entry_id }),
+                        false,
+                        { type: "split", splitId, resultingState: "reverted" },
+                    );
+                    // parent survives: its lock_version must reach past/future snapshots too
+                    afterWrite(result, [lockPatch(result.parent)]);
+                },
+            });
         },
-        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, beginWrite, toast, runWrite, mutate, update, afterWrite],
     );
 
     const revertMerge = useCallback(
@@ -146,35 +139,27 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
                 toast?.error?.("Couldn't find the lots to revert — please refresh.");
                 return;
             }
+
             const mergeId = requestedMergeId ?? targetRow.merge_info?.mergeId;
             if (!mergeId) {
                 toast?.error?.(`Couldn't find merge record for lot ${targetLotId} — please refresh.`);
                 return;
             }
 
-            withUpdating(
-                mutate(route("loading-plan.merges.destroy", mergeId), {
-                    method: "delete",
-                    body: { reverted_by: null },
-                }),
-            )
-                .then((result) => {
-                    const { target, source } = result;
-                    update((prev) => reconcileMergeRevert(prev, result), false, { type: "merge", mergeId, resultingState: "reverted" });
-                    applyAffectedTimings(update, result.affected_timings, date);
-                    syncServerFields?.([
-                        target && { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },
-                        source && { dndId: `entry-${source.entry_id}`, fields: { lock_version: source.lock_version } },
-                    ].filter(Boolean));
-                    setIsDirty(true);
-                })
-                .catch((err) => {
-                    console.error("Failed to revert merge:", err);
-                    toast?.error?.(err?.message ?? "Couldn't revert the merge — please try again.");
-                })
-                .finally(() => onDone?.());
+            runWrite(callRevertMerge(mutate, mergeId), {
+                failMessage: "Couldn't revert the merge — please try again.",
+                onDone,
+                onSuccess: (result) => {
+                    update((prev) => reconcileMergeRevert(prev, result), false, {
+                        type: "merge",
+                        mergeId,
+                        resultingState: "reverted",
+                    });
+                    afterWrite(result, [lockPatch(result.target), lockPatch(result.source)]);
+                },
+            });
         },
-        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, beginWrite, toast, runWrite, mutate, update, afterWrite],
     );
 
     const mergeRows = useCallback(
@@ -188,105 +173,56 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
                 return;
             }
 
-            withUpdating(
-                mutate(route("loading-plan.merges.store"), {
-                    body: {
-                        entry_id_a: targetRow.entry_id,
-                        entry_id_b: sourceRow.entry_id,
-                        scheduled_date: date,
-                    },
-                }),
-            )
-                .then((result) => {
-                    const { target, source } = result;
-                    update(
-                        (prev) => {
-                            const next = prev.map((row) => {
-                                if (row.entry_id === target.entry_id) return { ...row, ...target };
-                                if (row.entry_id === source.entry_id) return { ...row, ...source };
-                                return row;
-                            });
-
-                            return next;
-                        },
-                        false,
-                        { type: "merge", mergeId: result.merge.id, resultingState: "active" },
-                    );
-                    applyAffectedTimings(update, result.affected_timings, date);
-                    syncServerFields?.([
-                        { dndId: `entry-${target.entry_id}`, fields: { lock_version: target.lock_version } },
-                        { dndId: `entry-${source.entry_id}`, fields: { lock_version: source.lock_version } },
-                    ]);
-                    setIsDirty(true);
-                })
-                .catch((err) => {
-                    console.error("Failed to merge lots:", err);
-                    toast?.error?.(err?.message ?? "Couldn't merge the lots — please try again.");
-                });
+            runWrite(callMerge(mutate, { entryIdA: targetRow.entry_id, entryIdB: sourceRow.entry_id, date }), {
+                failMessage: "Couldn't merge the lots — please try again.",
+                onSuccess: (result) => {
+                    update((prev) => reconcileMergeCreate(prev, result), false, {
+                        type: "merge",
+                        mergeId: result.merge.id,
+                        resultingState: "active",
+                    });
+                    afterWrite(result, [lockPatch(result.target), lockPatch(result.source)]);
+                },
+            });
         },
-        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, date, beginWrite, toast, runWrite, mutate, update, afterWrite],
     );
 
     const splitRow = useCallback(
         ({ parentEntryId, childLotId, childQty, targetMachine, beforeEntryId, afterEntryId }) => {
             if (!beginWrite()) return;
 
-            const parentRow = dataRows.find((r) => r.entry_id === parentEntryId);
-            if (!parentRow) {
+            if (!dataRows.some((r) => r.entry_id === parentEntryId)) {
                 toast?.error?.("Couldn't find the lot to split — please refresh.");
                 return;
             }
 
-            withUpdating(
-                mutate(route("loading-plan.splits.store"), {
-                    body: {
-                        parent_entry_id: parentEntryId,
-                        child_qty: childQty,
-                        target_machine: targetMachine,
-                        before_entry_id: beforeEntryId ?? null,
-                        after_entry_id: afterEntryId ?? null,
-                        child_lot_id: childLotId,
+            runWrite(
+                callSplit(mutate, { parentEntryId, childLotId, childQty, targetMachine, beforeEntryId, afterEntryId }),
+                {
+                    failMessage: "Couldn't split the lot — please try again.",
+                    onSuccess: (result) => {
+                        update((prev) => reconcileSplitCreate(prev, result, { parentEntryId }), false, {
+                            type: "split",
+                            splitId: result.split.id,
+                            resultingState: "active",
+                        });
+                        // child is brand new: nothing stale to fix for it
+                        afterWrite(result, [
+                            { dndId: `entry-${parentEntryId}`, fields: { lock_version: result.parent.lock_version } },
+                        ]);
                     },
-                }),
-            )
-                .then((result) => {
-                    const { parent, child } = result;
-                    update(
-                        (prev) => {
-                            const next = prev.map((row) =>
-                                row.entry_id === parentEntryId ? { ...row, ...parent } : row,
-                            );
-                            next.push({
-                                ...child,
-                                status: child.status ?? parentRow.status ?? "NONE",
-                                _dndId: `entry-${child.entry_id}`,
-                            });
-                           
-                            return next;
-                        },
-                        false,
-                        { type: "split", splitId: result.split.id, resultingState: "active" },
-                    );
-                    applyAffectedTimings(update, result.affected_timings, date);
-                    // parent survives; propagate its new lock_version to old snapshots.
-                    // child is brand new — nothing stale to fix for it.
-                    syncServerFields?.([
-                        { dndId: `entry-${parentEntryId}`, fields: { lock_version: parent.lock_version } },
-                    ]);
-                    setIsDirty(true);
-                })
-                .catch((err) => {
-                    console.error("Failed to split lot:", err);
-                    toast?.error?.(err?.message ?? "Couldn't split the lot — please try again.");
-                });
+                },
+            );
         },
-        [dataRows, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields],
+        [dataRows, beginWrite, toast, runWrite, mutate, update, afterWrite],
     );
 
     return {
         splitHistoryData,
         mergeHistoryData,
         currentLotRole,
+        currentLotId,
         historyLoading,
         loadSplitHistory,
         loadMergeHistory,
@@ -294,6 +230,5 @@ export function useSplitMergeOperations({ dataRows, update, beginWrite, withUpda
         revertMerge,
         mergeRows,
         splitRow,
-        currentLotId,
     };
 }

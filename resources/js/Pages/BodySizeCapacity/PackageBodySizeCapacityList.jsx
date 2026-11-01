@@ -242,6 +242,11 @@ function PackageBodySizeCapacityList() {
 		let targetId = overId || null;
 
 		if (event) {
+            if (!event.over) {
+                setActiveDraggableID(null);
+                return;
+            }
+
 			activeId = event.active?.id || null;
 			targetId = event.over?.id || null;
 			newBodySizeName = event.over

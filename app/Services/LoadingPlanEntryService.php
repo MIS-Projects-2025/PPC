@@ -53,7 +53,7 @@ class LoadingPlanEntryService
     }
 
     /** Find (or create) the unassigned entry for a lot with no placement. Race-safe on uniq_lot_date_seq. */
-    private function findOrCreateUnplacedEntry(string $lotId, string $date): LoadingPlanEntry
+    private function findOrCreateUnplacedEntry(string $lotId, string $date, ?CustomerDataWip $wip = null): LoadingPlanEntry
     {
         $this->assertDateNotFinalized($date);
 
@@ -92,9 +92,9 @@ class LoadingPlanEntryService
         }
 
         $lot = LotQuantity::firstOrNew(['lot_id' => $lotId, 'scheduled_date' => $date, 'rework_seq' => 0]);
-        $lot->part_name = $wip->Part_Name ?? '';
-        $lot->qty_base  = $wip->Qty ?? 0;
-        if ($lot->isDirty()) {
+        if (!$lot->exists) {                       // never clobber an existing row
+            $lot->part_name = $wip->Part_Name ?? '';
+            $lot->qty_base  = $wip->Qty ?? 0;
             $lot->save();
         }
 
@@ -2676,6 +2676,9 @@ class LoadingPlanEntryService
         if (empty($entryIds)) return;
 
         $machineId = $this->resolveMachineId($machine);
+        if ($machineId === null) {
+            throw new \InvalidArgumentException("Machine [{$machine}] does not exist.");
+        }
 
         // entryIds can span two dates on one machine: leaked entries still
         // carrying yesterday's scheduled_date, listed first, followed by
@@ -3147,14 +3150,8 @@ class LoadingPlanEntryService
                 throw new \InvalidArgumentException("Doable must be between 0 and {$effective}.");
             }
 
-            $this->lockLaneRows(
-                array_filter([$entry->machine_id]),
-                array_filter([$entry->non_machine_id]),
-                $date,
-            );
-
             $affected = LoadingPlanEntry::whereKey($entryId)
-                ->where('lock_version', $expectedLockVersion)
+                ->when($expectedLockVersion !== null, fn($q) => $q->where('lock_version', $expectedLockVersion))
                 ->whereNull('finalized_at')
                 ->update(['lock_version' => DB::raw('lock_version + 1')]);
             if ($affected === 0) {

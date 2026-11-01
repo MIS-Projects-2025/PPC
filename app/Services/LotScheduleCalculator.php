@@ -143,7 +143,7 @@ class LotScheduleCalculator
                 ->select('id', 'devicename', 'recipe', 'allocation')
                 ->whereIn('devicename', $partNames)
                 ->get()
-                ->keyBy('devicename');
+                ->keyBy(fn($p) => mb_strtolower($p->devicename));
 
             return $this;
         }
@@ -166,7 +166,7 @@ class LotScheduleCalculator
             $query->whereIn('devicename', $derivedPartNames);
         }
 
-        $this->packageListByDeviceName = $query->get()->keyBy('devicename');
+        $this->packageListByDeviceName = $query->get()->keyBy(fn($p) => mb_strtolower($p->devicename));
 
         return $this;
     }
@@ -363,54 +363,6 @@ class LotScheduleCalculator
         return $start;
     }
 
-    // Stale
-    // public function recomputeTimeStartAndEnd(LoadingPlanEntry $affectedEntry, int $machineId): void
-    // {
-    //     $date = $affectedEntry->scheduled_date->toDateString();
-
-    //     DB::table('loading_plan_entries')
-    //         ->where('machine_id', $machineId)
-    //         ->where('scheduled_date', '>=', $affectedEntry->scheduled_date)
-    //         ->lockForUpdate()
-    //         ->get();
-
-    //     $predecessor = $this->findPredecessor($affectedEntry);
-    //     log_entities($predecessor);
-
-    //     $cursor = ($predecessor && $predecessor->time_end !== null)
-    //         ? $predecessor->time_end
-    //         : $this->getOrCreateDayStart($machineId, $date);
-    //     // var_dump('predecessor:', $predecessor?->id, $predecessor?->time_end, 'cursor:', $cursor);
-    //     $current = $affectedEntry;
-    //     log_entities($current);
-
-    //     while ($current !== null) {
-    //         $newStart = $cursor;
-    //         $newEnd = (clone $cursor)->addMinutes($current->accu_time ?? 0);
-
-    //         $unchanged = $current->time_start !== null
-    //             && $current->time_end !== null
-    //             && $current->time_start->eq($newStart)
-    //             && $current->time_end->eq($newEnd);
-
-    //         // var_dump("LOG ~ LotScheduleCalculator.php:164 ~ LotScheduleCalculator ~ recomputeTimeStartAndEnd ~ $unchanged:", $unchanged);
-
-    //         if ($unchanged) {
-    //             $cursor = $newEnd;
-    //             $current = $this->findNextInSequence($current);
-    //             continue;
-    //         }
-
-    //         $current->time_start = $newStart;
-    //         $current->time_end = $newEnd;
-    //         $current->save();
-
-    //         $cursor = $newEnd;
-    //         $current = $this->findNextInSequence($current);
-    //         log_entities($current);
-    //     }
-    // }
-
     /**
      * The row immediately before $entry on the same machine, chronologically —
      * may be on an earlier scheduled_date if $entry is the first row of its
@@ -500,7 +452,7 @@ class LotScheduleCalculator
         }
 
         if ($recipeInfo === null) {                      // F1/F2: unchanged behaviour
-            $row = $partName === null ? null : $this->packageListByDeviceName->get($partName);
+            $row = $partName === null ? null : $this->packageListByDeviceName->get(mb_strtolower($partName));
             $recipeInfo = $row
                 ? new RecipeInfo($row->recipe, $row->allocation, RecipeInfo::PACKAGE_LIST, $row->id)
                 : RecipeInfo::none();

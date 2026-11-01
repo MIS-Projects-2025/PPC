@@ -2488,6 +2488,10 @@ class SchedulerService
 
         $dateString = $targetDate->toDateString();
 
+        if (LoadingPlanEntry::where('scheduled_date', $dateString)->whereNotNull('finalized_at')->exists()) {
+            throw new \App\Exceptions\LoadingPlanDateFinalizedException($dateString);
+        }
+
         $staleUnassigned = LoadingPlanEntry::query()
             ->where('scheduled_date', $dateString)
             ->where('entry_type', 'lot')

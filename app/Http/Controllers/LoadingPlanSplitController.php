@@ -17,7 +17,7 @@ class LoadingPlanSplitController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'parent_entry_id'   => 'required|int',
+            'parent_entry_id'       => 'required|integer',
             'child_qty'             => 'required|integer|min:1',
             'target_machine'        => 'required|string',
             'before_entry_id'       => 'nullable|integer',

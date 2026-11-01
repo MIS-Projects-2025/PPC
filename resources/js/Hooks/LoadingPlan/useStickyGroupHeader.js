@@ -21,13 +21,15 @@ export function useStickyGroupHeader(displayRows, gridRef, gridKey) {
 
         const handleScroll = () => {
             const rowAtTop = el.scrollTop / ROW_HEIGHT;
-            let current = groupHeaderOffsets[0];
+            let current = null; // was groupHeaderOffsets[0]
             for (const group of groupHeaderOffsets) {
-                if (group.rowIndex <= rowAtTop) current = group;
+                if (group.rowIndex < rowAtTop) current = group; // was <=
                 else break;
             }
             setStickyGroup(current);
         };
+
+        handleScroll(); // <-- the important line: recompute on every effect run
 
         let raf = 0;
         const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; handleScroll(); }); };

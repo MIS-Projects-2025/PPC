@@ -25,7 +25,7 @@ export function useBulkOperations({ dataRows, selectedRows, update, beginWrite, 
                         scheduled_date: date,
                         updates: targets.map((r) =>
                             r.entry_id
-                                ? { entry_id: r.entry_id, fields, lock_version: r.lock_version ?? 0 }
+                                ? { entry_id: r.entry_id, fields, lock_version: r.lock_version ?? null }
                                 : { lot_id: r.lot_id, fields },
                         ),
                     },

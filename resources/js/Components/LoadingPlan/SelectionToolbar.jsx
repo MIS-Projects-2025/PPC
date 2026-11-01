@@ -98,6 +98,7 @@ export default function SelectionToolbar({
             const el = e.target;
             if (el.isContentEditable) return;
 
+            if (!e.key) return;
             const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
             const fn = shortcutsRef.current[key];
             if (!fn) return;

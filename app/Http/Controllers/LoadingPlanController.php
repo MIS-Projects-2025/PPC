@@ -31,6 +31,7 @@ use Illuminate\Support\Facades\App;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use App\Models\BoschPart;
+use App\Exceptions\LoadingPlanDateFinalizedException;
 
 class LoadingPlanController extends Controller
 {
@@ -120,6 +121,8 @@ class LoadingPlanController extends Controller
         try {
             $result = $scheduler->rebuildForPickupArrival($pickup, Carbon::parse($date));
             return response()->json($result);
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return response()->json(['error' => 'finalized', 'message' => $e->getMessage(), 'scheduled_date' => $e->scheduledDate], 422);
         } finally {
             $lock->release();
         }
@@ -256,6 +259,7 @@ class LoadingPlanController extends Controller
             'machines'          => $activeMachines,
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
+            'bakeLots'          => app(BakeLotService::class)->getActiveBake(),
             'selectedLocation'  => $selectedLocation,
             'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)
@@ -524,6 +528,8 @@ class LoadingPlanController extends Controller
             }
 
             return back()->with('success', 'Scheduler run complete.');
+        } catch (LoadingPlanDateFinalizedException $e) {
+            return back()->with('error', $e->getMessage());
         } catch (\Throwable $e) {
             SchedulerRun::create([
                 // 'location' => $selectedLocation,
