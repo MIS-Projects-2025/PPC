@@ -1,6 +1,7 @@
+
 import { useMemo } from "react";
 import DatePicker from "react-datepicker";
-import { MdCalendarMonth, MdChevronLeft, MdChevronRight } from "react-icons/md";
+import { MdCalendarMonth } from "react-icons/md";
 
 import "react-datepicker/dist/react-datepicker.css";
 
@@ -30,21 +31,13 @@ export default function DateNav({ selected, onChange, isNoFuture = false }) {
             });
 
     return (
-        <div className="flex items-center gap-1">
-            <button
-                type="button"
-                className="btn btn-sm btn-ghost btn-square"
-                onClick={() => onChange(addDays(selected, -1))}
-                aria-label="Previous day"
-            >
-                <MdChevronLeft size={18} />
-            </button>
-
-            <div className="z-100 relative">
+        <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
                 <DatePicker
                     selected={selected}
                     onChange={onChange}
                     dateFormat="MMM d, yyyy"
+                    maxDate={isNoFuture ? today : undefined}
                     customInput={
                         <button
                             type="button"
@@ -55,27 +48,17 @@ export default function DateNav({ selected, onChange, isNoFuture = false }) {
                         </button>
                     }
                 />
+
+                {!isSameDay(selected, today) && (
+                    <button
+                        type="button"
+                        className="btn btn-sm btn-outline"
+                        onClick={() => onChange(today)}
+                    >
+                        Today
+                    </button>
+                )}
             </div>
-
-            <button
-                type="button"
-                className="btn btn-sm btn-ghost btn-square"
-                onClick={() => onChange(addDays(selected, 1))}
-                disabled={isSameDay(selected, today) && isNoFuture}
-                aria-label="Next day"
-            >
-                <MdChevronRight size={18} />
-            </button>
-
-            {!isSameDay(selected, today) && (
-                <button
-                    type="button"
-                    className="btn btn-sm btn-outline ml-1"
-                    onClick={() => onChange(today)}
-                >
-                    Get Today
-                </button>
-            )}
         </div>
     );
 }

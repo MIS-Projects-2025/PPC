@@ -168,11 +168,11 @@ export function PlanTabsBar({
     onToggleIdle,
 }) {
     return (
-        <div className="flex flex-wrap justify-between gap-2">
+        <div className="flex flex-wrap justify-between items-baseline gap-2">
             <ScrollableTabs items={tabs} active={activeTab} onChange={onTabChange} storageKey="loadingPlan:packageTabs:active" />
 
-            <div className="flex items-end mb-1 gap-2">
-                <fieldset className="fieldset rounded-box pb-2 px-2">
+            <div className="flex items-end gap-2">
+                <fieldset className="fieldset rounded-box px-2">
                     <legend className="fieldset-legend text-[11px] px-1">Production Line</legend>
                     <div className="join h-2 items-center">
                         {PRODUCTION_LINES.map((line) => (

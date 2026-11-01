@@ -259,7 +259,7 @@ class LoadingPlanController extends Controller
             'machines'          => $activeMachines,
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
-            'bakeLots'          => app(BakeLotService::class)->getActiveBake(),
+            // 'bakeLots'          => app(BakeLotService::class)->getActiveBake(), // commented out temporarily because the table is not available on my local dev environment
             'selectedLocation'  => $selectedLocation,
             'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)

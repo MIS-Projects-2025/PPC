@@ -1019,9 +1019,9 @@ export default function Deemo({
             />
             <CapacityOverviewModal
                 serverMachines={serverMachines}
+                nonMachines={nonMachineList}
                 machineCapacity={machineCapacity}
-                machineTotalDoable={machineTotalDoable}
-                machineTotalQuantity={machineTotalQuantity}
+                dataRows={dataRows}
             />
         </div>
     );

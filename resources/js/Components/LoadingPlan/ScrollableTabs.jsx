@@ -134,7 +134,7 @@ export default function ScrollableTabs({ items, active, onChange, storageKey }) 
                         }}
                         role="tab"
                         onClick={() => onChange(tab.value)}
-                        className={`tab flex-shrink-0 whitespace-nowrap gap-1.5 ${
+                        className={`tab flex-shrink-0 whitespace-nowrap text-xs gap-1.5 ${
                             active === tab.value
                                 ? "tab-active text-primary font-bold"
                                 : ""

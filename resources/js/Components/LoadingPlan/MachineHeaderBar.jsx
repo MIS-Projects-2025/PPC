@@ -181,7 +181,7 @@ export function MachineHeaderBar({
 					{hasMenu && (
 						<>
 							<button
-								className="btn"
+								className="btn btn-ghost"
 								popoverTarget={popoverId}
 								style={{ anchorName }}
 							>
