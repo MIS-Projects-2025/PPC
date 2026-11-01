@@ -25,6 +25,7 @@ names=(
   # "LotBucketItem"
   # "LotQuantityObserver"
   # "BaseHistoryObserver"
+  # "LoadingPlanService"
   # "LoadingPlanEntryObserver"
   # "LoadingPlanEntryHistory"
   # "LotPrioritySorter"
@@ -54,12 +55,8 @@ names=(
   "useCellEditPersistence"
   "SplitHistoryModal"
   "MergeHistoryModal"
-
-  # ---- Unclassified (no match, can't tell from the name) ----
-  "PackageBodySizeCapacityListx"
+  "PackageBodySizeCapacityList"
   "Deemo"
-  "LoadingPlanService"
-  "MergeSplit"
 )
 
 for name in "${names[@]}"; do
