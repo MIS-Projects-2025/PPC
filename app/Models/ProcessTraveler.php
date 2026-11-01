@@ -64,6 +64,8 @@ class ProcessTraveler extends Model
             'Part_Name'    => $this->part_number,
             'Lead_Count'   => $this->pkg_code,        // F3: pkg_code shown in the lead_count column
             'Package_Name' => $this->package_size,    // F3: package_size shown in the package_name column
+            // 'Date_Loaded'  => $this->date_created?->toDateString(),
+            'Date_Loaded'  => $this->DATE_CREATED?->toDateTimeString(), // might use this to retain time?
             'Ramp_Time'    => $this->input_type,
             'Bake'         => $this->for_bake ? 'For Bake' : null,
             'Qty'          => (int) round((float) $this->qty),

@@ -21,6 +21,10 @@ class PickUp extends Model
         "LC",
         "ADDED_BY"
     ];
+    protected $casts = [
+        'DATE_CREATED' => 'datetime',
+    ];
+
     public $timestamps = false;
 
     public function addedBy()
@@ -34,6 +38,7 @@ class PickUp extends Model
             'Lot_Id'       => $this->LOTID,
             'Part_Name'    => $this->PARTNAME,
             'Package_Name' => trim((string) $this->PACKAGE),
+            'Date_Loaded'  => $this->DATE_CREATED?->toDateTimeString(),
             'Lead_Count'   => $this->LC,
             'Qty'          => (int) $this->QTY,
             'Focus_Group'  => $part?->focus_grp,

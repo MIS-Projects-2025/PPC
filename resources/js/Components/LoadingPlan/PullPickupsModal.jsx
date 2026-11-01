@@ -18,7 +18,7 @@ export default function PullPickupsModal({ pool, date, location, disabled }) {
     return (
         // closing drops the loaded list and selection, so reopening always starts fresh
         <dialog id={PULL_PICKUPS_MODAL_ID} className="modal" onClose={pool.reset}>
-            <div className="modal-box bg-base-300 w-11/12 max-w-4xl max-h-[85vh] flex flex-col">
+            <div className="modal-box bg-base-300 w-11/12 max-w-4xl h-[85vh] flex flex-col">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                     <h3 className="font-bold text-lg">Earlier pickups</h3>
 
