@@ -9,6 +9,8 @@ export const MANUAL_TAB = "MANUAL";
 export const RES_STATION = "GTTRES_T";
 export const F3_FLAG = "F3";
 
+export const PICKUP_POOL_TABS = [UNASSIGNED_TAB, PICKUP_TAB];
+
 /** Tabs that don't map to a single package group. */
 export const NON_PACKAGE_TABS = [
     ALL_PACKAGES_TAB,

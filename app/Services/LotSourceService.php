@@ -8,6 +8,8 @@ use App\Models\LotSplit;
 use App\Models\LotQuantity;
 use App\Models\ProcessTraveler;
 use Illuminate\Support\Collection;
+use App\Models\PartName;
+use App\Models\PickUp;
 
 /**
  * One place to ask "what is the source row for this lot?".
@@ -52,6 +54,33 @@ class LotSourceService
             ->toBase()
             ->unique('lot_number')                 // latest row wins if lot_number is duplicated
             ->mapWithKeys(fn($t) => [$t->lot_number => $t->toWip()]);
+    }
+
+    public function pickupRows(iterable $lotIds): Collection
+    {
+        $ids = collect($lotIds)->filter()->unique()->values();
+        if ($ids->isEmpty()) {
+            return collect();
+        }
+
+        $pickups = PickUp::query()
+            ->whereIn('LOTID', $ids)
+            ->orderByDesc('DATE_CREATED')->orderByDesc('id_pickup')
+            ->get()
+            ->toBase()
+            ->unique('LOTID');
+
+        if ($pickups->isEmpty()) {
+            return collect();
+        }
+
+        $parts = PartName::whereIn('devicename', $pickups->pluck('PARTNAME')->filter()->unique())
+            ->get(['devicename', 'focus_grp', 'dimensions', 'allocation'])
+            ->keyBy(fn($p) => mb_strtolower($p->devicename));
+
+        return $pickups->mapWithKeys(fn($p) => [
+            $p->LOTID => $p->toWip($parts->get(mb_strtolower((string) $p->PARTNAME))),
+        ]);
     }
 
     public function ensureLotQuantities(Collection $entries, string $date): void
@@ -151,6 +180,12 @@ class LotSourceService
                 ->toBase()
                 ->unique('lot_number')
                 ->each(fn($t) => $out->put($t->lot_number, $t->toWip()));
+        }
+
+        $rest = $ids->diff($out->keys())->values();
+
+        if ($source !== self::F3 && $rest->isNotEmpty()) {
+            $this->pickupRows($rest)->each(fn($w, $id) => $out->put($id, $w));
         }
 
         return $out;

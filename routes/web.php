@@ -20,6 +20,7 @@ use App\Http\Controllers\{
     PackageBodySizeCapacityController,
     PackageCapacityController,
     PackageController,
+    PickupPoolController,
     PackageGroupController,
     LoadingPlanBucketController,
     LoadingPlanSettingsController,
@@ -112,6 +113,8 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
         ->whereIn('section', LoadingPlanSettingsController::SECTIONS)
         ->name('settings');
 
+    Route::get('/pickups/available', [PickupPoolController::class, 'available'])->name('pickups.available');
+    Route::post('/pickups/pull',     [PickupPoolController::class, 'pull'])->name('pickups.pull');
 
     Route::prefix('package-groups')->name('package-groups.')->group(function () {
         Route::get('grouped', [LoadingPlanPackageGroupController::class, 'grouped'])->name('grouped');

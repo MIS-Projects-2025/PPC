@@ -232,7 +232,11 @@ class LoadingPlanService
             ->forDate($this->date)->loadingPlanStations()->excludingPostTnr()
             ->whereIn('Lot_Id', $wipMissing)->get()->keyBy('Lot_Id');
 
+        $pickupMissing = array_values(array_diff($wipMissing, $wipExtras->keys()->all()));
+        $pickupRows    = $pickupMissing ? $this->sources->pickupRows($pickupMissing) : collect();
+
         $this->extraTodayWipRows = $wipExtras->toBase()
+            ->union($pickupRows)
             ->union($this->sources->find($f3Missing, $this->date, 'f3'));
     }
 

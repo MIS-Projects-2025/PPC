@@ -32,6 +32,7 @@ import {
     FOR_BAKE_TAB,
     ORPHAN_TAB,
     UNASSIGNED_TAB,
+    PICKUP_POOL_TABS,
     buildTabItems,
 } from "@/Constants/LoadingPlan/tabs";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
@@ -67,7 +68,9 @@ import dayjs from "dayjs";
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DataGrid } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
-
+import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
+import PullPickupsModal, { PULL_PICKUPS_MODAL_ID } from "@/Components/LoadingPlan/PullPickupsModal";
+import { showModal } from "@/Lib/LoadingPlan/modal";
 /**
  * Loading-plan grid (react-data-grid). One component for both the editable
  * page and the view-only page: `readOnly` disables every write path (edits,
@@ -333,6 +336,11 @@ export default function Deemo({
         update, syncServerFields, setIsDirty, toast,
     });
 
+    const pickupPool = usePickupPool({
+        store: useLoadingPlanStore, date, selectedLocation, readOnly, isF3,
+        beginWrite, withUpdating, mutate, setIsDirty, toast,
+    });
+
     const handleShowSplitHistory = useCallback(
         (rootLotId, isParent, isChild, lotId) =>
             loadSplitHistory(rootLotId, isParent, isChild, {
@@ -352,6 +360,11 @@ export default function Deemo({
             }),
         [loadMergeHistory],
     );
+
+    const handleOpenPickupPool = useCallback(() => {
+        pickupPool.load();
+        showModal(PULL_PICKUPS_MODAL_ID);
+    }, [pickupPool.load]);
 
     const handleSplitRevert = useCallback(
         (args) => revertSplit(args, { onDone: () => splitHistoryModalRef.current?.close() }),
@@ -752,6 +765,9 @@ export default function Deemo({
                     <PlanTabsBar
                         tabs={tabItems}
                         activeTab={activeTab}
+                        onOpenPickupPool={
+                            pickupPool.enabled && PICKUP_POOL_TABS.includes(activeTab) ? handleOpenPickupPool : undefined
+                        }
                         onTabChange={goToTab}
                         location={selectedLocation}
                         locationDisabled={writesLocked}
@@ -1008,6 +1024,8 @@ export default function Deemo({
                         onRename={renameNonMachine}
                         onDelete={deleteNonMachine}
                     />
+
+                    <PullPickupsModal pool={pickupPool} date={date} location={selectedLocation} disabled={writesLocked} />
                 </>
             )}
 
