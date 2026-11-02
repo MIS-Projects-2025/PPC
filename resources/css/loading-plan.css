@@ -1,3 +1,92 @@
+/* ───────── "Baking" pill ───────── */
+.bake-pill {
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    height: 18px;
+    padding: 0 7px 0 5px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1;
+    white-space: nowrap;
+    color: #431407;
+    background: linear-gradient(135deg, #fde68a 0%, #fb923c 55%, #f97316 100%);
+    box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 0.55),
+        0 1px 2px rgb(0 0 0 / 0.25);
+}
+
+/* breathing heat glow behind the pill (opacity only = compositor-friendly) */
+.bake-pill::before {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    z-index: -1;
+    border-radius: 999px;
+    background: rgb(249 115 22 / 0.7);
+    filter: blur(4px);
+    animation: bake-glow 2.4s ease-in-out infinite;
+}
+
+/* clip layer so the sheen never leaks outside the pill */
+.bake-pill__clip {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+}
+
+.bake-pill__clip::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 55%;
+    background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.65), transparent);
+    transform: translateX(-120%);
+    animation: bake-sheen 3.6s ease-in-out infinite;
+}
+
+.bake-pill__flame {
+    color: #b91c1c;
+    transform-origin: 50% 90%;
+    animation: bake-flicker 3s ease-in-out infinite;
+}
+
+@keyframes bake-flicker {
+    0%, 100% { transform: scale(1) rotate(-3deg); }
+    25%      { transform: scale(1.1, 1.22) rotate(3deg); }
+    50%      { transform: scale(0.95, 1.04) rotate(-2deg); }
+    75%      { transform: scale(1.07, 1.15) rotate(2deg); }
+}
+
+@keyframes bake-glow {
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 0.85; }
+}
+
+@keyframes bake-sheen {
+    0%, 55% { transform: translateX(-120%); }
+    100%    { transform: translateX(260%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .bake-pill::before,
+    .bake-pill__clip::after,
+    .bake-pill__flame {
+        animation: none;
+    }
+}
+
 @keyframes slideDown {
   from {
     opacity: 0;
@@ -7,6 +96,22 @@
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* Flash for the header row of a machine we just jumped to.
+   Animating the cells too, because they may have their own background. */
+@keyframes machine-jump-flash {
+    0%,
+    55% {
+        background-color: color-mix(in oklab, var(--color-warning) 45%, var(--color-base-100));
+        box-shadow: inset 0 3px 0 var(--color-warning), inset 0 -3px 0 var(--color-warning);
+    }
+    /* no 100% frame: it eases back to whatever the row/cell normally looks like */
+}
+
+.machine-jump-flash,
+.machine-jump-flash .rdg-cell {
+    animation: machine-jump-flash 2s ease-out;
 }
 
 .block-row-bg {

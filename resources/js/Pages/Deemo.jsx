@@ -26,6 +26,9 @@ import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import StatusMenu from "@/Components/LoadingPlan/StatusMenu";
 import { StickyMachineHeader, StickyOvenHeader } from "@/Components/LoadingPlan/StickyHeaderOverlay";
 import { HEADER_ROW_HEIGHT, ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
+import JumpToMachineModal from "@/Components/LoadingPlan/JumpToMachineModal";
+import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
+import { normalizeLotId } from "@/Components/LoadingPlan/BakingBadge";
 import {
     ALL_PACKAGES_TAB,
     F3_FLAG,
@@ -129,9 +132,11 @@ export default function Deemo({
     partnameMismatches,
     unknownPackages,
     recipeMismatches,
+    bakingLots: serverBakingLots,
     schedulerHistory,
     readOnly = false,
 }) {
+    console.log("🚀 ~ Deemo ~ serverBakingLots:", serverBakingLots)
     const toast = useToast();
     const isF3 = selectedLocation === F3_FLAG;
 
@@ -407,6 +412,20 @@ export default function Deemo({
         nonMachineRowCounts, orphanMachines, missingPartCount,
     } = useRowIndex(dataRows, knownMachineNames);
 
+    const jumpEntries = useMemo(
+        () => [
+            ...serverMachines.map((m) => ({
+                key: m.name, label: m.name, kind: "machine", platform: m.platform, location: m.location,
+                rowCount: rowsByMachine.get(m.name)?.length ?? 0,
+            })),
+            ...nonMachineList.map((n) => ({
+                key: n.key, label: n.name, kind: "non-machine",
+                rowCount: rowsByMachine.get(n.key)?.length ?? 0,
+            })),
+        ],
+        [serverMachines, nonMachineList, rowsByMachine],
+    );
+
     const { isOtherLoc, rowInActiveTab, rowInActiveTabOwn } = useMemo(
         () => createRowMatchers({ activePackage, selectedLocation, knownMachineNames }),
         [activePackage, selectedLocation, knownMachineNames],
@@ -481,6 +500,11 @@ export default function Deemo({
     const gridKey = `${activeTab}-${activePackage}`;
     const stickyMachine = useStickyGroupHeader(onBake ? EMPTY_ROWS : displayRows, gridRef, gridKey);
     const stickyOven = useStickyGroupHeader(onBake ? bakeDisplayRows : EMPTY_ROWS, gridRef, gridKey);
+
+    const { jumpToMachine, jumpedMachine } = useMachineJump({
+        displayRows, gridRef, activeTab, isTabSwitching, goToTab,
+        setCollapsedMachines, showAllMachines, setShowAllMachines, toast,
+    });
 
     // ── search + shortcuts ───────────────────────────────────────────────
     const search = useTableSearch({
@@ -593,12 +617,15 @@ export default function Deemo({
             const other = isData && isOtherLoc(row) ? "bg-secondary/10" : "";
 
             if (row.__headerKind === "bucket") return "text-xs border-t-2 border-info/50 flex machine-header-row";
-            if (row.__type === "header") return "text-xs border-t-4 border-yellow-500 flex machine-header-row";
+            if (row.__type === "header") {
+                const jumped = jumpedMachine != null && row.machine === jumpedMachine; // null guard: Unassigned header has machine === null
+                return clsx("text-xs border-t-4 border-yellow-500 flex machine-header-row", jumped && "machine-jump-flash");
+            }
             if (isBlockRow(row)) return "block-row-bg border-l-4 border-warning/60";
             if (row.is_rework) return clsx("border-l-4 border-info/60", scm || other);
             return clsx(scm || other) || undefined;
         },
-        [isOtherLoc],
+        [isOtherLoc, jumpedMachine],
     );
 
     const tableInteractionValue = useMemo(
@@ -632,6 +659,15 @@ export default function Deemo({
             writesLocked, toggleExpandedMachine, toggleExpandedLocation, handleAddLot, handleAddRow, handleAddBlock,
             handleAddBucket, handleAutoSort, renameBucket, deleteBucket, renameNonMachine, deleteNonMachine,
         ],
+
+    );
+
+    const bakingLots = useMemo(
+        () =>
+            new Map(
+                Object.entries(serverBakingLots ?? {}).map(([lotId, oven]) => [normalizeLotId(lotId), oven]),
+            ),
+        [serverBakingLots],
     );
 
     const tableActionsValue = useMemo(
@@ -642,8 +678,9 @@ export default function Deemo({
             writesLocked,
             isUpdating: writesLocked,
             nonMachineNameByKey,
+            bakingLots,
         }),
-        [openStatusMenu, handleShowSplitHistory, handleShowMergeHistory, nonMachineNameByKey, writesLocked],
+        [openStatusMenu, handleShowSplitHistory, handleShowMergeHistory, nonMachineNameByKey, writesLocked, bakingLots],
     );
 
     // ── pickups / export ─────────────────────────────────────────────────
@@ -919,6 +956,7 @@ export default function Deemo({
                             onClearTag={handleBulkClearTag}
                             onStatusChange={handleBulkStatus}
                             onBulkFieldUpdate={handleBulkFieldUpdate}
+                            onJumpToMachine={jumpToMachine}
                             onTransfer={handleBulkTransfer}
                             onSplitRow={splitRow}
                             onRework={handleRework}
@@ -1035,11 +1073,13 @@ export default function Deemo({
                 onToggle={toggleColumnVisibility}
                 onShowAll={showAllColumns}
             />
+            <JumpToMachineModal entries={jumpEntries} currentLocation={selectedLocation} onJump={jumpToMachine} />
             <CapacityOverviewModal
                 serverMachines={serverMachines}
                 nonMachines={nonMachineList}
                 machineCapacity={machineCapacity}
                 dataRows={dataRows}
+                onJumpToMachine={jumpToMachine}
             />
         </div>
     );

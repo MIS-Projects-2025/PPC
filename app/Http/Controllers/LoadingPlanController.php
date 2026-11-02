@@ -186,6 +186,19 @@ class LoadingPlanController extends Controller
         };
 
         $deferred = [
+            // 'bakeLots'          => app(BakeLotService::class)->getActiveBake(), // commented out temporarily because the table is not available on my local dev environment
+            // 'bakingLots' => Inertia::defer(function () {
+            //     try {
+            //         return app(\App\Services\BakeLotService::class)->getActiveLotOvens();
+            //     } catch (\Throwable $e) {
+            //         report($e);
+            //         return [];
+            //     }
+            // }),
+            'bakingLots' => Inertia::defer(
+                fn() => app(\App\Services\BakeLotService::class)
+                    ->lotOvensForPlan($wipRows->pluck('Lot_Id')->filter()->unique())
+            ),
             'partnameMismatches' => Inertia::defer(
                 fn() =>
                 $partnameIntegrity->findMismatches($wipRows, $getPackageList())
@@ -259,7 +272,6 @@ class LoadingPlanController extends Controller
             'machines'          => $activeMachines,
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
-            // 'bakeLots'          => app(BakeLotService::class)->getActiveBake(), // commented out temporarily because the table is not available on my local dev environment
             'selectedLocation'  => $selectedLocation,
             'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)

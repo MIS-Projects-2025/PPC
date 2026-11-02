@@ -22,7 +22,7 @@ import { PartNameCell } from "./PartNameCell";
 import { RowDropTargetCell } from "./RowDropTargetCell";
 import { TableActionsContext } from "./TableActionsContext";
 import TimeCell from "./TimeCell";
-
+import { WithBakeIndicator } from "./BakingBadge";
 // Re-exports so existing `import { ... } from ".../columns"` keep working.
 export { AccuTimeEditor, TimeStartEditor } from "./CellEditor";
 export { TableActionsContext } from "./TableActionsContext";
@@ -165,9 +165,13 @@ function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable }) 
     return {
         status: (row) => {
             if (isBlock(row)) return <BlockLabel>▨ {row.block_label}</BlockLabel>;
-            if (row.machine === null && row.bucket_id != null) return row.status; // grouped rows: plain text
-            if (!onStatusClick) return <StatusBadge status={row.status} />;
-            return <StatusButton row={row} onStatusClick={onStatusClick} />;
+
+            let content;
+            if (row.machine === null && row.bucket_id != null) content = row.status; // grouped rows: plain text
+            else if (!onStatusClick) content = <StatusBadge status={row.status} />;
+            else content = <StatusButton row={row} onStatusClick={onStatusClick} />;
+
+            return <WithBakeIndicator row={row}>{content}</WithBakeIndicator>;
         },
 
         lot_id: (row) => {

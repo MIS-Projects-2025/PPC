@@ -31,6 +31,7 @@ export default function SelectionToolbar({
     onClearTag,
     onStatusChange,
     onBulkFieldUpdate,
+    onJumpToMachine,
     onTransfer,
     onSplitRow,
     onMergeRows,
@@ -486,6 +487,9 @@ export default function SelectionToolbar({
                 machinePlatform={machinePlatform}
                 selectedMachines={selectedMachines}
                 transferLotIds={transferLotIds}
+                incomingRows={selectedRows}
+                laneRows={allData}
+                onJumpToMachine={onJumpToMachine}
                 date={date}
                 open={transferOpen}
                 onClose={() => {

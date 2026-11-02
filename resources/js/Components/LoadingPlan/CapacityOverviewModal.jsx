@@ -2,8 +2,9 @@ import { STATUS_GROUPS } from "@/Components/LoadingPlan/StatusMenu.jsx";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import clsx from "clsx";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-
+import { Fragment, useMemo, useRef, useState } from "react";
+import { useDialogOpen } from "@/Hooks/LoadingPlan/useDialogOpen";
+import { closeModal } from "@/Lib/LoadingPlan/modal";
 export const CAPACITY_OVERVIEW_MODAL_ID = "capacity_overview_modal";
 
 // @/Constants/LoadingPlan/packageSummaryGroups.js
@@ -84,21 +85,6 @@ function sumRows(rows) {
     return t;
 }
 
-/** Mounts the (heavy) body only while the <dialog> is open. */
-function useDialogOpen(ref) {
-    const [open, setOpen] = useState(false);
-    useEffect(() => {
-        const el = ref.current;
-        if (!el) return;
-        const sync = () => setOpen(el.open);
-        const mo = new MutationObserver(sync);
-        mo.observe(el, { attributes: true, attributeFilter: ["open"] });
-        sync();
-        return () => mo.disconnect();
-    }, [ref]);
-    return open;
-}
-
 // ── presentational bits ──────────────────────────────────────────────────
 function UtilizationCell({ pct }) {
     if (pct == null) return <span className="text-xs opacity-50">no capacity</span>;
@@ -134,7 +120,7 @@ function StatusCells({ counts, statusCols }) {
     });
 }
 
-function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, variant = "row" }) {
+function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, onJump, variant = "row" }) {
     const isTotal = variant !== "row";
     const done = agg.counts.DONE ?? 0;
     const firstCell = clsx(
@@ -145,8 +131,21 @@ function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil
     return (
         <tr className={clsx(isTotal && "bg-base-200 font-semibold", highlight && "bg-warning/10")}>
             <td className={firstCell}>
-                {label}
-                {badge && <span className="badge badge-xs badge-ghost ml-2">{badge}</span>}
+                <div className="flex items-center gap-1">
+                    {onJump && (
+                        <button
+                            type="button"
+                            className="btn btn-ghost btn-xs btn-square"
+                            title={`Jump to ${label}`}
+                            aria-label={`Jump to ${label}`}
+                            onClick={onJump}
+                        >
+                            ↗
+                        </button>
+                    )}
+                    <span>{label}</span>
+                    {badge && <span className="badge badge-xs badge-ghost ml-1">{badge}</span>}
+                </div>
             </td>
             <td className="text-right tabular-nums">
                 {loading ? <span className="loading loading-spinner loading-xs" /> : capacity ? capacity.toLocaleString() : "—"}
@@ -165,7 +164,7 @@ function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil
     );
 }
 
-function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUtil }) {
+function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUtil, onJump }) {
     const colCount = 1 + 3 + statusCols.length + 2 + (showUtil ? 1 : 0);
 
     return (
@@ -207,6 +206,7 @@ function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUt
                                 key={`${r.key}-${i}`}
                                 label={r.label}
                                 badge={r.kind === "non-machine" ? "non-machine" : null}
+                                onJump={onJump && r.kind !== "manual" ? () => onJump(r.key) : undefined}
                                 capacity={r.capacity}
                                 agg={r.agg}
                                 loading={loading && r.kind === "machine"}
@@ -246,7 +246,7 @@ function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUt
 }
 
 // ── body (only mounted while the dialog is open) ─────────────────────────
-function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows }) {
+function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, onJumpToMachine }) {
     const [tab, setTab] = useState("machines");
     const [hideEmptyStatuses, setHideEmptyStatuses] = useState(false);
     const loading = machineCapacity === undefined;
@@ -333,6 +333,13 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows }
 
     const statusSummary = statusCols.filter(({ status }) => (grand.counts[status] ?? 0) > 0);
 
+    const jump = onJumpToMachine
+        ? (key) => {
+                closeModal(CAPACITY_OVERVIEW_MODAL_ID);
+                onJumpToMachine(key);
+            }
+        : undefined;
+
     return (
         <>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -367,6 +374,7 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows }
                         statusCols={statusCols}
                         loading={loading}
                         showUtil
+                        onJump={jump}
                     />
                 ) : (
                     <SummaryTable
@@ -376,6 +384,7 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows }
                         statusCols={statusCols}
                         loading={loading}
                         showUtil={false}
+                        onJump={jump}
                     />
                 )}
             </div>
@@ -404,7 +413,7 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows }
 }
 
 /** Commit vs capacity for every machine and non-machine. `machineCapacity` is a Deferred prop (undefined until loaded). */
-export default function CapacityOverviewModal({ serverMachines, nonMachines, machineCapacity, dataRows }) {
+export default function CapacityOverviewModal({ serverMachines, nonMachines, machineCapacity, dataRows, onJumpToMachine }) {
     const ref = useRef(null);
     const open = useDialogOpen(ref);
 
@@ -417,6 +426,7 @@ export default function CapacityOverviewModal({ serverMachines, nonMachines, mac
                         nonMachines={nonMachines}
                         machineCapacity={machineCapacity}
                         dataRows={dataRows}
+                        onJumpToMachine={onJumpToMachine}
                     />
                 )}
                 <div className="modal-action">

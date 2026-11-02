@@ -6,7 +6,7 @@ import { TableInteractionContext } from "./MachineHeaderBar";
 
 const PLATFORM_ORDER = ["G6L", "Vitrox", "HSI"];
 
-const TIER_LABELS = {
+export const TIER_LABELS = {
     1: "Compatible — capacity open",
     2: "Compatible — exceeds capacity",
     3: "Partially compatible — capacity open",
@@ -14,7 +14,7 @@ const TIER_LABELS = {
     5: "Incompatible",
 };
 
-const TIER_STYLES = {
+export const TIER_STYLES = {
     1: { dot: "bg-lime-400", text: "text-lime-500", border: "border-lime-400/30", bg: "bg-lime-400/[0.04]" },
     2: { dot: "bg-warning", text: "text-warning", border: "border-warning/30", bg: "bg-warning/[0.04]" },
     3: { dot: "bg-sky-400", text: "text-sky-500", border: "border-sky-400/30", bg: "bg-sky-400/[0.04]" },
@@ -30,10 +30,10 @@ const PLATFORM_STYLES = {
     Other: { dot: "bg-base-content/30", text: "text-base-content/40", border: "border-base-content/10", bg: "bg-base-content/[0.02]" },
 };
 
-function platformStyle(platform) {
+export function platformStyle(platform) {
     return PLATFORM_STYLES[platform] ?? PLATFORM_STYLES.Other;
 }
-function groupByPlatform(machineNames, machinePlatform) {
+export function groupByPlatform(machineNames, machinePlatform) {
     const groups = new Map();
     for (const m of machineNames) {
         const platform = machinePlatform.get(m) ?? "Other";
@@ -48,7 +48,7 @@ function groupByPlatform(machineNames, machinePlatform) {
 }
 
 // --- new: group by tier, using the transferCandidates response ---
-function groupByTier(machineNames, transferCandidates) {
+export function groupByTier(machineNames, transferCandidates) {
     const groups = new Map();
     for (const m of machineNames) {
         const row = transferCandidates[m];

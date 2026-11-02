@@ -1,9 +1,22 @@
 import { useMutation } from "@/Hooks/useMutation";
 import { forwardRef, useEffect, useRef, useState } from "react";
-import MachineSelectionGrid from "./MachineSelectionGrid";
+import TransferMachinePicker from "./TransferMachinePicker";
 
 const TransferModal = forwardRef(function TransferModal(
-    { machines, nonMachines, machinePlatform, selectedMachines, transferLotIds, date, open, onSelect, onClose },
+    {
+        machines,
+        nonMachines,
+        machinePlatform,
+        selectedMachines,
+        transferLotIds,
+        incomingRows, // NEW: the selected row objects (SelectionToolbar's `selectedRows`)
+        laneRows, // NEW: every row in the plan (SelectionToolbar's `allData`)
+        onJumpToMachine,
+        date,
+        open,
+        onSelect,
+        onClose,
+    },
     ref,
 ) {
     const [pendingMachine, setPendingMachine] = useState(undefined);
@@ -32,12 +45,8 @@ const TransferModal = forwardRef(function TransferModal(
         setNudge(true);
     }, [pendingMachine]);
 
-    // Fetch compatibility/capacity preview whenever the set of lots being
-    // transferred changes (i.e. right before the modal is shown).
-    // Fetch compatibility/capacity preview only when the modal actually
-    // opens — not on every selection edit while it's closed. Re-fetches
-    // each time it opens (not just once) since capacity can have moved
-    // since the last time it was open.
+    // Re-fetch the compatibility/capacity preview every time the modal opens
+    // (capacity can have moved since last time).
     useEffect(() => {
         if (!open) return;
 
@@ -49,10 +58,9 @@ const TransferModal = forwardRef(function TransferModal(
         mutate("/loading-plan/transfer-candidates", {
             body: { lot_ids: transferLotIds, date },
             mutationKey: "transfer-candidates",
-            cancelPrevious: true, // supersede a stale in-flight fetch if transferLotIds changes again before it resolves
+            cancelPrevious: true,
         })
             .then((result) => {
-                // index by machine (machine_num) for O(1) lookup in the grid
                 const byMachine = {};
                 result.forEach((row) => {
                     byMachine[row.machine] = row;
@@ -60,32 +68,39 @@ const TransferModal = forwardRef(function TransferModal(
                 setCandidates(byMachine);
             })
             .catch((err) => {
-                if (err.name === "AbortError") return; // superseded by a newer request, not a real failure
+                if (err.name === "AbortError") return;
                 console.error("transfer-candidates failed:", err);
             });
-        // no cleanup/cancel call needed here — cancelPrevious handles supersession,
-        // and useMutation's own unmount effect aborts any still-in-flight request
     }, [open]);
 
-    const isDisabled = (m) =>
-        selectedMachines.size === 1 && selectedMachines.has(m);
+    const isDisabled = (m) => selectedMachines.size === 1 && selectedMachines.has(m);
 
     const handleClose = () => {
         setPendingMachine(undefined);
         onClose?.();
     };
 
-    const handleConfirm = () => {
+    const confirm = () => {
         if (pendingMachine === undefined) return;
         onSelect(pendingMachine);
         setPendingMachine(undefined);
         ref.current?.close();
+    }
+
+    const handleConfirm = () => {
+        confirm();
+    };
+
+    const handleConfirmThenJump = () => {
+        confirm();
+        onJumpToMachine?.(pendingMachine);
     };
 
     return (
-        <dialog ref={ref} id="transfer_modal" className="modal">
+        // onClose on the <dialog>: Esc closes it natively and would otherwise leave `open` stuck at true
+        <dialog ref={ref} id="transfer_modal" className="modal" onClose={handleClose}>
             <div
-                className="modal-box bg-base-300 w-11/12 max-w-3xl max-h-[80vh] flex flex-col"
+                className="modal-box bg-base-300 w-11/12 max-w-6xl h-[85vh] max-h-[85vh] flex flex-col"
                 onKeyDown={(e) => {
                     // Enter from the search box confirms too; buttons handle their own Enter
                     if (e.key === "Enter" && pendingMachine !== undefined && e.target.tagName === "INPUT") {
@@ -96,14 +111,11 @@ const TransferModal = forwardRef(function TransferModal(
             >
                 <h3 className="font-bold text-lg mb-3">Transfer to…</h3>
 
-                {errorMessage && (
-                    <div className="alert alert-error text-xs py-2 mb-2">
-                        {errorMessage}
-                    </div>
-                )}
+                {errorMessage && <div className="alert alert-error text-xs py-2 mb-2">{errorMessage}</div>}
 
-                <div className="overflow-y-auto flex-1">
-                    <MachineSelectionGrid
+                {/* mounted only while open: the lane index is built on open, not on every selection change */}
+                {open && (
+                    <TransferMachinePicker
                         inputRef={searchRef}
                         machines={machines}
                         nonMachines={nonMachines}
@@ -111,16 +123,12 @@ const TransferModal = forwardRef(function TransferModal(
                         selectedMachine={pendingMachine}
                         onSelect={setPendingMachine}
                         isDisabled={isDisabled}
-                        transferCandidates={candidates}
-                        transferLoading={isLoading}
+                        candidates={candidates}
+                        loading={isLoading}
+                        incomingRows={incomingRows}
+                        laneRows={laneRows}
                     />
-
-                    {nonMachines.length === 0 && (
-                        <p className="text-[11px] text-base-content/40 mt-1">
-                            No non-machines for this date and location yet. Create one from the Non-machines button.
-                        </p>
-                    )}
-                </div>
+                )}
 
                 <div className="modal-action">
                     <button className="btn btn-ghost cursor-pointer" onClick={handleClose}>
@@ -135,6 +143,16 @@ const TransferModal = forwardRef(function TransferModal(
                         className={`btn btn-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${nudge ? "animate-confirm-nudge" : ""}`}
                     >
                         Confirm <kbd className="kbd kbd-xs ml-1">Enter</kbd>
+                    </button>
+                    <button
+                        ref={confirmRef}
+                        type="button"
+                        disabled={pendingMachine === undefined}
+                        onClick={handleConfirmThenJump}
+                        onAnimationEnd={() => setNudge(false)}
+                        className={`btn btn-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${nudge ? "animate-confirm-nudge" : ""}`}
+                    >
+                        Confirm then Jump to Machine
                     </button>
                 </div>
             </div>

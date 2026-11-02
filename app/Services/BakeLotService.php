@@ -4,9 +4,86 @@ namespace App\Services;
 
 use App\Models\BakeLot;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class BakeLotService
 {
+    /**
+     * lotid => oven_num for the lots in the plan. Never throws: if the bake
+     * source is unreachable or the schema/table is missing, returns [].
+     */
+    public function lotOvensForPlan(iterable $planLotIds): array
+    {
+        $driver = config('bake.driver', 'real');
+
+        if ($driver === 'off') {
+            return [];
+        }
+
+        if ($driver === 'fake' && ! app()->isProduction()) {
+            return $this->fakeActiveLotOvens(
+                $planLotIds,
+                (float) config('bake.fake_ratio', 0.10),
+                (int) config('bake.fake_oven_count', 6),
+            );
+        }
+
+        // circuit breaker: after a failure, don't pay the connect timeout on every request
+        // (rescue() so a broken cache can't throw either)
+        if (rescue(fn() => Cache::has('bake:unavailable'), false, false)) {
+            return [];
+        }
+
+        try {
+            return $this->getActiveLotOvens();
+        } catch (\Throwable $e) {
+            rescue(
+                fn() => Cache::put('bake:unavailable', true, now()->addSeconds((int) config('bake.retry_after', 60))),
+                null,
+                false,
+            );
+            Log::warning('Bake source unavailable; baking badges disabled.', ['error' => $e->getMessage()]);
+
+            return [];
+        }
+    }
+
+    public function getActiveLotOvens(): array
+    {
+        return BakeLot::query()
+            ->active()
+            ->whereNotNull('b.lotid')
+            ->pluck('b.oven_num', 'b.lotid')
+            ->all();
+    }
+
+    /**
+     * DEV ONLY: pretend ~$ratio of the given lots are in an oven.
+     * Deterministic (hash of the lot id), so results are stable between requests.
+     *
+     * @return array<string, int> lotid => oven_num
+     */
+    public function fakeActiveLotOvens(iterable $lotIds, float $ratio = 0.50, int $ovenCount = 6): array
+    {
+        $threshold = (int) round($ratio * 100);
+        $ovens = [];
+
+        foreach ($lotIds as $lotId) {
+            $lotId = trim((string) $lotId);
+            if ($lotId === '') {
+                continue;
+            }
+
+            $hash = crc32($lotId);
+            if ($hash % 100 < $threshold) {
+                $ovens[$lotId] = intdiv($hash, 100) % $ovenCount + 1;
+            }
+        }
+
+        return $ovens;
+    }
+
     /* Get all currently active bake lots with their latest WIP details. */
 
     public function getActiveBake(): Collection
