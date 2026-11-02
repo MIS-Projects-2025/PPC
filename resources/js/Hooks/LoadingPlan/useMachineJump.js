@@ -47,14 +47,18 @@ export function useMachineJump({
         });
     }, []);
 
+    const latest = useRef({ activeTab, displayRows });
+    latest.current = { activeTab, displayRows };
+
     const jumpToMachine = useCallback(
         (machine) => {
+            const { activeTab, displayRows } = latest.current;
+
             const needsAllTab =
                 activeTab !== ALL_PACKAGES_TAB &&
                 (TABS_WITHOUT_MACHINES.has(activeTab) || findMachineHeader(displayRows, machine) === -1);
             if (needsAllTab) goToTab(ALL_PACKAGES_TAB);
 
-            // a collapsed machine would show only its header: open it so its rows are visible
             setCollapsedMachines((prev) => {
                 if (!prev.has(machine)) return prev;
                 const next = new Set(prev);
@@ -64,7 +68,7 @@ export function useMachineJump({
 
             setPending({ machine });
         },
-        [activeTab, displayRows, goToTab, setCollapsedMachines],
+        [goToTab, setCollapsedMachines],
     );
 
     // Runs after every display-rows rebuild until the header exists.

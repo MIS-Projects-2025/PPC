@@ -2,7 +2,7 @@ import { STATUS_GROUPS } from "@/Components/LoadingPlan/StatusMenu.jsx";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import clsx from "clsx";
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, memo, useRef, useDeferredValue, useState } from "react";
 import { useDialogOpen } from "@/Hooks/LoadingPlan/useDialogOpen";
 import { closeModal } from "@/Lib/LoadingPlan/modal";
 export const CAPACITY_OVERVIEW_MODAL_ID = "capacity_overview_modal";
@@ -120,7 +120,7 @@ function StatusCells({ counts, statusCols }) {
     });
 }
 
-function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, onJump, variant = "row" }) {
+const SummaryRow = memo(function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, onJump, jumpKey, variant = "row" }) {
     const isTotal = variant !== "row";
     const done = agg.counts.DONE ?? 0;
     const firstCell = clsx(
@@ -138,7 +138,7 @@ function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil
                             className="btn btn-ghost btn-xs btn-square"
                             title={`Jump to ${label}`}
                             aria-label={`Jump to ${label}`}
-                            onClick={onJump}
+                            onClick={() => onJump(jumpKey)}
                         >
                             ↗
                         </button>
@@ -162,7 +162,7 @@ function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil
             )}
         </tr>
     );
-}
+});
 
 function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUtil, onJump }) {
     const colCount = 1 + 3 + statusCols.length + 2 + (showUtil ? 1 : 0);
@@ -206,7 +206,8 @@ function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUt
                                 key={`${r.key}-${i}`}
                                 label={r.label}
                                 badge={r.kind === "non-machine" ? "non-machine" : null}
-                                onJump={onJump && r.kind !== "manual" ? () => onJump(r.key) : undefined}
+                                onJump={r.kind !== "manual" ? onJump : undefined}
+                                jumpKey={r.key}
                                 capacity={r.capacity}
                                 agg={r.agg}
                                 loading={loading && r.kind === "machine"}
@@ -248,8 +249,10 @@ function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUt
 // ── body (only mounted while the dialog is open) ─────────────────────────
 function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, onJumpToMachine }) {
     const [tab, setTab] = useState("machines");
-    const [hideEmptyStatuses, setHideEmptyStatuses] = useState(false);
+    const [hideEmptyStatuses, setHideEmptyStatuses] = useState(true);
     const loading = machineCapacity === undefined;
+
+    const deferredRows = useDeferredValue(dataRows);
 
     // 1) one pass over the rows
     const { byMachine, extraStatuses } = useMemo(() => {
@@ -257,7 +260,7 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, 
         const byMachine = new Map();
         const extra = new Set();
 
-        for (const row of dataRows) {
+        for (const row of deferredRows ) {
             if (row.machine == null || !known.has(row.machine)) continue; // unassigned / grouped / orphan
             if (isBlockRow(row) || row.is_block) continue;
 
@@ -274,7 +277,7 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, 
             addRow(ga, row, status);
         }
         return { byMachine, extraStatuses: [...extra].sort() };
-    }, [dataRows, serverMachines, nonMachines]);
+    }, [deferredRows , serverMachines, nonMachines]);
 
     // 2) rows / sections (re-runs when the deferred capacity arrives)
     const { simpleSections, groupedSections, grand } = useMemo(() => {
@@ -333,12 +336,12 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, 
 
     const statusSummary = statusCols.filter(({ status }) => (grand.counts[status] ?? 0) > 0);
 
-    const jump = onJumpToMachine
-        ? (key) => {
-                closeModal(CAPACITY_OVERVIEW_MODAL_ID);
-                onJumpToMachine(key);
-            }
-        : undefined;
+    const jump = useMemo(
+        () => onJumpToMachine
+            ? (key) => { closeModal(CAPACITY_OVERVIEW_MODAL_ID); onJumpToMachine(key); }
+            : undefined,
+        [onJumpToMachine],
+    );
 
     return (
         <>

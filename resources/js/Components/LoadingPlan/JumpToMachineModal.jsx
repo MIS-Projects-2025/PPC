@@ -117,7 +117,12 @@ function JumpBody({ entries, currentLocation, onJump }) {
     );
 
     useEffect(() => setActive(0), [query]);
+    
+    const keyboardNav = useRef(false);
+
     useEffect(() => {
+        if (!keyboardNav.current) return;
+        keyboardNav.current = false;
         listRef.current
             ?.querySelector('[data-active="true"]')
             ?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -147,15 +152,19 @@ function JumpBody({ entries, currentLocation, onJump }) {
 
         if (e.key === "ArrowDown") {
             e.preventDefault();
+            keyboardNav.current = true;
             setActive((i) => Math.max(0, Math.min(i + 1, flat.length - 1)));
         } else if (e.key === "ArrowUp") {
             e.preventDefault();
+            keyboardNav.current = true;
             setActive((i) => Math.max(i - 1, 0));
         } else if (e.key === "ArrowRight" && caretAtEnd) {
             e.preventDefault();
+            keyboardNav.current = true;
             moveColumn(1);
         } else if (e.key === "ArrowLeft" && caretAtStart) {
             e.preventDefault();
+            keyboardNav.current = true;
             moveColumn(-1);
         } else if (e.key === "Enter") {
             e.preventDefault();
@@ -197,7 +206,7 @@ function JumpBody({ entries, currentLocation, onJump }) {
                                                         type="button"
                                                         data-active={idx === active}
                                                         onClick={() => jump(e)}
-                                                        onMouseEnter={() => setActive(idx)}
+                                                        onMouseMove={() => idx !== active && setActive(idx)}
                                                         className={clsx(
                                                             "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm",
                                                             idx === active ? "bg-primary/15" : "hover:bg-base-200",

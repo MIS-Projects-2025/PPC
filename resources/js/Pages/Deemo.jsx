@@ -136,7 +136,6 @@ export default function Deemo({
     schedulerHistory,
     readOnly = false,
 }) {
-    console.log("🚀 ~ Deemo ~ serverBakingLots:", serverBakingLots)
     const toast = useToast();
     const isF3 = selectedLocation === F3_FLAG;
 
