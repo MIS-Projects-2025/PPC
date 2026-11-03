@@ -21,6 +21,11 @@ class LotSourceService
     public const WIP = 'wip';
     public const F3  = 'f3';
 
+    private function normalizeSource(?string $source): ?string
+    {
+        return $source === null ? null : strtolower(trim($source));
+    }
+
     /**
      * Pool of lots that can be shown/placed for a location, keyed by Lot_Id.
      * F3 only; F1/F2 keep using LoadingPlanService::getWipRowsForToday().
@@ -33,7 +38,7 @@ class LotSourceService
      */
     public function poolFor(string $date, ?string $location): Collection
     {
-        if ($location !== 'F3') {
+        if (strtoupper(trim((string) $location)) !== 'F3') {
             return collect();
         }
 
@@ -159,6 +164,8 @@ class LotSourceService
 
         $out = collect();
 
+        $source = $this->normalizeSource($source);
+
         if ($source !== self::F3) {
             $out = CustomerDataWip::query()
                 ->forDate($date)
@@ -194,9 +201,12 @@ class LotSourceService
     /** Source row for one placed entry. Split children resolve to their root lot. */
     public function forEntry(LoadingPlanEntry $entry): ?CustomerDataWip
     {
-        if (!$entry->lot_id) {          // blocks
+        if (!$entry->lot_id) {
             return null;
         }
+
+        // Normalize only the in-memory model attribute.
+        $entry->setAttribute('source', $this->normalizeSource($entry->source));
 
         return $this->find(
             [$entry->resolveRootLotId()],
@@ -211,10 +221,19 @@ class LotSourceService
      */
     public function forEntries(iterable $entries): Collection
     {
-        $entries = collect($entries)->filter(fn($e) => $e->lot_id)->values();
+        $entries = collect($entries)
+            ->filter(fn($e) => $e->lot_id)
+            ->values();
+
         if ($entries->isEmpty()) {
             return collect();
         }
+
+        // Normalize source values without saving to the database.
+        $entries->each(
+            fn($e) =>
+            $e->setAttribute('source', $this->normalizeSource($e->source))
+        );
 
         $splits = LotSplit::active()
             ->whereIn('child_lot_id', $entries->pluck('lot_id')->unique()->all())
