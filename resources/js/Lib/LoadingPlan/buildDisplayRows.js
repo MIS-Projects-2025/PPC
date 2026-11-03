@@ -174,7 +174,7 @@ function machineSection(ctx, m) {
     const locked = lockedMachine != null && m === lockedMachine;
 
     if (isUnassigned && readOnly) return [];
-    if (activePackage !== MANUAL_TAB && !isAll && activePackage !== PICKUP_TAB) return [];
+    if (isUnassigned && activePackage !== MANUAL_TAB && !isAll && activePackage !== PICKUP_TAB) return [];
 
     const canCollapse = !isUnassigned;
     const showAll = locked || (canCollapse && expandedMachines.has(m));

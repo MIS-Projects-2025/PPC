@@ -128,6 +128,8 @@ class LoadingPlanController extends Controller
         return $response;
     }
 
+    // might got deprecated.
+    // The creation of pickup now resides on another system.
     public function schedulePickup(Request $request, SchedulerService $scheduler)
     {
         $validated = $request->validate([
@@ -467,7 +469,7 @@ class LoadingPlanController extends Controller
         $result = $compatibility->map(function ($c, $machineId) use ($committedByMachine, $capacityByMachine, $machineNumById, $addedDoable) {
             $isFull = $c['incompatible_lot_ids']->isEmpty();
             $capacity = $capacityByMachine[$machineId];
-            $current = $committedByMachine[$machineId];
+            $current = $committedByMachine[$machineId] ?? 0;
             $projected = $current + $addedDoable;
             $exceeds = $capacity !== null && $projected > $capacity;
 
@@ -525,7 +527,7 @@ class LoadingPlanController extends Controller
     {
         $validated = $request->validate([
             'date'     => ['nullable', 'date_format:Y-m-d'],
-            'location' => ['nullable', 'string', 'max:10'],
+            'location' => ['nullable', 'string', 'max:10'], // never used because scheduler must run for all locations, but still validated to avoid unexpected input
         ]);
 
         $date = $validated['date'] ?? ShiftDay::current();
@@ -573,7 +575,7 @@ class LoadingPlanController extends Controller
             if (empty($pickup)) {
                 SchedulerRun::create([
                     // 'location'   => $selectedLocation,
-                    'location'   => "All",
+                    'location'   => "All", // never used because scheduler must run for all locations, but still validated to avoid unexpected input
                     'date'       => $date,
                     // 'user_id'    => auth()->id(),
                     'user_id'    => null,

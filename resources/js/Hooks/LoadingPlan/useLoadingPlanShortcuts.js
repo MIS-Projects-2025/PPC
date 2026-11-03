@@ -22,16 +22,16 @@ export function useLoadingPlanShortcuts({
                 return;
             }
 
+            const typing = e.target?.matches?.("input:not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable]");
             if (e.key === "Escape") {
                 if (searchOpen) {
                     closeSearch();
                     return;
                 }
-                clearSelection();
+                if (!dialogOpen() && !typing) clearSelection();
             }
 
-            const tag = e.target?.tagName;
-            if (tag === "INPUT" || tag === "TEXTAREA") return;
+            if (typing) return;
             if (dialogOpen()) return;
             if (readOnly) return;
             if (!(e.ctrlKey || e.metaKey)) return;

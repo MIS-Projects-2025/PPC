@@ -48,6 +48,11 @@ use App\Http\Controllers\General\{ProfileController};
 $app_name = env('APP_NAME', '');
 Route::redirect('/', "/$app_name");
 
+$app_name = config('app.name');
+if ($app_name) {
+    Route::redirect('/', "/$app_name");
+}
+
 require __DIR__ . '/auth.php';
 
 Route::prefix('rules')->group(function () {

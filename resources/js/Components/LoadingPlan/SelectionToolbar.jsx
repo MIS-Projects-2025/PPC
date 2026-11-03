@@ -181,7 +181,8 @@ export default function SelectionToolbar({
         merge: busy
             || (count !== 2 ? "Select exactly 2 lots to merge." : null)
             || (isSelectedRowsUnassigned ? "Unassigned lots can't be merged." : null)
-            || (hasReworkSelected ? "Rework lots can't be merged." : null),
+            || (hasReworkSelected ? "Rework lots can't be merged." : null)
+            || (selectedRows.some(isBlockRow) ? "Time blocks can't be merged." : null),
         rework: busy
             || (count !== 1 ? "Select exactly 1 lot to rework." : null)
             || (!canRework ? "Only placed, non-leaked lots can be reworked." : null),

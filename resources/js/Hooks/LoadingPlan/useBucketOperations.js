@@ -143,7 +143,7 @@ export function useBucketOperations({
             const bucket = await withUpdating(
                 mutate(route("loading-plan.buckets.store"), { body: { location: selectedLocation, label, machine } }),
             );
-            setBucketList((prev) => [...prev, bucket]);
+            setBucketList((prev) => [...prev, { ...bucket, machine: bucket.machine ?? machine }]);
             return true;
         } catch (err) {
             console.error("Create group failed:", err);
@@ -158,7 +158,7 @@ export function useBucketOperations({
             const bucket = await withUpdating(
                 mutate(route("loading-plan.buckets.update", { bucket: id }), { method: "PATCH", body: { label } }),
             );
-            setBucketList((prev) => prev.map((b) => (b.id === id ? bucket : b)));
+            setBucketList((prev) => prev.map((b) => (b.id === id ? { ...b, ...bucket, machine: bucket.machine ?? b.machine } : b)));
             return true;
         } catch (err) {
             console.error("Rename group failed:", err);

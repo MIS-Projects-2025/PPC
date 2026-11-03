@@ -46,9 +46,10 @@ export function useMutation({ track = true } = {}) {
                 signal: controller.signal,
             });
 
-            let result;
+            let result = null;
             try {
-                result = await response.json();
+                const text = await response.text();
+                result = text ? JSON.parse(text) : null;
             } catch {
                 const error = new Error("Invalid JSON response from server");
                 error.status = response.status;

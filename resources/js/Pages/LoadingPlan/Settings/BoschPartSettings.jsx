@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, errMsg } from './Lib';
 
 const API = '/loading-plan/bosch-parts';
@@ -14,9 +14,14 @@ export default function BoschPartSettings() {
     const [bulk, setBulk] = useState('');
     const [bulkIsBosch, setBulkIsBosch] = useState(true);
 
+    const seq = useRef(0);
     const load = useCallback(async (q) => {
+        const id = ++seq.current;
+
         try {
             const { data } = await axios.get(API, { params: { q } });
+            if (id !== seq.current) return;
+
             setRows(data.data);
             setTotal(data.total);
         } catch (err) {
