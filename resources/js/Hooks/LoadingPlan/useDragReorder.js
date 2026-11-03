@@ -282,6 +282,18 @@ export function useDragReorder({
                             },
                         },
                     ]);
+
+                    // arrangement-dependent values: present only, never into undo/redo snapshots.
+                    // Guarded with `in`: the unassign response is a raw model without these keys.
+                    // not yet tested if introduced bugs NOV 4
+                    const derived = {};
+                    for (const k of ["capacity_uph", "doable", "doable_status"]) {
+                        if (k in entry) derived[k] = entry[k];
+                    }
+                    if (Object.keys(derived).length) {
+                        update((prev) => prev.map((r) => (r._dndId === moved._dndId ? { ...r, ...derived } : r)), true);
+                    }
+
                     applyAffectedTimings(update, entry.affected_timings, date);
 
                     if (toMachine === null && moved.location && moved.location !== selectedLocation) {
