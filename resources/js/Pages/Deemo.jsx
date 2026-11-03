@@ -2,20 +2,23 @@ import DateNav from "@/Components/DateNav";
 import AddEntryModal from "@/Components/LoadingPlan/AddEntriesModal";
 import AutoSortModal from "@/Components/LoadingPlan/AutoSortModal";
 import { BakeSelectionToolbar } from "@/Components/LoadingPlan/BakeSelectionToolbar";
+import { normalizeLotId } from "@/Components/LoadingPlan/BakingBadge";
 import CapacityOverviewModal from "@/Components/LoadingPlan/CapacityOverviewModal";
-import ColumnVisibilityModal from "@/Components/LoadingPlan/ColumnVisibilityModal";
 import { TableActionsContext, makeBakeColumns, makeColumns, toReadOnlyColumns } from "@/Components/LoadingPlan/columns";
+import ColumnVisibilityModal from "@/Components/LoadingPlan/ColumnVisibilityModal";
 import DataIntegrityModal from "@/Components/LoadingPlan/DataIntegrityModal";
 import DisseminationSummaryModal from "@/Components/LoadingPlan/DisseminationSummary";
 import DoableEditModal from "@/Components/LoadingPlan/DoableEditModal";
 import { DroppableRow } from "@/Components/LoadingPlan/DroppableRow";
 import EntryHistoryModal from "@/Components/LoadingPlan/EntryHistoryModal";
+import JumpToMachineModal from "@/Components/LoadingPlan/JumpToMachineModal";
 import { TableInteractionContext } from "@/Components/LoadingPlan/MachineHeaderBar";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import MissingPartsModal from "@/Components/LoadingPlan/MissingPartsModal";
 import NonMachinesModal from "@/Components/LoadingPlan/NonMachinesModal";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import { PlanActionsBar, PlanStatusAlert, PlanTabsBar } from "@/Components/LoadingPlan/PlanToolbar";
+import PullPickupsModal, { PULL_PICKUPS_MODAL_ID } from "@/Components/LoadingPlan/PullPickupsModal";
 import { AddBlockModal, AddBucketModal, AddLotModal } from "@/Components/LoadingPlan/QuickAddModals";
 import RowHoverTools from "@/Components/LoadingPlan/RowHoverTools";
 import { SavingCursorBadge } from "@/Components/LoadingPlan/SavingCursorBadge";
@@ -26,16 +29,13 @@ import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import StatusMenu from "@/Components/LoadingPlan/StatusMenu";
 import { StickyMachineHeader, StickyOvenHeader } from "@/Components/LoadingPlan/StickyHeaderOverlay";
 import { HEADER_ROW_HEIGHT, ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
-import JumpToMachineModal from "@/Components/LoadingPlan/JumpToMachineModal";
-import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
-import { normalizeLotId } from "@/Components/LoadingPlan/BakingBadge";
 import {
     ALL_PACKAGES_TAB,
     F3_FLAG,
     FOR_BAKE_TAB,
     ORPHAN_TAB,
-    UNASSIGNED_TAB,
     PICKUP_POOL_TABS,
+    UNASSIGNED_TAB,
     buildTabItems,
 } from "@/Constants/LoadingPlan/tabs";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
@@ -47,7 +47,9 @@ import { useDoableOperations } from "@/Hooks/LoadingPlan/useDoableOperations";
 import { useDragReorder } from "@/Hooks/LoadingPlan/useDragReorder";
 import { useEntryOperations } from "@/Hooks/LoadingPlan/useEntryOperations";
 import { useLoadingPlanShortcuts } from "@/Hooks/LoadingPlan/useLoadingPlanShortcuts";
+import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
 import { useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
+import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
 import { useRowHoverInsert } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useHiddenRowCounts, useRowIndex } from "@/Hooks/LoadingPlan/useRowIndex";
 import { useSplitMergeOperations } from "@/Hooks/LoadingPlan/useSplitMergeOperations";
@@ -61,6 +63,7 @@ import { buildBakeDisplayRows, buildDisplayRows } from "@/Lib/LoadingPlan/buildD
 import { DATA_COLUMNS } from "@/Lib/LoadingPlan/columnConfig";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
+import { showModal } from "@/Lib/LoadingPlan/modal";
 import { compareUnassigned, createRowMatchers, getMachineLabel } from "@/Lib/LoadingPlan/rowPredicates";
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
@@ -71,9 +74,6 @@ import dayjs from "dayjs";
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DataGrid } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
-import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
-import PullPickupsModal, { PULL_PICKUPS_MODAL_ID } from "@/Components/LoadingPlan/PullPickupsModal";
-import { showModal } from "@/Lib/LoadingPlan/modal";
 /**
  * Loading-plan grid (react-data-grid). One component for both the editable
  * page and the view-only page: `readOnly` disables every write path (edits,
@@ -99,6 +99,7 @@ import { showModal } from "@/Lib/LoadingPlan/modal";
 const useLoadingPlanStore = createUndoStore([], { limit: 20 });
 
 const EMPTY_ROWS = [];
+const EMPTY_COUNTS = {};
 const noop = () => {}; // bake toolbar actions are not implemented yet
 const getRowKey = (row) => row.id;
 const isRowLocked = (row) => row.isLocked;
@@ -135,6 +136,7 @@ export default function Deemo({
     bakingLots: serverBakingLots,
     schedulerHistory,
     readOnly = false,
+    lockedMachine = null,
 }) {
     const toast = useToast();
     const isF3 = selectedLocation === F3_FLAG;
@@ -168,7 +170,7 @@ export default function Deemo({
 
     // ── view state ───────────────────────────────────────────────────────
     const [activeTab, setActiveTab] = useState(() =>
-        (packageGroupNames ?? []).includes("LGA") ? "LGA" : ALL_PACKAGES_TAB,
+        !lockedMachine && (packageGroupNames ?? []).includes("LGA") ? "LGA" : ALL_PACKAGES_TAB,
     );
     const activePackage = useDeferredValue(activeTab);
     const isTabSwitching = activeTab !== activePackage;
@@ -234,19 +236,22 @@ export default function Deemo({
         (params, options = {}) => {
             if (isSaving()) return;
             const release = holdLock();
-            router.get(route(readOnly ? "loading-plan.readonly" : "loading-plan.index"), params, {
-                ...options,
-                onSuccess: clearStale,
-                onFinish: release,
-            });
+            router.get(
+                lockedMachine
+                    ? route("loading-plan.machine-view", { machine: lockedMachine })
+                    : route(readOnly ? "loading-plan.readonly" : "loading-plan.index"),
+                params,
+                { ...options, onSuccess: clearStale, onFinish: release },
+            );
         },
-        [isSaving, holdLock, readOnly, clearStale],
+        [isSaving, holdLock, readOnly, lockedMachine, clearStale],
     );
 
     const handleDateChange = (newDate) => {
         if (isSaving()) return;
         setSelectedDate(newDate);
-        visitPlan({ date: dayjs(newDate).format("YYYY-MM-DD"), location: selectedLocation });
+        const dateStr = dayjs(newDate).format("YYYY-MM-DD");
+        visitPlan(lockedMachine ? { date: dateStr } : { date: dateStr, location: selectedLocation });
     };
 
     const handleLocationChange = (line) => {
@@ -435,8 +440,11 @@ export default function Deemo({
     });
 
     const tabItems = useMemo(
-        () => buildTabItems({ readOnly, isF3, hasOrphans: orphanMachines.length > 0, packageGroupNames }),
-        [readOnly, isF3, orphanMachines.length, packageGroupNames],
+        () =>
+            lockedMachine
+                ? [ALL_PACKAGES_TAB]
+                : buildTabItems({ readOnly, isF3, hasOrphans: orphanMachines.length > 0, packageGroupNames }),
+        [lockedMachine, readOnly, isF3, orphanMachines.length, packageGroupNames],
     );
 
     useEffect(() => {
@@ -449,13 +457,13 @@ export default function Deemo({
                 activePackage, readOnly, machines, nonMachineKeys, nonMachineNameByKey,
                 rowsByMachine, rowsByBucket, bucketsByMachine, collapsedMachines, expandedMachines, expandedLocations,
                 orphanMachines, machinesByName, machinePlatform, otherPackageCounts, showAllMachines,
-                isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn,
+                isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn, lockedMachine
             }),
         [
             activePackage, readOnly, machines, nonMachineKeys, nonMachineNameByKey,
             rowsByMachine, rowsByBucket, bucketsByMachine, collapsedMachines, expandedMachines, expandedLocations,
             orphanMachines, machinesByName, machinePlatform, otherPackageCounts, showAllMachines,
-            isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn,
+            isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn, lockedMachine
         ],
     );
 
@@ -634,9 +642,9 @@ export default function Deemo({
             machineCapacity,
             machineTotalDoable,
             machineTotalQuantity,
-            otherPackageCounts,
+            otherPackageCounts: lockedMachine ? EMPTY_COUNTS : otherPackageCounts,
             machineSectionDoable,
-            otherLocationCounts,
+            otherLocationCounts: lockedMachine ? EMPTY_COUNTS : otherLocationCounts,
             expandedMachines,
             expandedLocations,
             isUpdating: writesLocked,
@@ -656,7 +664,7 @@ export default function Deemo({
             readOnly, isF3, serverMachines, machineCapacity, machineTotalDoable, machineTotalQuantity,
             otherPackageCounts, machineSectionDoable, otherLocationCounts, expandedMachines, expandedLocations,
             writesLocked, toggleExpandedMachine, toggleExpandedLocation, handleAddLot, handleAddRow, handleAddBlock,
-            handleAddBucket, handleAutoSort, renameBucket, deleteBucket, renameNonMachine, deleteNonMachine,
+            handleAddBucket, handleAutoSort, renameBucket, deleteBucket, renameNonMachine, deleteNonMachine, lockedMachine
         ],
 
     );
@@ -731,6 +739,7 @@ export default function Deemo({
                 columns: DATA_COLUMNS,
                 isBlockRow,
                 sortUnassigned: compareUnassigned,
+                capacityOverview: { serverMachines, nonMachines: serverNonMachines, machineCapacity },
                 getMachineLabel: labelOfMachine,
             });
             downloadExcelBuffer(buffer, `loading_plan_${date}.xlsx`);
@@ -743,12 +752,14 @@ export default function Deemo({
     }
 
     // ── derived toolbar props ────────────────────────────────────────────
-    const showDataIntegrity = !!status && status !== "not_imported";
+    
+    const showDataIntegrity = !lockedMachine && !!status && status !== "not_imported";
+    
     const dataIntegrityCount =
-        partnameMismatches !== undefined && unknownPackages !== undefined && recipeMismatches !== undefined
-            ? partnameMismatches.length + unknownPackages.length + recipeMismatches.length
-            : undefined;
-    const showIdleToggle = idleMachines.length > 0 && activePackage !== UNASSIGNED_TAB && activePackage !== ORPHAN_TAB;
+    partnameMismatches !== undefined && unknownPackages !== undefined && recipeMismatches !== undefined
+    ? partnameMismatches.length + unknownPackages.length + recipeMismatches.length
+    : undefined;
+    const showIdleToggle = !lockedMachine && idleMachines.length > 0 && activePackage !== UNASSIGNED_TAB && activePackage !== ORPHAN_TAB;
 
     // ─────────────────────────────────────────────────────────────────────
     return (
@@ -771,6 +782,7 @@ export default function Deemo({
                         <div className="flex gap-2 items-center">
                             <DateNav selected={selectedDate} onChange={handleDateChange} isNoFuture />
                             {readOnly && <span className="badge badge-ghost badge-sm">Read-only</span>}
+                            {lockedMachine && <span className="badge badge-primary badge-sm">{lockedMachine}</span>}
                             <PlanStatusAlert status={status} date={date} readOnly={readOnly} onGoToImport={handleGoToImport} />
                         </div>
 
@@ -785,7 +797,7 @@ export default function Deemo({
                             onUndo={handleUndo}
                             onRedo={handleRedo}
                             isExporting={isExporting}
-                            onExport={handleExport}
+                            onExport={machineCapacity === undefined ? undefined : handleExport}
                             hasHiddenColumns={hasHiddenColumns}
                             allMachinesCollapsed={allMachinesCollapsed}
                             canToggleMachines={collapsibleMachineKeys.length > 0}
@@ -795,11 +807,12 @@ export default function Deemo({
                             dataIntegrityCount={dataIntegrityCount}
                             missingPartCount={missingPartCount}
                             onOpenMissingParts={doable.openMissingParts}
+                            machineScoped={!!lockedMachine}
                         />
                     </div>
 
                     <PlanTabsBar
-                        tabs={tabItems}
+                        tabs={lockedMachine ? undefined : tabItems}
                         activeTab={activeTab}
                         onOpenPickupPool={
                             pickupPool.enabled && PICKUP_POOL_TABS.includes(activeTab) ? handleOpenPickupPool : undefined
@@ -807,7 +820,7 @@ export default function Deemo({
                         onTabChange={goToTab}
                         location={selectedLocation}
                         locationDisabled={writesLocked}
-                        onLocationChange={handleLocationChange}
+                        onLocationChange={lockedMachine ? undefined : handleLocationChange}
                         onOpenSearch={search.openSearch}
                         idleCount={showIdleToggle ? idleMachines.length : 0}
                         showAllIdle={showAllMachines}
@@ -1006,11 +1019,13 @@ export default function Deemo({
                         />
                     )}
 
-                    <DataIntegrityModal
-                        partnameMismatches={partnameMismatches}
-                        unknownPackages={unknownPackages}
-                        recipeMismatches={recipeMismatches}
-                    />
+                    {!lockedMachine && (
+                        <DataIntegrityModal
+                            partnameMismatches={partnameMismatches}
+                            unknownPackages={unknownPackages}
+                            recipeMismatches={recipeMismatches}
+                        />
+                    )}
                     <DisseminationSummaryModal summary={disseminationSummary} />
                 </TableInteractionContext.Provider>
             </TableActionsContext.Provider>
@@ -1072,14 +1087,18 @@ export default function Deemo({
                 onToggle={toggleColumnVisibility}
                 onShowAll={showAllColumns}
             />
-            <JumpToMachineModal entries={jumpEntries} currentLocation={selectedLocation} onJump={jumpToMachine} />
-            <CapacityOverviewModal
-                serverMachines={serverMachines}
-                nonMachines={nonMachineList}
-                machineCapacity={machineCapacity}
-                dataRows={dataRows}
-                onJumpToMachine={jumpToMachine}
-            />
+            {!lockedMachine && (
+                <>
+                        <JumpToMachineModal entries={jumpEntries} currentLocation={selectedLocation} onJump={jumpToMachine} />
+                        <CapacityOverviewModal
+                            serverMachines={serverMachines}
+                            nonMachines={nonMachineList}
+                            machineCapacity={machineCapacity}
+                            dataRows={dataRows}
+                            onJumpToMachine={jumpToMachine}
+                        />
+                </>
+            )}
         </div>
     );
 }

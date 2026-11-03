@@ -1,13 +1,11 @@
 import { STATUS_GROUPS } from "@/Components/LoadingPlan/StatusMenu.jsx";
 import { MACHINE_MANUAL } from "@/Constants/machines.js";
-import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
-import clsx from "clsx";
-import { Fragment, useMemo, memo, useRef, useDeferredValue, useState } from "react";
 import { useDialogOpen } from "@/Hooks/LoadingPlan/useDialogOpen";
+import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { closeModal } from "@/Lib/LoadingPlan/modal";
+import clsx from "clsx";
+import { Fragment, memo, useDeferredValue, useMemo, useRef, useState } from "react";
 export const CAPACITY_OVERVIEW_MODAL_ID = "capacity_overview_modal";
-
-// @/Constants/LoadingPlan/packageSummaryGroups.js
 
 /**
  * Groups used by the "By package" tab of the Capacity Overview.
@@ -18,7 +16,7 @@ export const CAPACITY_OVERVIEW_MODAL_ID = "capacity_overview_modal";
 export const PACKAGE_SUMMARY_GROUPS = [
     // { label: "TSOT", members: ["TSOT"] },
     // { label: "SOT", members: ["SOT", "SC70"] },
-    // { label: "DFN", members: ["DFN", "QDN"] },
+    { label: "DFN", members: ["DFN", "QDN"] },
     // { label: "LGA / LQFP", members: ["LGA", "LQFP"] },
     // { label: "LFCSP TRAY", members: ["LFCSP TRAY"] },
     // { label: "LFCSP MPD", members: ["LFCSP MPD"] },
@@ -118,6 +116,84 @@ function StatusCells({ counts, statusCols }) {
             </td>
         );
     });
+}
+
+// ── pure builders (shared with the Excel exporter) ───────────────────────
+export function aggregateByMachine({ dataRows, serverMachines, nonMachines }) {
+    const known = new Set([...serverMachines.map((m) => m.name), MACHINE_MANUAL, ...nonMachines.map((n) => n.key)]);
+    const byMachine = new Map();
+    const extra = new Set();
+
+    for (const row of dataRows) {
+        if (row.machine == null || !known.has(row.machine)) continue; // unassigned / grouped / orphan
+        if (isBlockRow(row) || row.is_block) continue;
+
+        const status = statusOf(row);
+        if (!KNOWN_SET.has(status)) extra.add(status);
+
+        let entry = byMachine.get(row.machine);
+        if (!entry) byMachine.set(row.machine, (entry = { total: emptyAgg(), groups: new Map() }));
+        addRow(entry.total, row, status);
+
+        const g = resolveSummaryGroup(row.package_group, row.package_name);
+        let ga = entry.groups.get(g);
+        if (!ga) entry.groups.set(g, (ga = emptyAgg()));
+        addRow(ga, row, status);
+    }
+    return { byMachine, extraStatuses: [...extra].sort() };
+}
+
+export function buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity }) {
+    const entities = [
+        ...serverMachines.map((m) => ({ key: m.name, label: m.name, kind: "machine", platform: m.platform })),
+        { key: MACHINE_MANUAL, label: MACHINE_MANUAL, kind: "manual" },
+        ...nonMachines.map((n) => ({ key: n.key, label: n.name, kind: "non-machine" })),
+    ];
+
+    const rows = entities
+        .filter((e) => e.kind !== "manual" || byMachine.has(e.key))
+        .map((e) => {
+            const cap = e.kind === "machine" ? Number(machineCapacity?.[e.key]?.capacity) : 0;
+            return { ...e, capacity: cap > 0 ? cap : null, agg: byMachine.get(e.key)?.total ?? emptyAgg() };
+        });
+
+    const grouped = new Map();
+    const push = (label, row) => {
+        if (!grouped.has(label)) grouped.set(label, []);
+        grouped.get(label).push(row);
+    };
+    for (const r of rows) {
+        const entry = byMachine.get(r.key);
+        if (entry) {
+            for (const [label, agg] of entry.groups) push(label, { ...r, agg });
+        } else if (r.kind !== "manual") {
+            push(findSummaryGroup(r.platform) ?? IDLE_GROUP_LABEL, r); // idle: use platform if it maps
+        }
+    }
+
+    const rank = (l) => {
+        if (l === IDLE_GROUP_LABEL) return IDLE_RANK;
+        const i = SUMMARY_GROUP_ORDER.indexOf(l);
+        return i === -1 ? UNMAPPED_RANK : i;
+    };
+
+    return {
+        simpleSections: [{ label: null, rows, total: null }],
+        groupedSections: [...grouped.entries()]
+            .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b))
+            .map(([label, gRows]) => ({ label, rows: gRows, total: sumRows(gRows) })),
+        grand: sumRows(rows), // machine-level, so a machine in several groups counts once
+    };
+}
+
+export function buildStatusCols({ extraStatuses, grand, hideEmpty = true }) {
+    const groups = STATUS_GROUPS.map((g) => g.statuses);
+    if (extraStatuses.length) groups.push(extraStatuses);
+    return groups.flatMap((list) =>
+        list
+            .filter((s) => !hideEmpty || (grand.counts[s] ?? 0) > 0)
+            .map((status, i) => ({ status, borderLeft: i === 0 })),
+    );
 }
 
 const SummaryRow = memo(function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, onJump, jumpKey, variant = "row" }) {
@@ -254,85 +330,20 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, 
 
     const deferredRows = useDeferredValue(dataRows);
 
-    // 1) one pass over the rows
-    const { byMachine, extraStatuses } = useMemo(() => {
-        const known = new Set([...serverMachines.map((m) => m.name), MACHINE_MANUAL, ...nonMachines.map((n) => n.key)]);
-        const byMachine = new Map();
-        const extra = new Set();
+    const { byMachine, extraStatuses } = useMemo(
+        () => aggregateByMachine({ dataRows: deferredRows, serverMachines, nonMachines }),
+        [deferredRows, serverMachines, nonMachines],
+    );
 
-        for (const row of deferredRows ) {
-            if (row.machine == null || !known.has(row.machine)) continue; // unassigned / grouped / orphan
-            if (isBlockRow(row) || row.is_block) continue;
+    const { simpleSections, groupedSections, grand } = useMemo(
+        () => buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity }),
+        [byMachine, serverMachines, nonMachines, machineCapacity],
+    );
 
-            const status = statusOf(row);
-            if (!KNOWN_SET.has(status)) extra.add(status);
-
-            let entry = byMachine.get(row.machine);
-            if (!entry) byMachine.set(row.machine, (entry = { total: emptyAgg(), groups: new Map() }));
-            addRow(entry.total, row, status);
-
-            const g = resolveSummaryGroup(row.package_group, row.package_name);
-            let ga = entry.groups.get(g);
-            if (!ga) entry.groups.set(g, (ga = emptyAgg()));
-            addRow(ga, row, status);
-        }
-        return { byMachine, extraStatuses: [...extra].sort() };
-    }, [deferredRows , serverMachines, nonMachines]);
-
-    // 2) rows / sections (re-runs when the deferred capacity arrives)
-    const { simpleSections, groupedSections, grand } = useMemo(() => {
-        const entities = [
-            ...serverMachines.map((m) => ({ key: m.name, label: m.name, kind: "machine", platform: m.platform })),
-            { key: MACHINE_MANUAL, label: MACHINE_MANUAL, kind: "manual" },
-            ...nonMachines.map((n) => ({ key: n.key, label: n.name, kind: "non-machine" })),
-        ];
-
-        const rows = entities
-            .filter((e) => e.kind !== "manual" || byMachine.has(e.key))
-            .map((e) => {
-                const cap = e.kind === "machine" ? Number(machineCapacity?.[e.key]?.capacity) : 0;
-                return { ...e, capacity: cap > 0 ? cap : null, agg: byMachine.get(e.key)?.total ?? emptyAgg() };
-            });
-
-        const grouped = new Map();
-        const push = (label, row) => {
-            if (!grouped.has(label)) grouped.set(label, []);
-            grouped.get(label).push(row);
-        };
-        for (const r of rows) {
-            const entry = byMachine.get(r.key);
-            if (entry) {
-                for (const [label, agg] of entry.groups) push(label, { ...r, agg });
-            } else if (r.kind !== "manual") {
-                push(findSummaryGroup(r.platform) ?? IDLE_GROUP_LABEL, r); // idle: use platform if it maps
-            }
-        }
-
-        const rank = (l) => {
-            if (l === IDLE_GROUP_LABEL) return IDLE_RANK;
-            const i = SUMMARY_GROUP_ORDER.indexOf(l);
-            return i === -1 ? UNMAPPED_RANK : i;
-        };
-
-        return {
-            simpleSections: [{ label: null, rows, total: null }],
-            groupedSections: [...grouped.entries()]
-                .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b))
-                .map(([label, gRows]) => ({ label, rows: gRows, total: sumRows(gRows) })),
-            grand: sumRows(rows), // machine-level, so a machine in several groups counts once
-        };
-    }, [byMachine, serverMachines, nonMachines, machineCapacity]);
-
-    // 3) status columns
-    const statusCols = useMemo(() => {
-        const groups = STATUS_GROUPS.map((g) => g.statuses);
-        if (extraStatuses.length) groups.push(extraStatuses);
-        return groups.flatMap((list) =>
-            list
-                .filter((s) => !hideEmptyStatuses || (grand.counts[s] ?? 0) > 0)
-                .map((status, i) => ({ status, borderLeft: i === 0 })),
-        );
-    }, [extraStatuses, hideEmptyStatuses, grand.counts]);
+    const statusCols = useMemo(
+        () => buildStatusCols({ extraStatuses, grand, hideEmpty: hideEmptyStatuses }),
+        [extraStatuses, hideEmptyStatuses, grand],
+    );
 
     const statusSummary = statusCols.filter(({ status }) => (grand.counts[status] ?? 0) > 0);
 

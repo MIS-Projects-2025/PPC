@@ -20,6 +20,16 @@ function groupRank(label, currentLocation) {
     return label === currentLocation ? 0 : 1;
 }
 
+const collator = new Intl.Collator(undefined, { numeric: true });
+
+// Platform first (blanks last), then label as a tiebreaker for a stable order
+const byPlatform = (a, b) => {
+    const pa = a.platform ?? "";
+    const pb = b.platform ?? "";
+    if (!pa !== !pb) return pa ? -1 : 1;
+    return collator.compare(pa, pb) || collator.compare(a.label ?? "", b.label ?? "");
+};
+
 /**
  * Empty query: only entries that have rows.
  * Query: every entry that matches (name, platform or line), including "no rows yet" ones.
@@ -50,9 +60,11 @@ function buildList(entries, query, currentLocation) {
                 groupRank(a, currentLocation) - groupRank(b, currentLocation) ||
                 a.localeCompare(b, undefined, { numeric: true }),
         )
-        .map(([label, items]) => ({ label, items }));
+        .map(([label, items]) => ({ label, items: [...items].sort(byPlatform) }));
 
     const rawColumns = [];
+
+    console.log("LOG ~ JumpToMachineModal.jsx:57 ~ buildList ~ rawColumns:", rawColumns);
     const shared = { key: "__shared", sections: [] };
     sortedGroups.forEach((g) => {
         if (MAIN_LINES.has(g.label)) rawColumns.push({ key: g.label, sections: [g] });

@@ -2,7 +2,7 @@ import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import clsx from "clsx";
-import { memo, useCallback, useContext, useDeferredValue, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TableInteractionContext } from "./MachineHeaderBar";
 // these five need an `export` added in MachineSelectionGrid.jsx
 import { TIER_LABELS, TIER_STYLES, groupByPlatform, groupByTier, platformStyle } from "./MachineSelectionGrid";
@@ -14,7 +14,7 @@ const fmtTime = (t, offset = 0) => {
     return `${t} ${offset > 0 ? "+" : "−"}${Math.abs(offset)}d`;
 };
 const num = (n) => (Number(n) || 0).toLocaleString();
-
+const rowDoable = (r) => Number(r.doable) || 0;
 const STRIPES = "repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 3px, transparent 3px 6px)";
 // off-screen preview rows skip layout/paint, which keeps long lanes cheap to swap
 const LAZY_ROW = { contentVisibility: "auto", containIntrinsicSize: "auto 24px" };
@@ -271,14 +271,22 @@ export default function TransferMachinePicker({
     const shown = previewMachine !== undefined ? previewMachine : selectedMachine;
     const deferredShown = useDeferredValue(shown); // list highlight stays instant, the lane renders just behind it
 
+    const hoverTimer = useRef(null);
+    useEffect(() => () => clearTimeout(hoverTimer.current), []);
+
     const handlePick = useCallback(
         (m) => {
+            clearTimeout(hoverTimer.current);
             setPreviewMachine(m);
             onSelect(m);
         },
         [onSelect],
     );
-    const handlePreview = useCallback((m) => setPreviewMachine(m), []);
+
+    const handlePreview = useCallback((m) => {
+        clearTimeout(hoverTimer.current);
+        hoverTimer.current = setTimeout(() => setPreviewMachine(m), 150);
+    }, []);
 
     const cands = loading ? null : candidates;
     const inTransferMode = cands !== null && cands !== undefined;
@@ -290,6 +298,25 @@ export default function TransferMachinePicker({
     const realMachines = useMemo(() => machines.filter((m) => m !== null && m !== MACHINE_MANUAL), [machines]);
     const hasManual = machines.includes(MACHINE_MANUAL);
 
+    const fadeRef = useRef(null);
+    useLayoutEffect(() => {
+        const el = fadeRef.current;
+        if (!el) return;
+        el.getAnimations?.().forEach((a) => a.cancel());
+        el.animate(
+            [
+                { opacity: 0, transform: "translateY(-8px)" },
+                { opacity: 1, transform: "translateY(0)" },
+            ],
+            { duration: 180, easing: "ease-out" },
+        );
+    }, [deferredShown]);
+
+    const incomingDoable = useMemo(
+        () => incomingRows.reduce((s, r) => (isBlockRow(r) ? s : s + rowDoable(r)), 0),
+        [incomingRows],
+    );
+
     // one summary per machine; identity only changes when its inputs do, so memoised rows skip re-rendering on hover
     const itemMap = useMemo(() => {
         const make = (m, label) => {
@@ -299,12 +326,17 @@ export default function TransferMachinePicker({
             const lane = lanes.get(m);
             const total = (cand?.compatible_lot_ids?.length ?? 0) + (cand?.incompatible_lot_ids?.length ?? 0);
 
+            const projected = Number(cand?.projected_doable);
+            let add = cand && Number.isFinite(projected) ? Math.max(0, projected - cur) : 0;
+            // incompatible: backend adds nothing, but the user can still assign it
+            if (cand?.tier === 5 && add === 0) add = incomingDoable;
+
             return {
                 machine: m,
                 label,
+                add,
                 cap: capRaw > 0 ? capRaw : null,
                 cur,
-                add: cand ? Math.max(0, (Number(cand.projected_doable) || 0) - cur) : 0,
                 lots: lane?.lots ?? 0,
                 addLots: incomingLots,
                 end: lane?.end ?? null,
@@ -321,7 +353,7 @@ export default function TransferMachinePicker({
         nonMachines.forEach((n) => map.set(n.key, make(n.key, n.name)));
         if (hasManual) map.set(MACHINE_MANUAL, make(MACHINE_MANUAL, "MANUAL"));
         return map;
-    }, [cands, machineCapacity, machineTotalDoable, lanes, incomingLots, realMachines, nonMachines, hasManual]);
+    }, [cands, machineCapacity, incomingDoable, machineTotalDoable, lanes, incomingLots, realMachines, nonMachines, hasManual]);
 
     const groups = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -358,9 +390,15 @@ export default function TransferMachinePicker({
     );
 
     return (
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(26rem,32rem)_minmax(0,1fr)] gap-3">
+        <div
+            className="grid min-h-0 flex-1 grid-cols-[minmax(26rem,32rem)_minmax(0,1fr)] gap-3"
+            onPointerLeave={() => {
+                clearTimeout(hoverTimer.current);
+                setPreviewMachine(undefined);
+            }}
+        >
             {/* machines */}
-            <div className="flex min-h-0 flex-col">
+            <div className="flex min-h-0 flex-col" onPointerLeave={() => clearTimeout(hoverTimer.current)}>
                 <div className="relative mb-2">
                     <input
                         ref={inputRef}
@@ -373,15 +411,6 @@ export default function TransferMachinePicker({
                     />
                     {loading && <span className="loading loading-spinner loading-xs absolute right-2 top-1/2 -translate-y-1/2 text-base-content/40" />}
                 </div>
-
-                {selectedTier === 5 && (
-                    <div role="alert" className="alert alert-warning alert-soft mb-2 px-3 py-2 text-xs">
-                        <span>
-                            <span className="font-bold">{selectedMachine}</span> is incompatible with the lots being transferred. You can still
-                            assign it. Or if you think the rule is wrong, you can edit it here.
-                        </span>
-                    </div>
-                )}
 
                 <div
                     aria-busy={loading}
@@ -445,18 +474,29 @@ export default function TransferMachinePicker({
                         </p>
                     )}
                 </div>
+
+                {selectedTier === 5 && (
+                    <div role="alert" className="alert alert-warning alert-soft mt-2 shrink-0 px-3 py-2 text-xs">
+                        <span>
+                            <span className="font-bold">{selectedMachine}</span> is incompatible with the lots being transferred. You can still
+                            assign it. Or if you think the rule is wrong, you can edit it here.
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* lane preview */}
             <div className="min-h-0 overflow-hidden rounded-lg border border-base-content/10 bg-base-200">
-                <LanePreview
-                    machine={deferredShown}
-                    item={itemMap.get(deferredShown)}
-                    lane={lanes.get(deferredShown)}
-                    incoming={incomingRows}
-                    incomingLots={incomingLots}
-                    isSelected={deferredShown === selectedMachine && selectedMachine !== undefined}
-                />
+                <div ref={fadeRef} className="h-full">
+                    <LanePreview
+                        machine={deferredShown}
+                        item={itemMap.get(deferredShown)}
+                        lane={lanes.get(deferredShown)}
+                        incoming={incomingRows}
+                        incomingLots={incomingLots}
+                        isSelected={deferredShown === selectedMachine && selectedMachine !== undefined}
+                    />
+                </div>
             </div>
         </div>
     );

@@ -47,6 +47,50 @@ class LoadingPlanController extends Controller
         return redirect()->route('loading-plan.index'); // renders with no props today and crashes
     }
 
+    public function machineView(Request $request, ?string $machine = null)
+    {
+        $active = $this->resolveActiveMachine($machine);
+
+        if (!$active) {
+            return Inertia::render('MachinePicker', [
+                'machines'  => $this->getActiveMachines()
+                    ->map(fn($m) => ['name' => $m['name'], 'platform' => $m['platform'], 'location' => $m['location']])
+                    ->values(),
+                'requested' => $machine,
+                'date'      => $request->input('date'),
+            ]);
+        }
+
+        [$props] = $this->buildLoadingPlanProps($request, machine: $active);
+        $props['readOnly'] = true;
+        $props['lockedMachine'] = $active['name']; // canonical casing, not what was typed
+
+        return Inertia::render('Deemo', $props);
+    }
+
+    private function resolveActiveMachine(?string $name): ?array
+    {
+        $norm = fn($s) => mb_strtolower(preg_replace('/\s+/', ' ', trim((string) $s)));
+        $needle = $norm($name);
+        if ($needle === '') return null;
+
+        return $this->getActiveMachines()->first(fn($m) => $norm($m['name']) === $needle);
+    }
+
+    /** Lots on the machine (this + previous day) plus lots parked in its groups. */
+    private function machineLotIds(int $machineId, string $date, string $previousDate)
+    {
+        $bucketIds = LoadingPlanBucket::where('machine_id', $machineId)->pluck('id');
+
+        return LoadingPlanEntry::where('machine_id', $machineId)
+            ->whereIn('scheduled_date', [$date, $previousDate])
+            ->where('entry_type', 'lot')
+            ->pluck('lot_id')
+            ->merge(LotBucketItem::where('scheduled_date', $date)->whereIn('bucket_id', $bucketIds)->pluck('lot_id'))
+            ->filter()
+            ->unique();
+    }
+
     /**
      * Editable page. Same shared data prep as readOnly(), plus the two
      * things only the editable UI needs: `baseTimes` (client-side
@@ -153,14 +197,15 @@ class LoadingPlanController extends Controller
      * function props from a hypothetical parent, not real Inertia props —
      * they never came from the server): onLotTransfer, onReorder.
      */
-    private function buildLoadingPlanProps(Request $request, bool $withBaseTimes = false): array
+    private function buildLoadingPlanProps(Request $request, bool $withBaseTimes = false, ?array $machine = null): array
     {
         $validated = $request->validate([
             'date'     => ['nullable', 'date_format:Y-m-d'],
             'location' => ['nullable', 'string', 'max:10'],
         ]);
 
-        $selectedLocation = $validated['location'] ?? 'PL1';
+        // machine view: the machine decides the location, the param is ignored
+        $selectedLocation = $machine['location'] ?? $validated['location'] ?? 'PL1';
         $date = $validated['date'] ?? ShiftDay::current($selectedLocation);
         $isF3 = $selectedLocation === 'F3';
 
@@ -196,33 +241,17 @@ class LoadingPlanController extends Controller
             //     }
             // }),
             'bakingLots' => Inertia::defer(
-                fn() => app(\App\Services\BakeLotService::class)
-                    ->lotOvensForPlan($wipRows->pluck('Lot_Id')->filter()->unique())
+                fn() => app(BakeLotService::class)->lotOvensForPlan(
+                    $machine
+                        ? $this->machineLotIds($machine['id'], $date, $previousDate)
+                        : $wipRows->pluck('Lot_Id')->filter()->unique()
+                )
             ),
-            'partnameMismatches' => Inertia::defer(
-                fn() =>
-                $partnameIntegrity->findMismatches($wipRows, $getPackageList())
-            ),
-            'unknownPackages' => Inertia::defer(
-                fn() => (new LoadingPlanPackageCoverage())->findUnknownPackages($date)
-            ),
-            'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $date, $previousDate) {
-                $entryLotIds = LoadingPlanEntry::whereIn('scheduled_date', [$date, $previousDate])
-                    ->where('entry_type', 'lot')
-                    ->pluck('lot_id');
-                $relevantLotIds = $wipRows->pluck('Lot_Id')->merge($entryLotIds)->filter()->unique();
-                $lotQuantities = LotQuantity::whereIn('scheduled_date', [$date, $previousDate])
-                    ->where('rework_seq', 0)
-                    ->whereIn('lot_id', $relevantLotIds)
-                    ->get()
-                    ->keyBy('lot_id');
-
-                return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $lotQuantities);
-            }),
             'machineCapacity' => Inertia::defer(
                 fn() =>
                 MachineCapacity::with('machine')
                     ->asOf($date)
+                    ->when($machine, fn($q) => $q->whereHas('machine', fn($mq) => $mq->whereKey($machine['id'])))
                     ->get()
                     ->keyBy(fn($item) => $item->machine?->machine_num)
                     ->map(fn($item) => [
@@ -232,19 +261,63 @@ class LoadingPlanController extends Controller
             ),
         ];
 
+        // the integrity checks are location-wide, so the machine view doesn't get them
+        if (!$machine) {
+            $deferred += [
+                'partnameMismatches' => Inertia::defer(
+                    fn() =>
+                    $partnameIntegrity->findMismatches($wipRows, $getPackageList())
+                ),
+                'unknownPackages' => Inertia::defer(
+                    fn() => (new LoadingPlanPackageCoverage())->findUnknownPackages($date)
+                ),
+                'recipeMismatches' => Inertia::defer(function () use ($partnameIntegrity, $wipRows, $getPackageList, $date, $previousDate) {
+                    $entryLotIds = LoadingPlanEntry::whereIn('scheduled_date', [$date, $previousDate])
+                        ->where('entry_type', 'lot')
+                        ->pluck('lot_id');
+                    $relevantLotIds = $wipRows->pluck('Lot_Id')->merge($entryLotIds)->filter()->unique();
+                    $lotQuantities = LotQuantity::whereIn('scheduled_date', [$date, $previousDate])
+                        ->where('rework_seq', 0)
+                        ->whereIn('lot_id', $relevantLotIds)
+                        ->get()
+                        ->keyBy('lot_id');
+
+                    return $partnameIntegrity->findRecipeIssues($wipRows, $getPackageList(), $lotQuantities);
+                }),
+            ];
+        }
+
         // Deferred follow-up: nothing below is requested, so skip it all.
         if ($isPartial) {
             return [$deferred, $mark];
         }
 
         $activeMachines = $this->getActiveMachines();
+        if ($machine) {
+            $activeMachines = $activeMachines->where('name', $machine['name'])->values();
+        }
         $mark('activeMachines');
 
         $svc->initPlanned();
         $mark('initPlanned');
 
+        $buckets = LoadingPlanBucket::where('location', $selectedLocation)
+            ->when($machine, fn($q) => $q->where('machine_id', $machine['id']))
+            ->orderBy('sort_order')
+            ->get();
+        $bucketIds = $buckets->pluck('id');
+
         $result = $this->attachBuckets($svc->initEntries(), $date);
         $result = $this->attachBosch($result);
+
+        // machine view: the machine's own rows (incl. leaked) + lots parked in its groups
+        // (parked lots can have machine = null, so matching on machine alone would drop them)
+        if ($machine) {
+            $result = $result->filter(
+                fn($row) => ($row['machine'] ?? null) === $machine['name']
+                    || (($row['bucket_id'] ?? null) !== null && $bucketIds->contains($row['bucket_id']))
+            )->values();
+        }
         $mark('initEntries + attachBuckets');
 
         $groups = app(PackageGroups::class);
@@ -274,9 +347,7 @@ class LoadingPlanController extends Controller
             'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
             'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
-            'buckets'           => LoadingPlanBucket::where('location', $selectedLocation)
-                ->orderBy('sort_order')
-                ->get()
+            'buckets'           => $buckets
                 ->map(fn($b) => [
                     'id'         => $b->id,
                     'label'      => $b->label,
@@ -284,7 +355,7 @@ class LoadingPlanController extends Controller
                     'machine'    => $b->machine_id ? ($machineNameById[$b->machine_id] ?? null) : null,
                 ])
                 ->values(),
-            'nonMachines' => NonMachine::where('location', $selectedLocation)
+            'nonMachines' => $machine ? [] : NonMachine::where('location', $selectedLocation)
                 ->orderBy('id')
                 ->get()
                 ->map(fn($n) => [

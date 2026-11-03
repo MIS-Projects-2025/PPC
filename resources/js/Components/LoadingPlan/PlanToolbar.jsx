@@ -1,4 +1,4 @@
-import { TabBadge, DATA_INTEGRITY_MODAL_ID } from "@/Components/LoadingPlan/DataIntegrityModal";
+import { DATA_INTEGRITY_MODAL_ID, TabBadge } from "@/Components/LoadingPlan/DataIntegrityModal";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
 import { NON_MACHINES_MODAL_ID } from "@/Components/LoadingPlan/NonMachinesModal";
 import ScrollableTabs from "@/Components/LoadingPlan/ScrollableTabs";
@@ -10,8 +10,8 @@ import { BsGear, BsSearch } from "react-icons/bs";
 import { GoAlert } from "react-icons/go";
 import { CAPACITY_OVERVIEW_MODAL_ID } from "./CapacityOverviewModal";
 import { COLUMN_VISIBILITY_MODAL_ID } from "./ColumnVisibilityModal";
-import { SCHEDULER_MODAL_ID } from "./SchedulerModal";
 import { JUMP_TO_MACHINE_MODAL_ID } from "./JumpToMachineModal";
+import { SCHEDULER_MODAL_ID } from "./SchedulerModal";
 
 const PRODUCTION_LINES = ["PL1", "PL6", "F3"];
 
@@ -75,6 +75,7 @@ export function PlanActionsBar({
     dataIntegrityCount,
     missingPartCount,
     onOpenMissingParts,
+    machineScoped = false,
 }) {
     return (
         <div className="flex items-center">
@@ -105,31 +106,37 @@ export function PlanActionsBar({
                     </Link>
                 )}
 
-                <button className="btn btn-sm" onClick={onExport} disabled={isExporting}>
-                    {isExporting ? "Exporting…" : "Export to Excel"}
-                </button>
+                {!machineScoped && (
+                    <button className="btn btn-sm" onClick={onExport} disabled={isExporting || onExport === undefined}>
+                        {isExporting ? "Exporting…" : "Export to Excel"}
+                    </button>
+                )}
 
                 <button className="btn btn-sm" onClick={() => showModal(COLUMN_VISIBILITY_MODAL_ID)} title="Show/hide columns">
                     Columns
                     {hasHiddenColumns && <span className="w-1.5 h-1.5 rounded-full bg-warning ml-1" />}
                 </button>
 
-                <button
-                    className="btn btn-sm"
-                    onClick={onToggleMachines}
-                    disabled={!canToggleMachines}
-                    title={allMachinesCollapsed ? "Expand all machines" : "Collapse all machines"}
-                >
-                    {allMachinesCollapsed ? "▼ Expand all" : "► Collapse all"}
-                </button>
+                {!machineScoped && (
+                    <>
+                        <button
+                            className="btn btn-sm"
+                            onClick={onToggleMachines}
+                            disabled={!canToggleMachines}
+                            title={allMachinesCollapsed ? "Expand all machines" : "Collapse all machines"}
+                        >
+                            {allMachinesCollapsed ? "▼ Expand all" : "► Collapse all"}
+                        </button>
 
-                <button className="btn btn-sm" onClick={() => showModal(CAPACITY_OVERVIEW_MODAL_ID)} title="Commit vs capacity for all machines">
-                    Capacity
-                </button>
+                        <button className="btn btn-sm" onClick={() => showModal(CAPACITY_OVERVIEW_MODAL_ID)} title="Commit vs capacity for all machines">
+                            Capacity
+                        </button>
 
-                <button className="btn btn-sm" onClick={() => showModal(JUMP_TO_MACHINE_MODAL_ID)} title="Jump to a machine">
-                    Jump to…
-                </button>
+                        <button className="btn btn-sm" onClick={() => showModal(JUMP_TO_MACHINE_MODAL_ID)} title="Jump to a machine">
+                            Jump to…
+                        </button>
+                    </>
+                )}
 
                 {!readOnly && (
                     <button className="btn btn-sm" onClick={() => showModal(NON_MACHINES_MODAL_ID)}>Non-machines</button>
@@ -175,29 +182,33 @@ export function PlanTabsBar({
 }) {
     return (
         <div className="flex flex-wrap justify-between items-baseline gap-2">
-            <ScrollableTabs items={tabs} active={activeTab} onChange={onTabChange} storageKey="loadingPlan:packageTabs:active" />
+            {tabs && (
+                <ScrollableTabs items={tabs} active={activeTab} onChange={onTabChange} storageKey="loadingPlan:packageTabs:active" />
+            )}
 
             <div className="flex items-end gap-2">
-                <fieldset className="fieldset rounded-box px-2">
-                    <legend className="fieldset-legend text-[11px] px-1">Production Line</legend>
-                    <div className="join h-2 items-center">
-                        {PRODUCTION_LINES.map((line) => (
-                            <button
-                                key={line}
-                                type="button"
-                                disabled={locationDisabled}
-                                onClick={() => onLocationChange(line)}
-                                className={clsx(
-                                    "btn btn-xs join-item",
-                                    location === line ? "btn-primary" : "btn-dash opacity-60",
-                                    interactiveCursorClasses(locationDisabled),
-                                )}
-                            >
-                                {line}
-                            </button>
-                        ))}
-                    </div>
-                </fieldset>
+                {onLocationChange && (
+                    <fieldset className="fieldset rounded-box px-2">
+                        <legend className="fieldset-legend text-[11px] px-1">Production Line</legend>
+                        <div className="join h-2 items-center">
+                            {PRODUCTION_LINES.map((line) => (
+                                <button
+                                    key={line}
+                                    type="button"
+                                    disabled={locationDisabled}
+                                    onClick={() => onLocationChange(line)}
+                                    className={clsx(
+                                        "btn btn-xs join-item",
+                                        location === line ? "btn-primary" : "btn-dash opacity-60",
+                                        interactiveCursorClasses(locationDisabled),
+                                    )}
+                                >
+                                    {line}
+                                </button>
+                            ))}
+                        </div>
+                    </fieldset>
+                )}
 
                 {onOpenPickupPool && (
                     <button

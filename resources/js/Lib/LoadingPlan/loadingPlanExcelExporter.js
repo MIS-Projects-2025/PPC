@@ -4,6 +4,11 @@
  * Each sheet is split into per-machine sections; grouped ("parked") lots are
  * written under their group label. Rules mirror Deemo's displayRows/makeColumns.
  */
+import {
+    aggregateByMachine,
+    buildOverviewSections,
+    buildStatusCols,
+} from "@/Components/LoadingPlan/CapacityOverviewModal.jsx";
 import { PARTNAME_TO_BAKE_KEYS, PARTNAME_TO_QTY_KEYS } from "@/Components/LoadingPlan/columns";
 import ExcelJS from "exceljs";
 import { isBlockRow as defaultIsBlockRow, isForBake } from "./helpers";
@@ -193,6 +198,110 @@ function renderSection({ sheet, title, rows, groups = [], ctx }) {
     sheet.addRow([]);
 }
 
+const OVERVIEW_SHEET_NAME = "PTP 95%";
+
+function renderCapacityOverviewSheet(workbook, { serverMachines, nonMachines, machineCapacity, dataRows }) {
+    const { byMachine, extraStatuses } = aggregateByMachine({ dataRows, serverMachines, nonMachines });
+    const { groupedSections, grand } = buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity });
+    const statusCols = buildStatusCols({ extraStatuses, grand, hideEmpty: true }); // always hide empty
+
+    const sheet = workbook.addWorksheet(sanitizeSheetName(OVERVIEW_SHEET_NAME));
+
+    const FIRST_STATUS = 4; // 0-based index after Machine, Capacity, Quantity, Planned
+    const PCT = FIRST_STATUS + statusCols.length;
+    const COMMIT = PCT + 1;
+    const n = COMMIT + 1;
+
+    sheet.columns = [
+        { width: 24 }, { width: 12 }, { width: 12 }, { width: 10 },
+        ...statusCols.map(() => ({ width: 11 })),
+        { width: 12 }, { width: 12 },
+    ];
+
+    // title
+    const titleRow = sheet.addRow(["Commit / Capacity — All Machines (By package)"]);
+    titleRow.height = 24;
+    for (let i = 1; i <= n; i++) titleRow.getCell(i).fill = solid(COLORS.headerFill);
+    titleRow.getCell(1).font = { bold: true, size: 16, color: { argb: COLORS.sectionTitleFont } };
+
+    // header
+    const headerRow = sheet.addRow([
+        "Machine", "Capacity", "Quantity", "Planned",
+        ...statusCols.map((c) => c.status),
+        "Percentage", "Commit",
+    ]);
+    for (let i = 1; i <= n; i++) {
+        const cell = headerRow.getCell(i);
+        cell.font = { bold: true, color: { argb: COLORS.headerFont } };
+        cell.fill = solid(COLORS.headerFill);
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        applyBorder(cell);
+    }
+    sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 2 }];
+
+    const addAggRow = ({ label, capacity, agg }, { fill = null, bold = false } = {}) => {
+        const done = agg.counts.DONE ?? 0;
+        const row = sheet.addRow([
+            label,
+            capacity || "—",
+            agg.qty,
+            agg.planned,
+            ...statusCols.map(({ status }) => agg.counts[status] ?? 0),
+            agg.planned > 0 ? done / agg.planned : null,
+            agg.commit,
+        ]);
+
+        for (let i = 0; i < n; i++) {
+            const cell = row.getCell(i + 1);
+            applyBorder(cell);
+            if (fill) cell.fill = solid(fill);
+            if (bold) cell.font = { bold: true };
+
+            const isStatus = i >= FIRST_STATUS && i < PCT;
+            if (isStatus) {
+                cell.alignment = { horizontal: "center" };
+                if (cell.value === 0) cell.font = { ...(cell.font || {}), color: { argb: COLORS.dimFont } };
+                if (statusCols[i - FIRST_STATUS].borderLeft) {
+                    cell.border = { ...cell.border, left: { style: "medium", color: { argb: "FF7F7F7F" } } };
+                }
+            } else if (i > 0) {
+                cell.alignment = { horizontal: "right" };
+            }
+        }
+        row.getCell(PCT + 1).numFmt = "0%";
+        for (const i of [1, 2, COMMIT]) row.getCell(i + 1).numFmt = "#,##0";
+        return row;
+    };
+
+    for (const section of groupedSections) {
+        const labelRow = sheet.addRow([section.label]);
+        for (let i = 1; i <= n; i++) labelRow.getCell(i).fill = solid(COLORS.groupFill);
+        labelRow.getCell(1).font = { bold: true };
+
+        for (const r of section.rows) {
+            const missingCap = machineCapacity !== undefined && r.kind === "machine" && r.capacity == null;
+            addAggRow(
+                { label: r.kind === "non-machine" ? `${r.label} (non-machine)` : r.label, capacity: r.capacity, agg: r.agg },
+                { fill: missingCap ? COLORS.lightYellow : null },
+            );
+        }
+        addAggRow(
+            { label: "Total", capacity: section.total.capacity, agg: section.total },
+            { fill: COLORS.groupFill, bold: true },
+        );
+    }
+
+    addAggRow({ label: "Grand total", capacity: grand.capacity, agg: grand }, { fill: COLORS.headerFill, bold: true });
+
+    sheet.addRow([]);
+    const note = sheet.addRow([
+        machineCapacity === undefined
+            ? "Capacity was not loaded when this file was exported."
+            : "A machine running several package groups appears under each one (lot counts are split per group; capacity is the full machine capacity). The grand total counts each machine once.",
+    ]);
+    note.getCell(1).font = { italic: true, color: { argb: COLORS.dimFont } };
+}
+
 // ---- main -------------------------------------------------------------------
 
 /**
@@ -217,6 +326,7 @@ export async function exportLoadingPlanToExcel({
     isBlockRow: isBlock = defaultIsBlockRow,
     getMachineLabel = (m) => (m === null || m === undefined ? "Unassigned" : String(m)),
     sortUnassigned = null,
+    capacityOverview = null, // { serverMachines, nonMachines, machineCapacity }
     excludeKeys = ["machine", "id", "entry_id", "sequence_order", "doable_status"],
 }) {
     if (!Array.isArray(dataRows)) throw new Error("exportLoadingPlanToExcel: `dataRows` must be an array");
@@ -332,6 +442,10 @@ export async function exportLoadingPlanToExcel({
             if (def.optional) workbook.removeWorksheet(sheet.id);
             else sheet.addRow(["No data for this package group."]);
         }
+    }
+
+    if (capacityOverview) {
+        renderCapacityOverviewSheet(workbook, { ...capacityOverview, dataRows });
     }
 
     return workbook.xlsx.writeBuffer();

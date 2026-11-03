@@ -164,7 +164,7 @@ function machineSection(ctx, m) {
     const {
         activePackage, readOnly, rowsByMachine, isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn,
         expandedMachines, expandedLocations, collapsedMachines, nonMachineNameByKey, machinesByName,
-        machinePlatform, otherPackageCounts, showAllMachines,
+        machinePlatform, otherPackageCounts, showAllMachines, lockedMachine,
     } = ctx;
 
     const isAll = activePackage === ALL_PACKAGES_TAB;
@@ -172,12 +172,15 @@ function machineSection(ctx, m) {
     const isManual = m === MACHINE_MANUAL;
     const isNonMachine = isNonMachineKey(m);
 
+    // machine view: this is the one machine the page is about (`!= null`: m === null is Unassigned)
+    const locked = lockedMachine != null && m === lockedMachine;
+
     if (isUnassigned && readOnly) return [];
     if (isManual && activePackage !== MANUAL_TAB && !isAll && activePackage !== PICKUP_TAB) return [];
 
     const canCollapse = !isUnassigned && !isManual;
-    const showAll = canCollapse && expandedMachines.has(m);
-    const showLoc = !canCollapse || expandedLocations.has(m);
+    const showAll = locked || (canCollapse && expandedMachines.has(m));
+    const showLoc = locked || !canCollapse || expandedLocations.has(m);
 
     const machineRows = (rowsByMachine.get(m) ?? []).filter(
         (r) => !isParked(r) && !(isUnassigned && isOtherLoc(r)),
@@ -208,7 +211,7 @@ function machineSection(ctx, m) {
         : bucketSections(ctx, m, showAll ? () => true : rowInActiveTab);
     const parkedCount = parked.filter((r) => r.__type === "data").length;
 
-    if (matchingLots === 0 && parkedCount === 0 && canCollapse && !showAllMachines) return [];
+    if (matchingLots === 0 && parkedCount === 0 && canCollapse && !showAllMachines && !locked) return [];
 
     const header = {
         id: `header-${m ?? "unassigned"}`,
@@ -222,8 +225,9 @@ function machineSection(ctx, m) {
         platform: machinePlatform.get(m),
         __rowCount: dataShown.length,
         __lotCount: dataShown.filter((r) => !isBlockRow(r)).length,
-        otherPackageCount: isUnassigned ? 0 : (otherPackageCounts[m] ?? 0),
-        __isCollapsed: collapsedMachines.has(m),
+        otherPackageCount: isUnassigned || locked ? 0 : (otherPackageCounts[m] ?? 0),
+        // a collapse saved from the full view must not hide the only section in the machine view
+        __isCollapsed: collapsedMachines.has(m) && !locked,
         isLocked: true,
     };
 
@@ -247,8 +251,10 @@ function buildMachineTab(ctx) {
 /**
  * Pure builder for the machine grid's rows: headers, data rows, collapsed runs.
  * `ctx` is everything it needs, see the call site in Deemo.jsx.
+ * With `ctx.lockedMachine` set (machine view) only that machine's section is built.
  */
 export function buildDisplayRows(ctx) {
+    if (ctx.lockedMachine) return machineSection(ctx, ctx.lockedMachine);
     if (ctx.activePackage === UNASSIGNED_TAB && !ctx.readOnly) return buildUnassignedTab(ctx);
     if (ctx.activePackage === ORPHAN_TAB) return orphanSections(ctx, () => true);
     return buildMachineTab(ctx);
