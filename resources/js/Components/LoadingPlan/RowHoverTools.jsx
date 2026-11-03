@@ -1,6 +1,7 @@
 import { ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
+import { useRowHoverInsert } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { autoUpdate, offset, useFloating } from "@floating-ui/react";
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { createPortal } from "react-dom";
 
 const INSERT_BTN_H = 20;
@@ -84,18 +85,14 @@ function RowHistoryButton({ anchorElement, onViewHistory, buttonRef, onPointerLe
     );
 }
 
-/** Presentational: all hover state comes from useRowHoverInsert in the parent. */
-export default function RowHoverTools({
-    hoveredRow,
-    displayRows,
-    canInsert,
-    buttonsRef,
-    historyButtonRef,
-    onButtonsPointerLeave,
-    onHistoryPointerLeave,
-    onInsert,
-    onViewHistory,
-}) {
+/**
+ * Owns the hover state (see useRowHoverInsert). Must be rendered INSIDE the element that
+ * `containerRef` is attached to, so it unmounts/remounts together with the grid.
+ */
+function RowHoverTools({ containerRef, rowIdxByElement, displayRows, canInsert, disabled = false, onInsert, onViewHistory }) {
+    const { hoveredRow, buttonsRef, historyButtonRef, handleButtonsPointerLeave, handleHistoryButtonPointerLeave } =
+        useRowHoverInsert({ containerRef, rowIdxByElement, disabled });
+
     if (!hoveredRow) return null;
 
     const row = displayRows[hoveredRow.rowIdx];
@@ -107,7 +104,7 @@ export default function RowHoverTools({
                 <RowInsertButtons
                     anchorElement={hoveredRow.element}
                     buttonsRef={buttonsRef}
-                    onPointerLeave={onButtonsPointerLeave}
+                    onPointerLeave={handleButtonsPointerLeave}
                     onInsertAbove={() => onInsert("above", row)}
                     onInsertBelow={() => onInsert("below", row)}
                 />
@@ -116,10 +113,12 @@ export default function RowHoverTools({
                 <RowHistoryButton
                     anchorElement={hoveredRow.element}
                     buttonRef={historyButtonRef}
-                    onPointerLeave={onHistoryPointerLeave}
+                    onPointerLeave={handleHistoryButtonPointerLeave}
                     onViewHistory={() => onViewHistory(row)}
                 />
             )}
         </>
     );
 }
+
+export default memo(RowHoverTools);

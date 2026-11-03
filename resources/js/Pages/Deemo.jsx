@@ -50,7 +50,7 @@ import { useLoadingPlanShortcuts } from "@/Hooks/LoadingPlan/useLoadingPlanShort
 import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
 import { useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
-import { useRowHoverInsert } from "@/Hooks/LoadingPlan/useRowHoverInsert";
+import { useRowHoverRefs } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useHiddenRowCounts, useRowIndex } from "@/Hooks/LoadingPlan/useRowIndex";
 import { useSplitMergeOperations } from "@/Hooks/LoadingPlan/useSplitMergeOperations";
 import { useStickyGroupHeader } from "@/Hooks/LoadingPlan/useStickyGroupHeader";
@@ -607,10 +607,7 @@ export default function Deemo({
     }, []);
 
     // ── hover tools / grid renderers / contexts ──────────────────────────
-    const {
-        containerRef, buttonsRef, historyButtonRef, rowIdxByElement, hoveredRow,
-        handleButtonsPointerLeave, handleHistoryButtonPointerLeave, handleGridScroll,
-    } = useRowHoverInsert(displayRows);
+    const { containerRef, rowIdxByElement } = useRowHoverRefs();
 
     const renderers = useMemo(
         () => ({ renderRow: (key, props) => <DroppableRow key={key} rowIdxByElement={rowIdxByElement} {...props} /> }),
@@ -898,7 +895,7 @@ export default function Deemo({
                                         onColumnWidthsChange={onColumnWidthsChange}
                                         renderers={renderers}
                                         onRowsChange={readOnly ? undefined : handleRowsChange}
-                                        onScroll={handleGridScroll}
+                                        // onScroll={handleGridScroll}
                                         rowKeyGetter={getRowKey}
                                         selectedRows={readOnly ? undefined : selectedRows}
                                         onSelectedRowsChange={readOnly ? undefined : setSelectedRows}
@@ -912,13 +909,11 @@ export default function Deemo({
                                     />
 
                                     <RowHoverTools
-                                        hoveredRow={hoveredRow}
+                                        containerRef={containerRef}
+                                        rowIdxByElement={rowIdxByElement}
                                         displayRows={displayRows}
                                         canInsert={!readOnly && !writesLocked}
-                                        buttonsRef={buttonsRef}
-                                        historyButtonRef={historyButtonRef}
-                                        onButtonsPointerLeave={handleButtonsPointerLeave}
-                                        onHistoryPointerLeave={handleHistoryButtonPointerLeave}
+                                        disabled={!!draggedRow}
                                         onInsert={handleInsert}
                                         onViewHistory={handleViewHistory}
                                     />

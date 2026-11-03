@@ -260,6 +260,8 @@ export function buildDisplayRows(ctx) {
     return buildMachineTab(ctx);
 }
 
+const ovenCollator = new Intl.Collator();
+
 // ---------------------------------------------------------------------
 // Bake tab
 // ---------------------------------------------------------------------
@@ -267,7 +269,7 @@ function compareOvens(a, b) {
     const an = Number(a);
     const bn = Number(b);
     if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn;
-    return String(a).localeCompare(String(b));
+    return ovenCollator.compare(String(a), String(b));
 }
 
 export function buildBakeDisplayRows(bakeLots, collapsedOvens) {

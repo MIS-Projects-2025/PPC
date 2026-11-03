@@ -1,16 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * Tracks which grid row the pointer is over (for the floating insert/history
- * buttons). Attach `containerRef` to the element wrapping the <DataGrid>;
- * `rowIdxByElement` is filled by DroppableRow.
+ * Refs Deemo needs to wire the grid up. Holds NO state, so calling this in Deemo
+ * never causes a Deemo re-render.
+ *
+ *  - attach `containerRef` to the element wrapping <DataGrid> (RowHoverTools lives inside it)
+ *  - `rowIdxByElement` is filled by DroppableRow
  */
-export function useRowHoverInsert(displayRows) {
+export function useRowHoverRefs() {
     const containerRef = useRef(null);
+    const rowIdxByElement = useRef(new WeakMap()).current;
+    return { containerRef, rowIdxByElement };
+}
+
+/**
+ * Tracks which grid row the pointer is over (for the floating insert/history buttons).
+ *
+ * Call this from <RowHoverTools>, NOT from the page component: `hoveredRow` changes every time
+ * the pointer crosses a row, and when the state lived in Deemo that re-rendered the whole page
+ * (grid, toolbars, every modal) on each row crossing, including during drag & drop.
+ *
+ * `disabled` (e.g. while dragging) clears the hover and stops listening.
+ */
+export function useRowHoverInsert({ containerRef, rowIdxByElement, disabled = false }) {
     const buttonsRef = useRef(null);
     const historyButtonRef = useRef(null);
     const hoveredRowRef = useRef(null);
-    const rowIdxByElement = useRef(new WeakMap()).current;
     const scrollingRef = useRef(false);
     const scrollTimer = useRef(0);
 
@@ -18,7 +33,7 @@ export function useRowHoverInsert(displayRows) {
 
     const clearHover = useCallback(() => {
         hoveredRowRef.current = null;
-        setHoveredRow(null);
+        setHoveredRow(null); // no-op (bail-out) when it is already null
     }, []);
 
     // Clear hover unless the pointer is moving into one of `refs`.
@@ -34,6 +49,11 @@ export function useRowHoverInsert(displayRows) {
         const container = containerRef.current;
         if (!container) return;
 
+        if (disabled) {
+            clearHover();
+            return;
+        }
+
         const onPointerOver = (e) => {
             if (scrollingRef.current) return;
             const rowEl = e.target.closest(".rdg-row");
@@ -48,33 +68,33 @@ export function useRowHoverInsert(displayRows) {
 
         const onPointerLeave = (e) => leaveUnlessInside(e, containerRef, buttonsRef, historyButtonRef);
 
+        // Virtualisation can unmount the hovered row mid-scroll. `scroll` doesn't bubble, so listen
+        // in the capture phase (this replaces the <DataGrid onScroll> prop).
+        const onScroll = () => {
+            scrollingRef.current = true;
+            clearTimeout(scrollTimer.current);
+            scrollTimer.current = setTimeout(() => {
+                scrollingRef.current = false;
+            }, 120);
+            if (hoveredRowRef.current) clearHover();
+        };
+
         container.addEventListener("pointerover", onPointerOver);
         container.addEventListener("pointerleave", onPointerLeave);
+        container.addEventListener("scroll", onScroll, { capture: true, passive: true });
         return () => {
+            clearTimeout(scrollTimer.current);
             container.removeEventListener("pointerover", onPointerOver);
             container.removeEventListener("pointerleave", onPointerLeave);
+            container.removeEventListener("scroll", onScroll, { capture: true });
         };
-        // displayRows: the container can be re-mounted when the tab changes
-    }, [rowIdxByElement, displayRows, leaveUnlessInside]);
-
-    // Pass to the grid's onScroll: virtualisation can unmount the hovered row mid-scroll.
-    const handleGridScroll = useCallback(() => {
-        scrollingRef.current = true;
-        clearTimeout(scrollTimer.current);
-        scrollTimer.current = setTimeout(() => {
-            scrollingRef.current = false;
-        }, 120);
-        if (hoveredRowRef.current) clearHover();
-    }, [clearHover]);
+    }, [containerRef, rowIdxByElement, disabled, clearHover, leaveUnlessInside]);
 
     return {
-        containerRef,
+        hoveredRow,
         buttonsRef,
         historyButtonRef,
-        rowIdxByElement,
-        hoveredRow,
         handleButtonsPointerLeave: (e) => leaveUnlessInside(e, containerRef, historyButtonRef),
         handleHistoryButtonPointerLeave: (e) => leaveUnlessInside(e, containerRef, buttonsRef),
-        handleGridScroll,
     };
 }

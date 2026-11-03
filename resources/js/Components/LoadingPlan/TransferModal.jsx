@@ -145,7 +145,6 @@ const TransferModal = forwardRef(function TransferModal(
                         Confirm <kbd className="kbd kbd-xs ml-1">Enter</kbd>
                     </button>
                     <button
-                        ref={confirmRef}
                         type="button"
                         disabled={pendingMachine === undefined}
                         onClick={handleConfirmThenJump}

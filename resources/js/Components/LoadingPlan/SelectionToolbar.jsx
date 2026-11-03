@@ -509,7 +509,7 @@ export default function SelectionToolbar({
                 onClose={() => mergeModalRef.current?.close()}
             />
 
-            <SplitModal
+            {/* <SplitModal
                 ref={splitModalRef}
                 machines={machines}
                 nonMachines={nonMachines}
@@ -536,7 +536,7 @@ export default function SelectionToolbar({
                     })
                 }
                 onClose={() => splitModalRef.current?.close()}
-            />
+            /> */}
         </div>
     );
 }

@@ -13,9 +13,14 @@ import { isBlockRow } from "./helpers";
 export const isResRow = (r) => r.station === RES_STATION;
 export const isForBakeRow = (r) => !!r.is_for_bake;
 
+// `a.localeCompare(b, undefined, { numeric: true })` builds a new collator on every call, which gets
+// expensive inside a sort over thousands of Unassigned rows. One shared instance gives the same
+// ordering at a fraction of the cost.
+const numericCollator = new Intl.Collator(undefined, { numeric: true });
+
 /** package name, then lead count ascending (missing lead_count last). */
 export function compareUnassigned(a, b) {
-    const pkg = (a.package_name ?? "").localeCompare(b.package_name ?? "", undefined, { numeric: true });
+    const pkg = numericCollator.compare(a.package_name ?? "", b.package_name ?? "");
     if (pkg !== 0) return pkg;
 
     const an = a.lead_count == null ? NaN : Number(a.lead_count);

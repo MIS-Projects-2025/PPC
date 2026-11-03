@@ -51,7 +51,6 @@ names=(
   "rowPredicates"
   "splitMergeApi"
   "CellEditor"
-  "PackageBodySizeCapacityList"
 
   "loadingPlanSchedule"
   "TableActionsContext"
