@@ -6,7 +6,6 @@ import {
     RES_STATION,
     RES_TAB,
 } from "@/Constants/LoadingPlan/tabs";
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "./helpers";
 
@@ -33,7 +32,6 @@ export function compareUnassigned(a, b) {
 
 export function getMachineLabel(machine, nonMachineNameByKey) {
     if (machine === null) return "Unassigned";
-    if (machine === MACHINE_MANUAL) return "MANUAL";
     return nonMachineNameByKey.get(machine) ?? machine;
 }
 
@@ -43,7 +41,6 @@ export function createRowMatchers({ activePackage, selectedLocation, knownMachin
 
     const isOrphanRow = (r) =>
         !!r.machine &&
-        r.machine !== MACHINE_MANUAL &&
         !isNonMachineKey(r.machine) &&
         !knownMachineNames.has(r.machine);
 
@@ -59,7 +56,7 @@ export function createRowMatchers({ activePackage, selectedLocation, knownMachin
     };
 
     const rowInActiveTab = (r) => {
-        if (r.machine !== null && r.machine !== MACHINE_MANUAL && isOtherLoc(r)) return false;
+        if (r.machine !== null && isOtherLoc(r)) return false;
         return rowInActiveTabOwn(r);
     };
 

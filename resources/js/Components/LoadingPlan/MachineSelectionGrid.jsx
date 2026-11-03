@@ -154,7 +154,7 @@ function MachineChipButton({ machine, label, selected, onClick, isPseudo, transf
 }
 
 function isPseudoMachine(m) {
-    return m === null || m === "MANUAL";
+    return m === null;
 }
 
 export default function MachineSelectionGrid({

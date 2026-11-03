@@ -1,4 +1,3 @@
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import clsx from "clsx";
@@ -295,8 +294,7 @@ export default function TransferMachinePicker({
     const incomingLots = useMemo(() => incomingRows.filter((r) => !isBlockRow(r)).length, [incomingRows]);
     const lanes = useMemo(() => buildLaneIndex(laneRows, movingIds), [laneRows, movingIds]);
 
-    const realMachines = useMemo(() => machines.filter((m) => m !== null && m !== MACHINE_MANUAL), [machines]);
-    const hasManual = machines.includes(MACHINE_MANUAL);
+    const realMachines = useMemo(() => machines.filter((m) => m !== null), [machines]);
 
     const fadeRef = useRef(null);
     useLayoutEffect(() => {
@@ -351,9 +349,8 @@ export default function TransferMachinePicker({
         const map = new Map();
         realMachines.forEach((m) => map.set(m, make(m, m)));
         nonMachines.forEach((n) => map.set(n.key, make(n.key, n.name)));
-        if (hasManual) map.set(MACHINE_MANUAL, make(MACHINE_MANUAL, "MANUAL"));
         return map;
-    }, [cands, machineCapacity, incomingDoable, machineTotalDoable, lanes, incomingLots, realMachines, nonMachines, hasManual]);
+    }, [cands, machineCapacity, incomingDoable, machineTotalDoable, lanes, incomingLots, realMachines, nonMachines]);
 
     const groups = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -374,7 +371,7 @@ export default function TransferMachinePicker({
     }, [nonMachines, query, itemMap]);
 
     const selectedTier =
-        inTransferMode && selectedMachine != null && selectedMachine !== MACHINE_MANUAL && !isNonMachineKey(selectedMachine)
+        inTransferMode && selectedMachine != null && !isNonMachineKey(selectedMachine)
             ? (cands[selectedMachine]?.tier ?? 5)
             : null;
 
@@ -425,16 +422,6 @@ export default function TransferMachinePicker({
                             onPick={handlePick}
                             onPreview={handlePreview}
                         />
-                        {hasManual && (
-                            <QuickChip
-                                machine={MACHINE_MANUAL}
-                                label="MANUAL"
-                                selected={selectedMachine === MACHINE_MANUAL}
-                                disabled={!!isDisabled?.(MACHINE_MANUAL)}
-                                onPick={handlePick}
-                                onPreview={handlePreview}
-                            />
-                        )}
                     </div>
 
                     <ListHeader />

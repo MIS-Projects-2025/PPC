@@ -5,7 +5,6 @@ import {
     PICKUP_TAB,
     UNASSIGNED_TAB,
 } from "@/Constants/LoadingPlan/tabs";
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "./helpers";
 import { compareUnassigned, getMachineLabel, isResRow } from "./rowPredicates";
@@ -169,16 +168,15 @@ function machineSection(ctx, m) {
 
     const isAll = activePackage === ALL_PACKAGES_TAB;
     const isUnassigned = m === null;
-    const isManual = m === MACHINE_MANUAL;
     const isNonMachine = isNonMachineKey(m);
 
     // machine view: this is the one machine the page is about (`!= null`: m === null is Unassigned)
     const locked = lockedMachine != null && m === lockedMachine;
 
     if (isUnassigned && readOnly) return [];
-    if (isManual && activePackage !== MANUAL_TAB && !isAll && activePackage !== PICKUP_TAB) return [];
+    if (activePackage !== MANUAL_TAB && !isAll && activePackage !== PICKUP_TAB) return [];
 
-    const canCollapse = !isUnassigned && !isManual;
+    const canCollapse = !isUnassigned;
     const showAll = locked || (canCollapse && expandedMachines.has(m));
     const showLoc = locked || !canCollapse || expandedLocations.has(m);
 

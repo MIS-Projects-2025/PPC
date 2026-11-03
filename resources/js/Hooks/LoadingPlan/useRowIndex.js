@@ -1,4 +1,3 @@
-import { MACHINE_MANUAL, hasTimeline } from "@/Constants/machines.js";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { useMemo } from "react";
 import { isNonMachineKey } from "./useNonMachineOperations";
@@ -29,9 +28,9 @@ export function useRowIndex(dataRows, knownMachineNames) {
             if (m) {
                 const nonMachine = isNonMachineKey(m);
                 if (nonMachine) nonMachineRowCounts[m] = (nonMachineRowCounts[m] ?? 0) + 1;
-                else if (m !== MACHINE_MANUAL && !knownMachineNames.has(m)) orphans.add(m);
+                else if (!knownMachineNames.has(m)) orphans.add(m);
 
-                if (!block && (nonMachine || hasTimeline(m))) {
+                if (!block) {
                     machineTotalQuantity[m] = (machineTotalQuantity[m] ?? 0) + (Number(r.qty) || 0);
                     if (!r.is_rework) machineTotalDoable[m] = (machineTotalDoable[m] ?? 0) + (Number(r.doable) || 0);
                 }
@@ -68,7 +67,7 @@ export function useHiddenRowCounts({ dataRows, isParked, isOtherLoc, rowInActive
             if (isOtherLoc(r)) otherLocationCounts[m] = (otherLocationCounts[m] ?? 0) + 1;
             else if (!inTab) otherPackageCounts[m] = (otherPackageCounts[m] ?? 0) + 1;
 
-            if (inTab && m && !r.is_rework && (isNonMachineKey(m) || hasTimeline(m))) {
+            if (inTab && m && !r.is_rework) {
                 machineSectionDoable[m] = (machineSectionDoable[m] ?? 0) + (Number(r.doable) || 0);
             }
         }

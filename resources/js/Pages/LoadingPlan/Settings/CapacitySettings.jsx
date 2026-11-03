@@ -333,7 +333,6 @@ export default function CapacitySettings({ machines = [] }) {
                     <tbody>
                         {filtered.map((m, i) => {
                             const c = cur[m.id];
-                            console.log("c", c);                            
                             const none = c?.capacity == null;
                             const st = status[m.id];
                             const open = openId === m.id;

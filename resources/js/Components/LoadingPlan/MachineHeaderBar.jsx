@@ -1,9 +1,8 @@
 import { initialData as _initialData } from "@/Constants/loadingPlanData.js";
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { Deferred } from "@inertiajs/react";
+import clsx from "clsx";
 import { createContext, useContext, useId, useMemo, useRef, useState } from "react";
 import HoverCell from "./HoverCell";
-import clsx from "clsx";
 
 export const TableInteractionContext = createContext({
     isSortable: false,
@@ -69,8 +68,7 @@ export function MachineHeaderBar({
 	const machineID = row?.machineId;
 	const machineLabel = row?.machineLabel;
     const isUnassigned = machine === null || String(machineLabel ?? "").toLowerCase() === "unassigned";
-    const isManual = machine === MACHINE_MANUAL;
-    const isPseudo = isUnassigned || isManual;
+    const isPseudo = isUnassigned;
 	const isNonMachine = row?.isNonMachine === true;
 	const canRename = isNonMachine && !!onRenameNonMachine;
 	const [editing, setEditing] = useState(false);
@@ -107,9 +105,9 @@ export function MachineHeaderBar({
     const otherDoable   = Math.max(0, overallDoable - sectionDoable);
 
     const isExceeded = useMemo(() => {
-        if (isUnassigned || isManual) return false;
+        if (isUnassigned) return false;
         return CAPACITY > 0 && overallDoable > CAPACITY;
-    }, [isUnassigned, isManual, CAPACITY, overallDoable]);
+    }, [isUnassigned, CAPACITY, overallDoable]);
 
     const sectionPct =
         CAPACITY > 0 ? Math.min((sectionDoable / CAPACITY) * 100, 100) : 0;
@@ -270,8 +268,8 @@ export function MachineHeaderBar({
 				)}
 			</div>
 
-            {/* Capacity bar — only for real machines, mirrors MachineSection's Deferred block */}
-            {!isUnassigned && !isManual && !isNonMachine && (
+            {/* Capacity bar — only for real machines */}
+            {!isUnassigned && !isNonMachine && (
                 <div className="sticky right-0 z-10 ml-auto h-full shrink-0 bg-base-100">
                     <Deferred
                         data="machineCapacity"

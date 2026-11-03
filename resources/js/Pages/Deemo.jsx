@@ -37,7 +37,6 @@ import {
     UNASSIGNED_TAB,
     buildTabItems,
 } from "@/Constants/LoadingPlan/tabs";
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { useBucketOperations } from "@/Hooks/LoadingPlan/useBucketOperations";
 import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
 import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
@@ -278,7 +277,10 @@ export default function Deemo({
     );
     const knownMachineNames = useMemo(() => new Set(serverMachines.map((m) => m.name)), [serverMachines]);
     const machinePlatform = useMemo(() => new Map(serverMachines.map((m) => [m.name, m.platform])), [serverMachines]);
-    const machines = useMemo(() => [null, MACHINE_MANUAL, ...serverMachines.map((m) => m.name)], [serverMachines]);
+    const machines = useMemo(
+        () => [null, ...serverMachines.map((m) => m.name)],
+        [serverMachines],
+    );
 
     const [bucketList, setBucketList] = useState(serverBuckets ?? []);
     useEffect(() => setBucketList(serverBuckets ?? []), [serverBuckets]);
@@ -477,7 +479,7 @@ export default function Deemo({
     const collapsibleMachineKeys = useMemo(
         () =>
             displayRows
-                .filter((r) => r.__type === "header" && r.__headerKind !== "bucket" && r.machine !== null && r.machine !== MACHINE_MANUAL)
+                .filter((r) => r.__type === "header" && r.__headerKind !== "bucket" && r.machine !== null)
                 .map((r) => r.machine),
         [displayRows],
     );
@@ -500,7 +502,7 @@ export default function Deemo({
                 .filter((r) => r.__type === "header" && r.__headerKind !== "bucket" && r.__lotCount > 0)
                 .map((r) => r.machine),
         );
-        return [...machines, ...nonMachineKeys].filter((m) => m !== null && m !== MACHINE_MANUAL && !withLots.has(m));
+        return [...machines, ...nonMachineKeys].filter((m) => m !== null && !withLots.has(m));
     }, [displayRows, machines, nonMachineKeys]);
 
     const gridKey = `${activeTab}-${activePackage}`;

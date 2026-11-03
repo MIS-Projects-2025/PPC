@@ -1,5 +1,4 @@
 import { STATUS_GROUPS } from "@/Components/LoadingPlan/StatusMenu.jsx";
-import { MACHINE_MANUAL } from "@/Constants/machines.js";
 import { useDialogOpen } from "@/Hooks/LoadingPlan/useDialogOpen";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { closeModal } from "@/Lib/LoadingPlan/modal";
@@ -120,7 +119,7 @@ function StatusCells({ counts, statusCols }) {
 
 // ── pure builders (shared with the Excel exporter) ───────────────────────
 export function aggregateByMachine({ dataRows, serverMachines, nonMachines }) {
-    const known = new Set([...serverMachines.map((m) => m.name), MACHINE_MANUAL, ...nonMachines.map((n) => n.key)]);
+    const known = new Set([...serverMachines.map((m) => m.name), ...nonMachines.map((n) => n.key)]);
     const byMachine = new Map();
     const extra = new Set();
 
@@ -146,7 +145,6 @@ export function aggregateByMachine({ dataRows, serverMachines, nonMachines }) {
 export function buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity }) {
     const entities = [
         ...serverMachines.map((m) => ({ key: m.name, label: m.name, kind: "machine", platform: m.platform })),
-        { key: MACHINE_MANUAL, label: MACHINE_MANUAL, kind: "manual" },
         ...nonMachines.map((n) => ({ key: n.key, label: n.name, kind: "non-machine" })),
     ];
 
