@@ -35,9 +35,13 @@ export default function DateNav({ selected, onChange, isNoFuture = false }) {
             <div className="flex items-center gap-1">
                 <DatePicker
                     selected={selected}
+                    portalId="datepicker-portal"
                     onChange={onChange}
                     dateFormat="MMM d, yyyy"
                     maxDate={isNoFuture ? today : undefined}
+                    popperPlacement="bottom-start"
+                    popperProps={{ strategy: "fixed" }}
+                    showPopperArrow={false}
                     customInput={
                         <button
                             type="button"

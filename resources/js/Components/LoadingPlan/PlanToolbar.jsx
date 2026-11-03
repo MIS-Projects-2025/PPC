@@ -182,9 +182,11 @@ export function PlanTabsBar({
 }) {
     return (
         <div className="flex flex-wrap justify-between items-baseline gap-2">
-            {tabs && (
-                <ScrollableTabs items={tabs} active={activeTab} onChange={onTabChange} storageKey="loadingPlan:packageTabs:active" />
-            )}
+            <div className="">
+                {tabs && (
+                    <ScrollableTabs items={tabs} active={activeTab} onChange={onTabChange} storageKey="loadingPlan:packageTabs:active" />
+                )}
+            </div>
 
             <div className="flex items-end gap-2">
                 {onLocationChange && (
