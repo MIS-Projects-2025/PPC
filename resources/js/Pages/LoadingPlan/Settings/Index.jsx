@@ -21,7 +21,7 @@ const goBack = () => {
     else router.visit('/loading-plan'); // opened directly / in a new tab: nothing to go back to
 };
 
-export default function Index({ section = 'capacity', machines = [], bands = [], nonMachines = [] }) {
+export default function Index({ section = 'capacity', machines = [], bands = [], bandGroups = [], nonMachines = [] }) {
     const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
 
     return (
@@ -50,7 +50,7 @@ export default function Index({ section = 'capacity', machines = [], bands = [],
                 <main className="min-w-0 flex-1 overflow-y-auto p-6">
                     <h2 className="mb-4 text-xl font-semibold">{current.label}</h2>
                     {current.key === 'capacity' && <CapacitySettings machines={machines} />}
-                    {current.key === 'capacity-bands' && <CapacityBandSettings initial={bands} />}
+                    {current.key === 'capacity-bands' && <CapacityBandSettings initial={bands} groups={bandGroups} />}
                     {current.key === 'package-groups' && <PackageGroupSettings />}
                     {current.key === 'non-machines' && <NonMachineSettings nonMachines={nonMachines} />}
                     {current.key === 'bosch-parts' && <BoschPartSettings />}

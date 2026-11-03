@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\NonMachine;
 use App\Models\QdnMachine;
+use App\Models\CapacityBandGroup;
 use Inertia\Inertia;
 use Inertia\Response;
 use App\Models\MachinePlatformCapacityBand;
@@ -24,7 +25,10 @@ class LoadingPlanSettingsController extends Controller
                 ->get(['id', 'machine_num', 'factory'])
                 : [],
             'bands'    => $section === 'capacity-bands'
-                ? MachinePlatformCapacityBand::orderBy('platform')->orderBy('qty_min')->get()
+                ? MachinePlatformCapacityBand::orderBy('band_group')->orderBy('platform')->orderBy('qty_min')->get()
+                : [],
+            'bandGroups' => $section === 'capacity-bands'
+                ? CapacityBandGroup::orderBy('code')->get(['code', 'label'])
                 : [],
             'nonMachines' => $section === 'non-machines'
                 ? NonMachine::orderBy('location')->orderBy('name')->get(['id', 'name', 'location'])

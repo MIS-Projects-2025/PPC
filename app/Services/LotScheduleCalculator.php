@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use App\Models\LoadingPlanEntry;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
+use App\Models\CapacityBandGroup;
 
 class LotScheduleCalculator
 {
@@ -93,7 +94,9 @@ class LotScheduleCalculator
     }
     private function bands(): Collection
     {
-        return $this->capacityBands ??= MachinePlatformCapacityBand::orderByDesc('qty_min')->get()->groupBy('platform');
+        return $this->capacityBands ??= MachinePlatformCapacityBand::orderByDesc('qty_min')
+            ->get()
+            ->groupBy(['band_group', 'platform']);
     }
 
     public function __construct(array|Collection $dates = [], array|Collection $lotIds = [])
@@ -443,7 +446,7 @@ class LotScheduleCalculator
      * call in a tight loop (bulk placement). Requires loadPackageList()
      * already called.
      */
-    public function computeMetrics(?string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null, ?RecipeInfo $recipeInfo = null): array
+    public function computeMetrics(?string $partName, int $effectiveQty, ?string $machineName, ?int $commitOverride = null, ?RecipeInfo $recipeInfo = null, ?string $bandGroup = null): array
     {
         if ($this->packageListByDeviceName === null) {
             throw new \LogicException(
@@ -478,7 +481,7 @@ class LotScheduleCalculator
             $commit = min($commitOverride, $effectiveQty);
         }
 
-        $capacityUph = $this->capacityUph($machineName, $effectiveQty);
+        $capacityUph = $this->capacityUph($machineName, $effectiveQty, $bandGroup);
 
         return [
             'recipe_used' => $recipe,
@@ -523,7 +526,8 @@ class LotScheduleCalculator
             $effectiveQty,
             $machineName,
             $lotQuantity->commit_override,
-            $recipeInfo
+            $recipeInfo,
+            CapacityBandGroup::forSource($entry->source),
         );
 
         $lotQuantity->recipe_used = $metrics['recipe_used'];
@@ -540,21 +544,23 @@ class LotScheduleCalculator
         }
     }
 
-    public function capacityUph(?string $machine, int $qty): ?int
+    public function capacityUph(?string $machine, int $qty, ?string $bandGroup = null): ?int
     {
         if (!$machine) return null;
 
-        $platform = $this->machinePlatforms->get($machine);
+        $platform = $this->platforms()->get($machine);
         if (!$platform) {
             Log::info("capacityUph: no platform found for machine [{$machine}]");
             return null;
         }
 
-        $band = $this->bands()->get($platform, collect())
+        $group = $bandGroup ?? CapacityBandGroup::F1F2;
+
+        $band = $this->bands()->get($group, collect())->get($platform, collect())
             ->first(fn($b) => $qty >= $b->qty_min && ($b->qty_max === null || $qty <= $b->qty_max));
 
         if (!$band) {
-            Log::info("capacityUph: no band matched for platform [{$platform}], qty [{$qty}]");
+            Log::info("capacityUph: no band matched for group [{$group}] platform [{$platform}], qty [{$qty}]");
         }
 
         return $band?->capacity_uph;

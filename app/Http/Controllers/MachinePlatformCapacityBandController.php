@@ -2,15 +2,17 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CapacityBandGroup;
 use App\Models\MachinePlatformCapacityBand;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class MachinePlatformCapacityBandController extends Controller
 {
     public function index()
     {
-        return MachinePlatformCapacityBand::orderBy('platform')->orderBy('qty_min')->get();
+        return MachinePlatformCapacityBand::orderBy('band_group')->orderBy('platform')->orderBy('qty_min')->get();
     }
 
     public function store(Request $request)
@@ -35,6 +37,7 @@ class MachinePlatformCapacityBandController extends Controller
     private function validated(Request $request, ?int $ignoreId = null): array
     {
         $data = $request->validate([
+            'band_group'   => ['required', Rule::exists(CapacityBandGroup::class, 'code')],
             'platform'     => ['required', 'string', 'max:20'],
             'qty_min'      => ['required', 'integer', 'min:0'],
             'qty_max'      => ['required', 'integer', 'gte:qty_min'],
@@ -42,8 +45,9 @@ class MachinePlatformCapacityBandController extends Controller
         ]);
         $data['platform'] = strtoupper(trim($data['platform']));
 
-        // The unique key only blocks exact duplicates; getCapacity() needs ranges that never overlap.
-        $overlap = MachinePlatformCapacityBand::forPlatform($data['platform'])
+        // The unique key only blocks exact duplicates; the lookup needs ranges that never overlap within a group + platform.
+        $overlap = MachinePlatformCapacityBand::forGroup($data['band_group'])
+            ->forPlatform($data['platform'])
             ->when($ignoreId, fn($q) => $q->whereKeyNot($ignoreId))
             ->where('qty_min', '<=', $data['qty_max'])
             ->where('qty_max', '>=', $data['qty_min'])
@@ -51,7 +55,7 @@ class MachinePlatformCapacityBandController extends Controller
 
         if ($overlap) {
             throw ValidationException::withMessages([
-                'qty_min' => "Range overlaps existing band {$overlap->qty_min}–{$overlap->qty_max} for {$data['platform']}.",
+                'qty_min' => "Range overlaps existing band {$overlap->qty_min}–{$overlap->qty_max} for {$data['band_group']} / {$data['platform']}.",
             ]);
         }
 

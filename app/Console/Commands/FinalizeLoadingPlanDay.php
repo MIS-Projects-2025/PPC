@@ -8,9 +8,28 @@ use App\Helpers\ShiftDay;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Models\CapacityBandGroup;
 
 class FinalizeLoadingPlanDay extends Command
 {
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
+    // DEPRECATED
     // TODO: VERY STALE
     // TODO: VERY STALE
     // TODO: VERY STALE
@@ -96,7 +115,7 @@ class FinalizeLoadingPlanDay extends Command
 
             $entry->update([
                 'machine_snapshot'      => $machineName,
-                'capacity_uph_snapshot' => $calc->capacityUph($machineName, $effectiveQty),
+                'capacity_uph_snapshot' => $calc->capacityUph($machineName, $effectiveQty, CapacityBandGroup::forSource($entry->source)),
                 'doable_snapshot'       => $doableSnapshot,
                 'finalized_at'          => now(),
             ]);
@@ -107,4 +126,6 @@ class FinalizeLoadingPlanDay extends Command
 
         return self::SUCCESS;
     }
+
+    // DEPRECATED
 }

@@ -19,7 +19,7 @@ class ProcessTraveler extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'date_created' => 'datetime',
+        'DATE_CREATED' => 'datetime',
         'date_updated' => 'datetime',
         'time_remarks' => 'datetime',
         'process_rqmt' => 'integer',   // after the Darwin migration
@@ -69,7 +69,7 @@ class ProcessTraveler extends Model
             'Ramp_Time'    => $this->input_type,
             'Bake'         => $this->for_bake ? 'For Bake' : null,
             'Qty'          => (int) round((float) $this->qty),
-            'import_date'  => $this->date_created?->toDateString(),
+            'import_date'  => $this->DATE_CREATED?->toDateString(),
         ]);
 
         // In-memory only; read through accessors on CustomerDataWip

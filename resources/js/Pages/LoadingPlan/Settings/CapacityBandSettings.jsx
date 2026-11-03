@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { BiCheck, BiTrash } from 'react-icons/bi';
 import { Alert, errMsg } from './Lib';
 
@@ -7,24 +7,37 @@ const API = '/loading-plan/capacity-bands';
 const FIELDS = ['qty_min', 'qty_max', 'capacity_uph'];
 const EMPTY = { platform: '', qty_min: '', qty_max: '', capacity_uph: '' };
 const fmt = (n) => (n === null || n === undefined || n === '' ? '—' : Number(n).toLocaleString());
-const sortRows = (a, b) => a.platform.localeCompare(b.platform) || a.qty_min - b.qty_min;
+const sortRows = (a, b) =>
+    a.band_group.localeCompare(b.band_group) || a.platform.localeCompare(b.platform) || a.qty_min - b.qty_min;
 
-export default function CapacityBandSettings({ initial = [] }) {
+export default function CapacityBandSettings({ initial = [], groups = [] }) {
     const [rows, setRows] = useState(initial);
+    const [group, setGroup] = useState(groups[0]?.code ?? '');
     const [msg, setMsg] = useState(null);
     const [busy, setBusy] = useState(false);
     const [form, setForm] = useState(EMPTY);
     const [drafts, setDrafts] = useState({}); // `${id}:${field}` -> string
     const [status, setStatus] = useState({}); // id -> 'saving' | 'saved' | 'error'
 
-    const groups = useMemo(() => {
-        const g = {};
-        rows.forEach((r) => (g[r.platform] ??= []).push(r));
-        return g;
+    const visible = useMemo(() => rows.filter((r) => r.band_group === group), [rows, group]);
+
+    const counts = useMemo(() => {
+        const c = {};
+        rows.forEach((r) => (c[r.band_group] = (c[r.band_group] ?? 0) + 1));
+        return c;
     }, [rows]);
 
+    const byPlatform = useMemo(() => {
+        const g = {};
+        visible.forEach((r) => (g[r.platform] ??= []).push(r));
+        return g;
+    }, [visible]);
+
     // Flat render order, used for keyboard navigation between rows.
-    const order = useMemo(() => Object.values(groups).flat(), [groups]);
+    const order = useMemo(() => Object.values(byPlatform).flat(), [byPlatform]);
+
+    // platform names are shared across groups, so suggest from all of them
+    const platforms = useMemo(() => [...new Set(rows.map((r) => r.platform))].sort(), [rows]);
 
     const flag = (id, s) => setStatus((p) => ({ ...p, [id]: s }));
     const clearDraft = (key) =>
@@ -43,6 +56,7 @@ export default function CapacityBandSettings({ initial = [] }) {
         flag(r.id, 'saving');
         try {
             const { data } = await axios.put(`${API}/${r.id}`, {
+                band_group: r.band_group,
                 platform: r.platform,
                 qty_min: r.qty_min,
                 qty_max: r.qty_max,
@@ -63,6 +77,7 @@ export default function CapacityBandSettings({ initial = [] }) {
         setBusy(true);
         try {
             const { data } = await axios.post(API, {
+                band_group: group,
                 platform: form.platform,
                 qty_min: Number(form.qty_min),
                 qty_max: Number(form.qty_max),
@@ -116,9 +131,30 @@ export default function CapacityBandSettings({ initial = [] }) {
         </label>
     );
 
+    const activeLabel = groups.find((g) => g.code === group)?.label ?? group;
+
     return (
         <div className="space-y-4">
             <Alert msg={msg} onClose={() => setMsg(null)} />
+
+            <div role="tablist" className="tabs tabs-box w-fit">
+                {groups.map((g) => (
+                    <button
+                        key={g.code}
+                        type="button"
+                        role="tab"
+                        className={`tab ${g.code === group ? 'tab-active' : ''}`}
+                        onClick={() => setGroup(g.code)}
+                    >
+                        {g.label}
+                        <span className="badge badge-xs ml-2">{counts[g.code] ?? 0}</span>
+                    </button>
+                ))}
+            </div>
+
+            <p className="text-sm opacity-70">
+                Bands for <b>{activeLabel}</b> lots only. Editing them does not recalculate lots that are already planned.
+            </p>
 
             <form onSubmit={add} className="space-y-2 rounded-lg border border-base-300 bg-base-100 p-4">
                 <p className="text-sm opacity-70">Add band — ranges must not overlap within a platform.</p>
@@ -128,22 +164,28 @@ export default function CapacityBandSettings({ initial = [] }) {
                         input: { maxLength: 20, list: 'band-platforms' },
                     })}
                     <datalist id="band-platforms">
-                        {Object.keys(groups).map((p) => (
+                        {platforms.map((p) => (
                             <option key={p} value={p} />
                         ))}
                     </datalist>
                     {addField('qty_min', 'Qty min', { input: { type: 'number', min: 0 } })}
                     {addField('qty_max', 'Qty max', { input: { type: 'number', min: 0 } })}
                     {addField('capacity_uph', 'Capacity (UPH)', { input: { type: 'number', min: 0 } })}
-                    <button className="btn btn-primary btn-sm" disabled={busy}>
+                    <button className="btn btn-primary btn-sm" disabled={busy || !group}>
                         Add band
                     </button>
                 </div>
             </form>
 
-            {order.length === 0 && <p className="opacity-70">No capacity bands.</p>}
+            {order.length === 0 && (
+                <div role="alert" className="alert alert-warning alert-soft">
+                    <span>
+                        No bands for {activeLabel}. Lots in this group get no capacity (UPH and accu time stay empty) until bands are added.
+                    </span>
+                </div>
+            )}
 
-            {Object.entries(groups).map(([platform, list]) => (
+            {Object.entries(byPlatform).map(([platform, list]) => (
                 <div key={platform} className="overflow-x-auto rounded-lg border border-base-300 bg-base-100">
                     <h3 className="border-b border-base-300 bg-base-200 px-4 py-2 font-semibold">{platform}</h3>
                     <table className="table table-sm">

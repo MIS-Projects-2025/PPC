@@ -11,6 +11,7 @@ class MachinePlatformCapacityBand extends Model
     protected $table = 'machine_platform_capacity_bands';
 
     protected $fillable = [
+        'band_group',
         'platform',
         'qty_min',
         'qty_max',
@@ -23,29 +24,26 @@ class MachinePlatformCapacityBand extends Model
         'capacity_uph' => 'integer',
     ];
 
-    /**
-     * Scope: filter by platform
-     */
+    public function scopeForGroup(Builder $query, string $group): Builder
+    {
+        return $query->where('band_group', $group);
+    }
+
     public function scopeForPlatform(Builder $query, string $platform): Builder
     {
         return $query->where('platform', $platform);
     }
 
-    /**
-     * Scope: filter by quantity falling within qty_min/qty_max range
-     */
     public function scopeForQty(Builder $query, int $qty): Builder
     {
         return $query->where('qty_min', '<=', $qty)
             ->where('qty_max', '>=', $qty);
     }
 
-    /**
-     * Static helper: get capacity_uph for a given platform + qty
-     */
-    public static function getCapacity(string $platform, int $qty): ?int
+    public static function getCapacity(string $platform, int $qty, string $group = CapacityBandGroup::F1F2): ?int
     {
-        return static::forPlatform($platform)
+        return static::forGroup($group)
+            ->forPlatform($platform)
             ->forQty($qty)
             ->value('capacity_uph');
     }
