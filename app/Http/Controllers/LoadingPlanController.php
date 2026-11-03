@@ -224,7 +224,11 @@ class LoadingPlanController extends Controller
         $svc->initWip();
         $mark('initWip');
 
-        $wipRows = $svc->todayWipRows->concat($svc->todayLeakedWipRows->filter(fn($w) => $w->source !== 'f3'));
+        $isF3Source = fn($w) => strtolower((string) $w->source) === 'f3';
+
+        $wipRows = $svc->todayWipRows->concat(
+            $svc->todayLeakedWipRows->reject($isF3Source)
+        );
 
         $partnameIntegrity  = new LoadingPlanPartnameIntegrity();
         $packageListPromise = null;

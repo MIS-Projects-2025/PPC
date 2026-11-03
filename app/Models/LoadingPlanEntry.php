@@ -9,6 +9,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Awobaz\Compoships\Compoships;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+
 
 class LoadingPlanEntry extends Model
 {
@@ -56,6 +58,14 @@ class LoadingPlanEntry extends Model
         'time_start'     => 'datetime',
         'time_end'       => 'datetime',
     ];
+
+    protected function source(): Attribute
+    {
+        return Attribute::make(
+            get: fn($v) => $v === null ? null : strtolower($v),
+            set: fn($v) => $v === null ? null : strtolower($v),
+        );
+    }
 
     public function getPlacementKey(): ?string
     {
