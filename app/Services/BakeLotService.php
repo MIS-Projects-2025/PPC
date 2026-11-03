@@ -51,18 +51,38 @@ class BakeLotService
 
     public function getActiveLotOvens(): array
     {
+        $now = now()->timestamp;
+
         return BakeLot::query()
             ->active()
             ->whereNotNull('b.lotid')
-            ->pluck('b.oven_num', 'b.lotid')
+            ->get(['b.lotid', 'b.oven_num', 'b.date_time_in', 'b.hours'])
+            ->mapWithKeys(fn($r) => [
+                $r->lotid => [
+                    'oven'      => $r->oven_num,
+                    'remaining' => $this->remainingSeconds($r, $now), // seconds; negative = overrun; null = unknown
+                ],
+            ])
             ->all();
+    }
+
+    private function remainingSeconds($row, int $now): ?int
+    {
+        if (! $row->date_time_in || $row->hours === null) {
+            return null;
+        }
+
+        $end = Carbon::parse($row->date_time_in, config('bake.timezone', config('app.timezone')))
+            ->addSeconds((int) round($row->hours * 3600));
+
+        return $end->timestamp - $now;
     }
 
     /**
      * DEV ONLY: pretend ~$ratio of the given lots are in an oven.
      * Deterministic (hash of the lot id), so results are stable between requests.
      *
-     * @return array<string, int> lotid => oven_num
+     * @return array<string, array{oven: int, remaining: int|null}> lotid => {oven, remaining}
      */
     public function fakeActiveLotOvens(iterable $lotIds, float $ratio = 0.50, int $ovenCount = 6): array
     {
@@ -77,7 +97,10 @@ class BakeLotService
 
             $hash = crc32($lotId);
             if ($hash % 100 < $threshold) {
-                $ovens[$lotId] = intdiv($hash, 100) % $ovenCount + 1;
+                $ovens[$lotId] = [
+                    'oven'      => intdiv($hash, 100) % $ovenCount + 1,
+                    'remaining' => ($hash % 30000) - 1800, // some negatives to exercise the "Done" state
+                ];
             }
         }
 

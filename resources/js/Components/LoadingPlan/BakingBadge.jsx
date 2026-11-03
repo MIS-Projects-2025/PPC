@@ -1,3 +1,4 @@
+import { useNowSeconds } from "@/Hooks/LoadingPlan/useNowSeconds";
 import { memo, useContext } from "react";
 import { TableActionsContext } from "./TableActionsContext";
 
@@ -20,32 +21,48 @@ const FlameIcon = () => (
     </svg>
 );
 
-export const BakingBadge = memo(function BakingBadge({ oven }) {
-    const title = oven != null && oven !== "" ? `Currently baking in oven ${oven}` : "Currently baking";
+const pad = (n) => String(n).padStart(2, "0");
+const fmt = (s) => `${Math.floor(s / 3600)}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+
+function BakeCountdown({ endsAt }) {
+    const nowSec = useNowSeconds();
+    const left = Math.round(endsAt / 1000) - nowSec;
+
     return (
-        <span className="bake-pill" title={title} role="status" aria-label={title}>
+        <span className="tabular-nums">
+            {left > 0 ? fmt(left) : "Done"}
+        </span>
+    );
+}
+
+export const BakingBadge = memo(function BakingBadge({ info }) {
+    const oven = info?.oven;
+    const title = oven != null && oven !== "" ? `Currently baking in oven ${oven}` : "Currently baking";
+
+    return (
+        <span className="bake-pill" title={title}>
             <span className="bake-pill__clip" aria-hidden="true" />
             <FlameIcon />
-            <span className="bake-pill__label">Baking</span>
+            {info?.endsAt != null ? (
+                <BakeCountdown endsAt={info.endsAt} />
+            ) : (
+                <span className="bake-pill__label">Baking</span>
+            )}
         </span>
     );
 });
 
-/**
- * Wraps a status cell's content and appends the baking pill when the lot is
- * in an oven. Renders children untouched otherwise (no layout change).
- */
 export function WithBakeIndicator({ row, children }) {
     const { bakingLots } = useContext(TableActionsContext) ?? {};
     if (!bakingLots || !row.lot_id || row.entry_type === "block" || row.block_label) return children;
 
-    const key = normalizeLotId(row.lot_id);
-    if (!bakingLots.has(key)) return children;
+    const info = bakingLots.get(normalizeLotId(row.lot_id));
+    if (!info) return children;
 
     return (
         <div className="flex items-center gap-1 w-full h-full">
             <div className="min-w-0 flex-1 h-full overflow-hidden">{children}</div>
-            <BakingBadge oven={bakingLots.get(key)} />
+            <BakingBadge info={info} />
         </div>
     );
 }

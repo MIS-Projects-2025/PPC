@@ -667,13 +667,15 @@ export default function Deemo({
 
     );
 
-    const bakingLots = useMemo(
-        () =>
-            new Map(
-                Object.entries(serverBakingLots ?? {}).map(([lotId, oven]) => [normalizeLotId(lotId), oven]),
-            ),
-        [serverBakingLots],
-    );
+    const bakingLots = useMemo(() => {
+        const fetchedAt = Date.now(); // anchor: the moment the data arrived
+        return new Map(
+            Object.entries(serverBakingLots ?? {}).map(([lotId, b]) => [
+                normalizeLotId(lotId),
+                { oven: b.oven, endsAt: b.remaining == null ? null : fetchedAt + b.remaining * 1000 },
+            ]),
+        );
+    }, [serverBakingLots]);
 
     const tableActionsValue = useMemo(
         () => ({
