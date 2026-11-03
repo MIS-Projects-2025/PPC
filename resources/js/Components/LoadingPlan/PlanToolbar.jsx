@@ -1,6 +1,5 @@
 import { DATA_INTEGRITY_MODAL_ID, TabBadge } from "@/Components/LoadingPlan/DataIntegrityModal";
 import interactiveCursorClasses from "@/Components/LoadingPlan/interactiveCursorClasses";
-import { NON_MACHINES_MODAL_ID } from "@/Components/LoadingPlan/NonMachinesModal";
 import ScrollableTabs from "@/Components/LoadingPlan/ScrollableTabs";
 import { getStatusMessage } from "@/Constants/wipStatus.js";
 import { showModal } from "@/Lib/LoadingPlan/modal";
@@ -136,10 +135,6 @@ export function PlanActionsBar({
                             Jump to…
                         </button>
                     </>
-                )}
-
-                {!readOnly && (
-                    <button className="btn btn-sm" onClick={() => showModal(NON_MACHINES_MODAL_ID)}>Non-machines</button>
                 )}
 
                 {!readOnly && (

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\NonMachine;
 use App\Models\QdnMachine;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -9,7 +10,7 @@ use App\Models\MachinePlatformCapacityBand;
 
 class LoadingPlanSettingsController extends Controller
 {
-    public const SECTIONS = ['capacity', 'capacity-bands', 'package-groups'];
+    public const SECTIONS = ['capacity', 'capacity-bands', 'package-groups', 'non-machines', 'bosch-parts'];
 
     public function index(string $section = 'capacity'): Response
     {
@@ -24,6 +25,9 @@ class LoadingPlanSettingsController extends Controller
                 : [],
             'bands'    => $section === 'capacity-bands'
                 ? MachinePlatformCapacityBand::orderBy('platform')->orderBy('qty_min')->get()
+                : [],
+            'nonMachines' => $section === 'non-machines'
+                ? NonMachine::orderBy('location')->orderBy('name')->get(['id', 'name', 'location'])
                 : [],
         ]);
     }

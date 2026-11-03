@@ -15,7 +15,6 @@ import JumpToMachineModal from "@/Components/LoadingPlan/JumpToMachineModal";
 import { TableInteractionContext } from "@/Components/LoadingPlan/MachineHeaderBar";
 import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import MissingPartsModal from "@/Components/LoadingPlan/MissingPartsModal";
-import NonMachinesModal from "@/Components/LoadingPlan/NonMachinesModal";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import { PlanActionsBar, PlanStatusAlert, PlanTabsBar } from "@/Components/LoadingPlan/PlanToolbar";
 import PullPickupsModal, { PULL_PICKUPS_MODAL_ID } from "@/Components/LoadingPlan/PullPickupsModal";
@@ -305,7 +304,7 @@ export default function Deemo({
             date, selectedLocation, setIsDirty, clearSelection, setBucketList,
         });
 
-    const { nonMachineList, createNonMachine, renameNonMachine, deleteNonMachine } = useNonMachineOperations({
+    const { nonMachineList, renameNonMachine, deleteNonMachine } = useNonMachineOperations({
         store: useLoadingPlanStore, serverNonMachines, update, beginWrite, withUpdating, mutate, toast,
         date, selectedLocation, setIsDirty,
     });
@@ -413,7 +412,7 @@ export default function Deemo({
     // ── row indexes, tab matching, display rows ──────────────────────────
     const {
         rowsByMachine, rowsByBucket, machineTotalDoable, machineTotalQuantity,
-        nonMachineRowCounts, orphanMachines, missingPartCount,
+        orphanMachines, missingPartCount,
     } = useRowIndex(dataRows, knownMachineNames);
 
     const jumpEntries = useMemo(
@@ -1060,16 +1059,6 @@ export default function Deemo({
                         history={schedulerHistory}
                         beginWrite={beginWrite}
                         holdLock={holdLock}
-                    />
-
-                    <NonMachinesModal
-                        nonMachines={nonMachineList}
-                        rowCounts={nonMachineRowCounts}
-                        location={selectedLocation}
-                        disabled={writesLocked}
-                        onCreate={createNonMachine}
-                        onRename={renameNonMachine}
-                        onDelete={deleteNonMachine}
                     />
 
                     <PullPickupsModal pool={pickupPool} date={date} location={selectedLocation} disabled={writesLocked} />

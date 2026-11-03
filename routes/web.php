@@ -16,6 +16,7 @@ use App\Http\Controllers\{
     F3RawPackageController,
     AnalogCalendarController,
     ImportTraceController,
+    BoschPartController,
     MachineController,
     PackageBodySizeCapacityController,
     PackageCapacityController,
@@ -137,6 +138,11 @@ Route::prefix('loading-plan')->name('loading-plan.')->group(function () {
     Route::patch('non-machines/{nonMachine}', [NonMachineController::class, 'update'])->name('non-machines.update');
     Route::delete('non-machines/{nonMachine}', [NonMachineController::class, 'destroy'])->name('non-machines.destroy');
     Route::patch('non-machines/{nonMachine}/start', [NonMachineController::class, 'setStart'])->name('non-machines.start');
+
+    Route::get('bosch-parts', [BoschPartController::class, 'index'])->name('bosch-parts.index');
+    Route::post('bosch-parts', [BoschPartController::class, 'store'])->name('bosch-parts.store');
+    Route::patch('bosch-parts/{boschPart}', [BoschPartController::class, 'update'])->name('bosch-parts.update');
+    Route::delete('bosch-parts/{boschPart}', [BoschPartController::class, 'destroy'])->name('bosch-parts.destroy');
 
     Route::post('entries/{id}/rework', [LoadingPlanEntryController::class, 'rework'])->name('entries.rework');
 

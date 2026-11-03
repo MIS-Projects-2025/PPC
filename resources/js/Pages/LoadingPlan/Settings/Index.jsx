@@ -1,7 +1,9 @@
 import { Head, Link, router } from '@inertiajs/react';
 import { BiArrowBack } from 'react-icons/bi';
+import BoschPartSettings from './BoschPartSettings';
 import CapacityBandSettings from './CapacityBandSettings';
 import CapacitySettings from './CapacitySettings';
+import NonMachineSettings from './NonMachineSettings';
 import PackageGroupSettings from './PackageGroupSettings';
 
 // red https://claude.ai/chat/4cf4cbb4-5c0d-4b87-bdc0-102fc60fee59
@@ -10,6 +12,8 @@ const SECTIONS = [
     { key: 'capacity', label: 'Machine Capacity', href: '/loading-plan/settings/capacity' },
     { key: 'capacity-bands', label: 'Capacity Bands', href: '/loading-plan/settings/capacity-bands' },
     { key: 'package-groups', label: 'Package Groups', href: '/loading-plan/settings/package-groups' },
+    { key: 'non-machines', label: 'Non-machines', href: '/loading-plan/settings/non-machines' },
+    { key: 'bosch-parts', label: 'Bosch Parts', href: '/loading-plan/settings/bosch-parts' },
 ];
 
 const goBack = () => {
@@ -17,7 +21,7 @@ const goBack = () => {
     else router.visit('/loading-plan'); // opened directly / in a new tab: nothing to go back to
 };
 
-export default function Index({ section = 'capacity', machines = [], bands = [] }) {
+export default function Index({ section = 'capacity', machines = [], bands = [], nonMachines = [] }) {
     const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
 
     return (
@@ -30,7 +34,7 @@ export default function Index({ section = 'capacity', machines = [], bands = [] 
                             <BiArrowBack size={16} />
                         </button>
                         <h1 className="text-lg font-semibold">Settings</h1>
-                    </div> 
+                    </div>
 
                     <ul className="menu w-full gap-1 p-0">
                         {SECTIONS.map((s) => (
@@ -48,6 +52,8 @@ export default function Index({ section = 'capacity', machines = [], bands = [] 
                     {current.key === 'capacity' && <CapacitySettings machines={machines} />}
                     {current.key === 'capacity-bands' && <CapacityBandSettings initial={bands} />}
                     {current.key === 'package-groups' && <PackageGroupSettings />}
+                    {current.key === 'non-machines' && <NonMachineSettings nonMachines={nonMachines} />}
+                    {current.key === 'bosch-parts' && <BoschPartSettings />}
                 </main>
             </div>
         </>

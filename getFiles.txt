@@ -1,4 +1,11 @@
-names=(
+# Entries can be:
+#   - a bare name        -> "StatusBadge"  (searched recursively as .php/.js/.jsx/.css)
+#   - a relative file    -> 'resources\js\Pages\LoadingPlan\Settings\CapacityBandSettings.jsx'
+#   - a relative folder  -> 'resources/js/Pages/LoadingPlan/Settings'  (all php/js/jsx/css inside)
+# Anything containing a slash (or starting with ./) is treated as a path.
+# Use SINGLE quotes for backslash paths so bash doesn't eat the backslashes.
+
+targets=(
   # ---- PHP (matched in your output) ----
   # "LotSourceService"
   # "ProcessTraveler"
@@ -31,26 +38,34 @@ names=(
   # "LotPrioritySorter"
   # "SchedulerService"
 
+  # Models
+  "BoschPart"
+
+  # web
+  "routes\web.php"
+
   # ---- Non-PHP (JS/JSX, classified by naming; none matched) ----
   "Deemo"
   "columns"
+  "NonMachinesModal"
+  "PlanActionsBar"
   "StatusBadge"
-  "loading-plan" # css
-  "DroppableRow"
+  # "loading-plan" # css
+  # "DroppableRow"
 
-  "MachineSelectionGrid"
-  "PlanToolbar"
-  "SelectionToolbar"
-  "RowHoverTools"
-  "TransferMachinePicker"
-  "StickyHeaderOverlay"
-  "tabs"
-  "buildDisplayRows"
-  "columnConfig"
-  "columnSizing"
-  "rowPredicates"
-  "splitMergeApi"
-  "CellEditor"
+  # "MachineSelectionGrid"
+  # "PlanToolbar"
+  # "SelectionToolbar"
+  # "RowHoverTools"
+  # "TransferMachinePicker"
+  # "StickyHeaderOverlay"
+  # "tabs"
+  # "buildDisplayRows"
+  # "columnConfig"
+  # "columnSizing"
+  # "rowPredicates"
+  # "splitMergeApi"
+  # "CellEditor"
 
   "loadingPlanSchedule"
   "TableActionsContext"
@@ -59,53 +74,89 @@ names=(
   "helpers"
   
   # hooks
-  "useColumnWidths"
-  "useDoableOperations"
-  "useEntryOperations"
-  "useLoadingPlanShortcuts"
-  "useRowIndex"
-  "useWriteLock"
-  "useNonMachineOperations"
-  "useSplitMergeOperations"
-  "useStickyGroupHeader"
-  "useDragReorder"
-  "useBulkOperations"
-  "useMutation"
-  "useRowHoverInsert"
-  "useUndoRedoSync"
-  "useDialogOpen"
-  "useBucketOperations"
-  "usePersistedSet"
-  "useMachineJump"
-  "useCellEditPersistence"
+  # "useColumnWidths"
+  # "useDoableOperations"
+  # "useEntryOperations"
+  # "useLoadingPlanShortcuts"
+  # "useRowIndex"
+  # "useWriteLock"
+  # "useNonMachineOperations"
+  # "useSplitMergeOperations"
+  # "useStickyGroupHeader"
+  # "useDragReorder"
+  # "useBulkOperations"
+  # "useMutation"
+  # "useRowHoverInsert"
+  # "useUndoRedoSync"
+  # "useDialogOpen"
+  # "useBucketOperations"
+  # "usePersistedSet"
+  # "useMachineJump"
+  # "useCellEditPersistence"
 
   # MODAL
-  "AutoSortModal"
-  "CapacityOverviewModal"
-  "ColumnVisibilityModal"
-  "MissingPartsModal"
-  "QuickAddModals"
-  "SchedulerModal"
-  "modal"
-  "TransferModal"
-  "SplitHistoryModal"
-  "MergeHistoryModal"
+  # "AutoSortModal"
+  # "CapacityOverviewModal"
+  # "ColumnVisibilityModal"
+  # "MissingPartsModal"
+  # "QuickAddModals"
+  # "SchedulerModal"
+  # "modal"
+  # "TransferModal"
+  # "SplitHistoryModal"
+  # "MergeHistoryModal"
+
+  # ---- paths (file or folder) ----
+  # 'resources\js\Pages\LoadingPlan\Settings\CapacityBandSettings.jsx'
+  'resources\js\Pages\LoadingPlan\Settings'
+  # './app'
 )
 
-for name in "${names[@]}"; do
-  find . \
-    -type d \( -name node_modules -o -name vendor \) -prune -o \
-    -type f \( \
-      -name "$name.php" \
-      -o -name "$name.js" \
-      -o -name "$name.jsx" \
-      -o -name "$name.css" \
-    \) -print0
+
+PRUNE=( -type d \( -name node_modules -o -name vendor \) -prune -o )
+EXT_MATCH=( \( -name '*.php' -o -name '*.js' -o -name '*.jsx' -o -name '*.css' \) )
+
+resolve() {
+  local raw="$1"
+  local t="${raw//\\//}"          # backslashes -> forward slashes
+  local is_path=0
+  [[ "$t" == */* ]] && is_path=1  # also true for ./foo
+  t="${t#./}"                     # strip leading ./
+  t="${t%/}"                      # strip trailing /
+
+  if (( is_path )); then
+    if [[ -f "$t" ]]; then
+      printf '%s\0' "$t"
+    elif [[ -d "$t" ]]; then
+      find "$t" "${PRUNE[@]}" -type f "${EXT_MATCH[@]}" -print0
+    else
+      echo "WARN: path not found: $raw" >&2
+    fi
+  elif [[ -d "$t" && "$raw" == ./* ]]; then
+    find "$t" "${PRUNE[@]}" -type f "${EXT_MATCH[@]}" -print0
+  else
+    find . "${PRUNE[@]}" -type f \( \
+        -name "$t.php" -o -name "$t.js" -o -name "$t.jsx" -o -name "$t.css" \
+      \) -print0
+  fi
+}
+
+for t in "${targets[@]}"; do
+  resolve "$t"
 done |
-while IFS= read -r -d '' file; do
-  echo "## FILE: $file"
-  echo '```'
-  cat "$file"
-  echo '```'
-  echo
-done | iconv -f UTF-8 -t UTF-16LE | clip.exe
+{
+  declare -A seen
+  count=0
+  while IFS= read -r -d '' file; do
+    file="${file#./}"
+    [[ -n "${seen[$file]}" ]] && continue   # dedupe (name + folder overlap)
+    seen[$file]=1
+    ((count++))
+    echo "## FILE: $file"
+    echo '```'
+    cat "$file"
+    echo '```'
+    echo
+  done
+  echo "Copied $count file(s)" >&2
+} | iconv -f UTF-8 -t UTF-16LE | clip.exe
