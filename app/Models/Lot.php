@@ -75,7 +75,7 @@ class Lot extends Model
 
     public function getAgeDaysAttribute(): int
     {
-        return (int) $this->received_at->diffInDays(now());
+        return (int) \Carbon\Carbon::parse($this->received_at, 'UTC')->diffInDays(now());
     }
 
     public function isAging(): bool
@@ -101,8 +101,8 @@ class Lot extends Model
     public function scopeToday($query)
     {
         return $query->whereBetween('received_at', [
-            today()->startOfDay()->utc(),
-            today()->endOfDay()->utc(),
+            now('Asia/Manila')->startOfDay()->utc(),
+            now('Asia/Manila')->endOfDay()->utc(),
         ]);
     }
 

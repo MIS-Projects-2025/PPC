@@ -1,7 +1,7 @@
 import CancellableActionButton from "@/Components/CancellableActionButton";
 import { LOT_UPSTREAM_MODES } from "@/Constants/lotUpstreamModes";
 import useBarcodeScanner from "@/Hooks/useBarcodeScanner";
-import { useLotActions } from "@/Hooks/useLotActions";
+import { toQty, useLotActions } from "@/Hooks/useLotActions";
 import { useToast } from "@/Hooks/useToast";
 import { playNotification } from "@/Service/AudioService";
 import { useLotStore } from "@/Store/useLotStore";
@@ -84,23 +84,25 @@ function ScanPanel({ lotActions }) {
         mutateLotCancel,
     } = lotActions;
     const inputRefs = useRef({});
-    const canConfirm = pendingLotToBeAdded?.lot_id?.trim();
+    const canConfirm =
+        Boolean(pendingLotToBeAdded?.lot_id?.trim()) &&
+        toQty(pendingLotToBeAdded?.qty) !== null;
 
     const handleConfirm = async () => {
-        if (!pendingLotToBeAdded?.lot_id?.trim()) {
+        if (!canConfirm) {
             return;
         }
 
         if (isEditMode) {
             editLot({
                 ...pendingLotToBeAdded,
-                qty: parseInt(pendingLotToBeAdded.qty) || 0,
+                qty: toQty(pendingLotToBeAdded.qty),
                 slot_ids: slotPendingLot.map((s) => s.id),
             });
         } else {
             addPendingLot({
                 ...pendingLotToBeAdded,
-                qty: parseInt(pendingLotToBeAdded.qty) || 0,
+                qty: toQty(pendingLotToBeAdded.qty),
                 slot_ids: slotPendingLot.map((s) => s.id),
             });
             await confirmLot();
@@ -204,7 +206,7 @@ function ScanPanel({ lotActions }) {
                                 pendingLotToBeAdded.stagings.length - 1;
                             const withdrawer = staging.withdrawer;
 
-                            const byRack = staging.positions.reduce(
+                            const byRack = (staging.positions ?? []).reduce(
                                 (acc, pos) => {
                                     let rackLabel =
                                         pos.rack_slot?.rack?.label ?? "?";
@@ -212,7 +214,7 @@ function ScanPanel({ lotActions }) {
                                         rackLabel =
                                             "DELETED - " +
                                             rackLabel
-                                                .replace("__deleted__", "")
+                                                .replace(/__deleted__[0-9]*/, "")
                                                 .trim();
                                     }
 
@@ -377,7 +379,10 @@ function ScanPanel({ lotActions }) {
 function LastRunBadge({ latestRun }) {
     if (!latestRun?.end_time) return null;
 
-    const absolute = format(new Date(latestRun.end_time), "MMM d, yyyy h:mm a");
+    const endDate = new Date(latestRun.end_time);
+    if (isNaN(endDate.getTime())) return null;
+
+    const absolute = format(endDate, "MMM d, yyyy h:mm a");
 
     return (
         <>
@@ -469,7 +474,7 @@ function ReceivedList({ onEdit, lotActions }) {
                                                         lot.stagings.length - 1;
 
                                                     const byRack =
-                                                        staging.positions.reduce(
+                                                        (staging.positions ?? []).reduce(
                                                             (acc, pos) => {
                                                                 let rackLabel =
                                                                     pos
@@ -485,10 +490,7 @@ function ReceivedList({ onEdit, lotActions }) {
                                                                     rackLabel =
                                                                         "DELETED - " +
                                                                         rackLabel
-                                                                            .replace(
-                                                                                "__deleted__",
-                                                                                "",
-                                                                            )
+                                                                            .replace(/__deleted__[0-9]*/, "")
                                                                             .trim();
                                                                 }
 
@@ -694,8 +696,6 @@ export default function LotsUpstream({
     productionLine,
     productionLineId,
 }) {
-
-    console.log("LOG ~ LotsUpstream.jsx:698 ~ LotsUpstream ~ productionLine:", productionLine);
     const currentTheme = LOCATION_THEMES[(String (productionLine)).toUpperCase()] || "bg-base-200 border-base-content";
 
     const toast = useToast();
@@ -791,7 +791,7 @@ export default function LotsUpstream({
         );
 
         try {
-            downloadLots(
+            await downloadLots(
                 route("api.download.downloadLots", {
                     productionLine: productionLine,
                 }),
@@ -871,12 +871,22 @@ export default function LotsUpstream({
         }
     }, [scanResult]);
 
+    useEffect(() => {
+        const map = {};
+        (racks ?? []).forEach((rack) => {
+            (rack.slots ?? []).forEach((slot) => {
+                map[slot.id] = slot;
+            });
+        });
+        setSlots(map);
+    }, [racks]);
+
     const handleEdit = (lot) => {
         setIsEditMode(true);
         setEditingLot(lot);
 
         clearSlotPendingLot();
-        Object.values(lot.slots).forEach((slot) => {
+        Object.values(lot.slots ?? {}).forEach((slot) => {
             toggleSlotPendingLot(slot);
         });
 
@@ -887,7 +897,6 @@ export default function LotsUpstream({
         if (e.target?.dataset?.noScanner !== undefined) return;
 
         const text = currentBuffer.replace(/^\([^)]*\)/gm, "");
-        console.log("🚀 ~ LotsUpstream ~ regex:", text);
         const parsed = parseLotScanInput(text);
         const type = parsed.type;
 
@@ -895,7 +904,7 @@ export default function LotsUpstream({
             type !== LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE &&
             lotActions.focusedField
         ) {
-            const current = pendingLotToBeAdded[lotActions.focusedField] ?? "";
+            const current = useLotStore.getState().pendingLotToBeAdded[lotActions.focusedField] ?? "";
             editPendingLot(lotActions.focusedField, current.slice(0, -1));
         }
 
@@ -960,6 +969,13 @@ export default function LotsUpstream({
     //     return () => window.Echo.leave("lot-updates");
     // }, []);
 
+    const handleWithdrawerClose = () => {
+        const s = useLotStore.getState();
+        s.clearWithdrawerId(); // a leftover ID would be attributed to the NEXT release
+        s.clearLotToBeReleased();
+        s.setScanResult(null); // otherwise OPEN_WITHDRAWAL lingers and the next scan is ignored
+    };
+
     const goToPage = (page) => {
         router.reload({
             data: {
@@ -989,6 +1005,7 @@ export default function LotsUpstream({
         const handleClose = () => {
             lotActions.resetFocus();
             setScanResult(LOT_UPSTREAM_MODES.CLOSE);
+            useLotStore.getState().resetAll();
             setIsEditMode(false);
         };
 
@@ -1001,8 +1018,9 @@ export default function LotsUpstream({
             <Toaster position="top-left" />
 
             <dialog
-                ref={rackSelectionDialogRef}
+                ref={withdrawerDialogRef}
                 id={WITHDRAWER_SELECTION_ID}
+                onClose={handleWithdrawerClose}
                 className="modal z-50"
             >
                 <div className="modal-box w-3/12 border border-base-content/50 max-w-[calc(100vw-4rem)]">
@@ -1024,8 +1042,14 @@ export default function LotsUpstream({
                                 ref={withdrawerIdInputRef}
                                 autoFocus
                                 placeholder="Employee ID"
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        lotActions.releaseLot();
+                                    }
+                                }}
                                 className="input"
-                                value={withdrawerId}
+                                value={withdrawerId ?? ""}
                                 onChange={(e) =>
                                     setWithdrawerId(
                                         e.target.value.replace(/^0+/, ""),
@@ -1344,7 +1368,7 @@ export default function LotsUpstream({
                                     positionAnchor: "--anchor-status-select",
                                 }}
                             >
-                                <li onClick={() => set("status", null)}>
+                                <li onClick={() => set("status", "")}>
                                     <a>All Status</a>
                                 </li>
                                 <li onClick={() => set("status", "staged")}>

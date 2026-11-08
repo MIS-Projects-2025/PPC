@@ -50,7 +50,14 @@ class RackSlotController extends Controller
     public function update(int $id)
     {
         request()->validate([
-            'label' => 'required|string|max:10',
+            'label' => [
+                'required',
+                'string',
+                'max:10',
+                \Illuminate\Validation\Rule::unique('rack_slots', 'label')
+                    ->where('rack_id', $this->repo->find($id)->rack_id)
+                    ->ignore($id),
+            ],
         ]);
 
         $updated = $this->repo->update($id, ['label' => strtoupper(request('label'))]);
@@ -74,7 +81,7 @@ class RackSlotController extends Controller
 
     public function markFull(int $id)
     {
-        $by = session('emp_data')['emp_id'] ?? 'system';
+        $by = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
         $this->service->markFull($id, $by);
         return response()->json([
             'status'  => 'success',

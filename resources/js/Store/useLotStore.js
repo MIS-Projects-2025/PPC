@@ -88,6 +88,7 @@ export const useLotStore = create((set, get) => ({
 			parsed.type === LOT_UPSTREAM_MODES.TYPE_SLOT ||
 			parsed.type === LOT_UPSTREAM_MODES.TYPE_FIELD_SELECT ||
 			parsed.type === LOT_UPSTREAM_MODES.TYPE_COMMAND ||
+			parsed.type === LOT_UPSTREAM_MODES.TYPE_LOT ||
 			parsed.value.startsWith("[>>")
 		) {
 			return;
@@ -96,7 +97,7 @@ export const useLotStore = create((set, get) => ({
 		set((state) => ({
 			pendingLotToBeAdded: {
 				...state.pendingLotToBeAdded,
-				[key]: parsed.value,
+                [key]: rawInput,
 			},
 		}));
 	},

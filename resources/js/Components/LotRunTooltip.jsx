@@ -14,10 +14,10 @@ export default function LotRunTooltip({ id, latestRun }) {
     const safeStr = (val) => (val != null && val !== "" ? val : "—");
 
     const totalRejected =
-        (latestRun.reject_lead ?? 0) +
-        (latestRun.reject_mark ?? 0) +
-        (latestRun.reject_pvi ?? 0) +
-        (latestRun.reject_other ?? 0);
+        (Number(latestRun.reject_lead) || 0) +
+        (Number(latestRun.reject_mark) || 0) +
+        (Number(latestRun.reject_pvi) || 0) +
+        (Number(latestRun.reject_other) || 0);
 
     const rejectDetail = [
         latestRun.reject_lead != null && `lead ${latestRun.reject_lead}`,

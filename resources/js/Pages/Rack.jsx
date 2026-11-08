@@ -1,4 +1,5 @@
 import { useToast } from "@/Hooks/useToast";
+import { router } from "@inertiajs/react";
 import clsx from "clsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaTimes } from "react-icons/fa";
@@ -46,14 +47,14 @@ export default function RackManagement({
 	const storeRacks = useInternalStore((state) => state.racks);
 
 	useEffect(() => {
-		initializeRacks(racks);
+        initializeRacks(racks ?? []);
 	}, [racks, initializeRacks]);
 
 	useEffect(() => {
-		const id = requestIdleCallback(() => setPrimedVisible(true), {
+		const id = (window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1)))(() => setPrimedVisible(true), {
 			timeout: 2000,
 		});
-		return () => cancelIdleCallback(id);
+		return () => (window.cancelIdleCallback ?? clearTimeout)(id);
 	}, []);
 
 	useEffect(() => {
@@ -137,7 +138,7 @@ function RackGrid({
 		if (!selectedSlot) return new Set();
 		const lots = occupancy[String(selectedSlot.id)] ?? [];
 		return new Set(lots.flatMap((l) => l.slot_ids));
-	}, [selectedSlot]);
+	}, [selectedSlot, occupancy]);
 
 	return (
 		<section
@@ -159,12 +160,13 @@ function RackGrid({
 			<div className="space-y-4 pb-2">
 				{(() => {
 					const entries = Object.entries(rack.shelves);
-					const slotCount = entries[0]?.[1]?.length ?? 0;
+					const slotCount = Math.max(0, ...entries.map(([, slots]) => slots.length));
 
 					return Array.from({ length: slotCount }, (_, i) => (
 						<div key={i} className="flex">
 							{entries.map(([rowLabel, rowSlots]) => {
 								const slot = rowSlots[i];
+								if (!slot) return <div key={rowLabel} className="min-w-15 min-h-12" />;
 								// console.log("🚀 ~ SLOT SLOT ~ slot:", slot);
 								return (
 									<SlotButton
@@ -200,6 +202,7 @@ const SlotButton = React.memo(function SlotButton({
 	const isDetailedView = useInternalStore((state) => state.isDetailedView);
 	const updateSlot = useInternalStore((state) => state.updateSlot);
 	const [hovered, setHovered] = useState(false);
+	const toast = useToast();
 	const hasLots = lots.length > 0;
 	const slotLabel = slot?.label || slot?.meta?.label;
 	const isMultiLot = lots.length > 1;
@@ -226,7 +229,7 @@ const SlotButton = React.memo(function SlotButton({
 			const response = await fetch(url, {
 				method: "PATCH",
 				headers: {
-					Accept: "application/json",
+					Accept: "application/json", "Content-Type": "application/json",
 					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
 						?.content,
 				},
@@ -237,20 +240,22 @@ const SlotButton = React.memo(function SlotButton({
 
 			if (response.ok) {
 				updateSlot(slot.id, { is_manually_full: nextValue });
+				router.reload({ only: ["racks", "occupancy"], preserveState: true, preserveScroll: true });
 			}
 
-			const data = await response.json();
-			console.log(data);
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) toast.error(data?.message || "Could not update the slot. Please try again.");
 		} catch (error) {
 			console.error(error);
+			toast.error("Network error. The slot was not updated.");
 		}
 	};
 
 	return (
-		<button
-			type="button"
+		<div
+            role="button"
 			onClick={() => {
-				if (isManuallyFull) return;
+				if (isManuallyFull || !isSlotEnabled) return;
 
 				setSelectedSlot(slot);
 				handleSlotClick(slot);
@@ -291,7 +296,7 @@ const SlotButton = React.memo(function SlotButton({
 					className={clsx(
 						"btn text-neutral hover:bg-primary bg-accent z-100 text-sm rounded",
 					)}
-					onClick={() => handleMarkSlotFullToggle()}
+					onClick={(e) => { e.stopPropagation(); handleMarkSlotFullToggle(); }}
 				>
 					{isManuallyFull ? "Mark as Empty" : "Mark as Full"}
 				</button>
@@ -351,7 +356,7 @@ const SlotButton = React.memo(function SlotButton({
 						Empty
 					</span>
 				))}
-		</button>
+		</div>
 	);
 });
 
@@ -395,7 +400,7 @@ function SlotDetailPanel({}) {
 				</div>
 
 				<div className="space-y-2 px-4 overflow-y-auto">
-					{slot?.lots.length > 0 ? (
+					{slot?.lots?.length > 0 ? (
 						slot?.lots.map((lot) => (
 							<div
 								key={lot.id}

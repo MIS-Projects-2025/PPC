@@ -32,7 +32,7 @@ const Pagination = ({
 				{links?.map((link, index) => {
 					const page = link.url
 						? parseInt(new URL(link.url).searchParams.get("page"))
-						: currentPage;
+						: null;
 
 					return (
 						<button

@@ -9,10 +9,15 @@ dayjs.extend(timezone);
 //   return dayjs.utc(utcString).local().format('MMM D, YYYY h:mm A');
 // };
 const formatLocalTime = (utcString) => {
-  const normalized = utcString.endsWith('Z') ? utcString : utcString + 'Z';
-  return new Date(normalized).toLocaleString('en-PH', {
+  if (!utcString) return "—";
+  const raw = String(utcString).trim().replace(" ", "T");
+  const normalized = /(Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : raw + "Z";
+  const date = new Date(normalized);
+  if (isNaN(date.getTime())) return "—";
+  return date.toLocaleString('en-PH', {
     dateStyle: 'short',
     timeStyle: 'short',
+    timeZone: 'Asia/Manila',
   });
 };
 

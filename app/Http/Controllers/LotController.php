@@ -122,14 +122,25 @@ class LotController extends Controller
         $data = request()->validate([
             'lot_id'    => 'required|string|max:50',
             'partname' => 'nullable|string|max:255',
-            'qty'       => 'nullable|integer|min:1',
+            'qty'       => 'required|integer|min:1|max:9999999',
             'slot_ids'  => 'sometimes|array|min:0',
-            'slot_ids.*' => 'sometimes|integer|exists:rack_slots,id',
+            'slot_ids.*' => ['sometimes', 'integer', \Illuminate\Validation\Rule::exists('rack_slots', 'id')->whereNull('deleted_at')],
         ]);
 
-        $data['received_by'] = session('emp_data')['emp_id'] ?? 'system';
+        $data['received_by'] = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
 
-        $result = $this->lotService->receive($data);
+        try {
+            $result = $this->lotService->receive($data);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // 1062 = duplicate key: two terminals received the same lot at the same instant
+            if (($e->errorInfo[1] ?? null) === 1062) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'lot_id' => 'This lot was just received on another terminal. Refresh and check the list.',
+                ]);
+            }
+
+            throw $e;
+        }
 
         return response()->json([
             'status'  => 'success',
@@ -140,13 +151,14 @@ class LotController extends Controller
 
     // POST /lots/{id}/remove
     // Manual removal from rack — outside normal release flow
+    // deprecated, not used
     public function remove(int $id)
     {
         request()->validate([
             'reason' => 'required|string|max:500',
         ]);
 
-        $removedBy = session('emp_data')['emp_id'] ?? 'system';
+        $removedBy = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
 
         $this->lotService->remove($id, $removedBy, request('reason'));
 
@@ -158,11 +170,19 @@ class LotController extends Controller
 
     public function release()
     {
-        $releasedBy = session('emp_data')['emp_id'] ?? 'system';
+        $releasedBy = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
 
         $data = request()->validate([
             'lot_id'    => 'required|string|max:50',
-            'withdrawer_id' => 'sometimes|nullable|string|max:50',
+            'withdrawer_id' => [
+                'required',
+                'string',
+                'max:50',
+                // a typo'd badge number would otherwise be written to the audit trail permanently
+                // the masterlist isn't reliable enough, I can't enforce it as a hard rule. so commented out.
+                // fn($attribute, $value, $fail) => \App\Models\Employee::where('EMPLOYID', $value)->exists()
+                //     || $fail('Unknown employee ID. Re-scan the badge.'),
+            ],
         ]);
 
         $releasedLot = $this->lotService->release($data['lot_id'], $data['withdrawer_id'] ?? "", $releasedBy);
@@ -177,20 +197,44 @@ class LotController extends Controller
 
     public function update(int $id)
     {
-        $userId = session('emp_data')['emp_id'] ?? null;
+        $userId = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
 
         $data = request()->validate([
-            'lot_id'    => 'sometimes|string|max:50',
+            'lot_id'    => 'sometimes|string|max:50', // i can't assume lot_id is unique, so allow it to be updated
             'partname' => 'sometimes|string|max:255',
-            'qty'       => 'sometimes|integer|min:1',
+            'qty'       => 'sometimes|required|integer|min:1|max:9999999',
             'status'    => 'sometimes|string|in:staged,removed,released',
             'slot_ids'  => 'sometimes|array|min:0',
-            'slot_ids.*' => 'sometimes|integer|exists:rack_slots,id',
+            'slot_ids.*' => ['sometimes', 'integer', \Illuminate\Validation\Rule::exists('rack_slots', 'id')->whereNull('deleted_at')],
         ]);
+
+        // status is owned by receive/release/remove, never by a generic edit
+        unset($data['status']);
+
+        // A released lot has no active positions; re-slotting it would create phantom rack occupancy.
+        if (Lot::whereKey($id)->toBase()->value('status') === 'released') {
+            unset($data['slot_ids']);
+        }
+
+        if (array_key_exists('slot_ids', $data) && empty($data['slot_ids'])) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'slot_ids' => 'A staged lot must keep at least one slot.',
+            ]);
+        }
 
         $data['modified_by'] = $userId;
 
-        $updated = $this->lotRepo->update($id, $data);
+        try {
+            $updated = $this->lotRepo->update($id, $data);
+        } catch (\Illuminate\Database\QueryException $e) {
+            if (($e->errorInfo[1] ?? null) === 1062) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'lot_id' => 'Another staged lot already has this lot ID and part name.',
+                ]);
+            }
+
+            throw $e;
+        }
 
         return response()->json([
             'status' => 'success',
@@ -215,6 +259,8 @@ class LotController extends Controller
             'aging',
             'unslotted',
             'per_page',
+            'sort',
+            'restocked',
         ]);
 
         return $this->lotService->downloadFilteredExport(

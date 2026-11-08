@@ -37,6 +37,10 @@ class LotService
         return DB::transaction(function () use ($data) {
             $now = Carbon::now('UTC');
 
+            // lots can be placed in multiple slots, in different racks.
+
+            $data['slot_ids'] = array_values(array_unique($data['slot_ids'] ?? []));
+
             if (empty($data['slot_ids'])) {
                 throw ValidationException::withMessages([
                     'slot_ids' => 'At least one slot must be selected.',
@@ -45,6 +49,18 @@ class LotService
 
             foreach ($data['slot_ids'] as $slotId) {
                 $slot = $this->slots->find($slotId);
+
+                if (!$slot->rack) {
+                    throw ValidationException::withMessages([
+                        'slot_ids' => "Slot {$slot->label} belongs to a deleted rack.",
+                    ]);
+                }
+
+                if (!$slot->is_active) {
+                    throw ValidationException::withMessages([
+                        'slot_ids' => "Slot {$slot->label} is disabled.",
+                    ]);
+                }
 
                 if (!$slot->isAvailable()) {
                     throw ValidationException::withMessages([
@@ -67,13 +83,20 @@ class LotService
                 ]);
             }
 
-            $productionLineId = $productionLineIds->first();
-
             $wasCreated = false;
 
             $lot = Lot::where('lot_id', $data['lot_id'])
                 ->lockForUpdate()
                 ->first();
+
+            $data['partname'] = filled($data['partname'] ?? null) ? trim($data['partname']) : null;
+
+            // A blank scan must never wipe a known partname on a re-stock.
+            if ($lot && $data['partname'] === null) {
+                $data['partname'] = $lot->partname;
+            }
+
+            $data['qty'] = $data['qty'] ?? $lot?->qty;
 
             if ($lot && $lot->status === 'staged') {
                 throw ValidationException::withMessages([
@@ -117,6 +140,8 @@ class LotService
      * @param  string  $removedBy
      * @param  string  $reason
      * @return void
+     * 
+     * @deprecated This method is not used and may be removed in future versions.
      */
     public function remove(int $lotId, string $removedBy, string $reason): void
     {
@@ -184,6 +209,7 @@ class LotService
                 $staging = LotStaging::where('lot_id', $lot->id)
                     ->whereNull('released_at')
                     ->latest('staged_at')
+                    ->lockForUpdate()
                     ->first();
 
                 if (!$staging) {
@@ -227,7 +253,7 @@ class LotService
                             ->with(['staging', 'rackSlot.rack.productionLine'])
                             ->orderBy('assigned_at'),
                     ])
-                    ->cursor()
+                    ->get()
                     ->sortBy(fn($lot) => strtolower($lot->lot_id))
                     ->flatMap(function ($lot) {
                         return $lot->positions
