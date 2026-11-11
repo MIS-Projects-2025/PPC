@@ -1,3 +1,4 @@
+import { showDidntFitToast } from "@/Components/DidntFitToast";
 import { LOT_UPSTREAM_MODES } from "@/Constants/lotUpstreamModes";
 import { useToast } from "@/Hooks/useToast";
 import { useLotStore } from "@/Store/useLotStore";
@@ -19,6 +20,13 @@ const liveStore = new Proxy(
     {},
     { get: (_target, key) => useLotStore.getState()[key] },
 );
+
+const MAX_BOX_COUNT = 999; // keep in sync with the `max:` rule in LotController
+
+const toBoxCount = (value) => {
+    const n = parseInt(String(value ?? "").replace(/\D/g, ""), 10);
+    return n > 0 && n <= MAX_BOX_COUNT ? n : null;
+};
 
 export const toQty = (value) => {
     const cleaned = String(value ?? "").replace(/[,\s]/g, "");
@@ -111,6 +119,7 @@ export function useLotActions() {
 
     const confirmLot = async () => {
         const { pendingLotToBeAdded, slotPendingLot } = store;
+        const rec = store.recommendation;
         const lotId = pendingLotToBeAdded?.lot_id?.trim();
         const qty = toQty(pendingLotToBeAdded?.qty);
 
@@ -144,6 +153,9 @@ export function useLotActions() {
                     partname: pendingLotToBeAdded.partname?.trim() || null,
                     qty,
                     slot_ids: slotIds,
+                    box_count: toBoxCount(pendingLotToBeAdded.box_count),
+                    dimension_id: Number(pendingLotToBeAdded.dimension_id) || null,
+                    recommendation_id: rec?.id ?? null,
                 },
                 additionalHeaders: {
                     ...(socketId && { "X-Socket-ID": socketId }),
@@ -157,6 +169,20 @@ export function useLotActions() {
                 `${wasCreated ? "Added" : "Re-stocked"} ${lotId} → ${slotLabels}`,
                 toastOptions,
             );
+
+            // Only when the operator went somewhere else than recommended: that is the only case where
+            // "the recommended slot was full" can be true.
+            const recommendedSlots = rec?.slots ?? [];
+            if (
+                rec?.id &&
+                recommendedSlots.length > 0 &&
+                recommendedSlots.some((s) => !slotIds.includes(s.slot_id))
+            ) {
+                showDidntFitToast({
+                    recommendationId: rec.id,
+                    labels: recommendedSlots.map((s) => s.label),
+                });
+            }
 
             if (lot) {
                 if (wasCreated) store.receiveLot(lot);
@@ -257,7 +283,7 @@ export function useLotActions() {
             cancelPrevious: false,
             mutationKey: lotId,
             method: "POST",
-            body: { lot_id: lotId, withdrawer_id: withdrawerId },
+            body: { lot_id: lotId, withdrawer_id: withdrawerId, partname: target?.partname || null },
             additionalHeaders: {
                 ...(socketId && { "X-Socket-ID": socketId }),
             },

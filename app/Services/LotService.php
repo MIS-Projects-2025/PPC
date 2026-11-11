@@ -14,6 +14,7 @@ use Carbon\Carbon;
 use App\Traits\ExportTrait;
 use Illuminate\Support\Facades\Cache;
 use Box\Spout\Writer\Common\Creator\Style\StyleBuilder;
+use App\Models\LotPosition;
 
 class LotService
 {
@@ -23,6 +24,7 @@ class LotService
         protected LotRepositoryInterface         $lots,
         protected LotPositionRepositoryInterface $positions,
         protected RackSlotRepositoryInterface    $slots,
+        protected RecommendationService $recommendations,
     ) {}
 
     /**
@@ -85,11 +87,9 @@ class LotService
 
             $wasCreated = false;
 
-            $lot = Lot::where('lot_id', $data['lot_id'])
-                ->lockForUpdate()
-                ->first();
-
             $data['partname'] = filled($data['partname'] ?? null) ? trim($data['partname']) : null;
+
+            $lot = $this->resolveLot($data['lot_id'], $data['partname']);
 
             // A blank scan must never wipe a known partname on a re-stock.
             if ($lot && $data['partname'] === null) {
@@ -126,10 +126,40 @@ class LotService
                 ]);
             }
 
-            $this->lots->createStaging($lot, $data['slot_ids'], $data['received_by'], $now);
+            // Shadow mode: evaluate against the state BEFORE this placement. Never throws.
+            $shadow = $this->recommendations->shadow(
+                $data['slot_ids'],
+                $data['dimension_id'] ?? null,
+                $data['box_count'] ?? null,
+                $lot->id,
+            );
+
+            $staging = $this->lots->createStaging(
+                $lot,
+                $data['slot_ids'],
+                $data['received_by'],
+                $now,
+                ['dimension_id' => $data['dimension_id'] ?? null, 'box_count' => $data['box_count'] ?? null],
+            );
+
+            $this->recommendations->record($staging, $shadow, $data['recommendation_id'] ?? null);
 
             return ['lot' => $lot->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
         });
+    }
+
+    // The unique key is lot_id + partname, so match on both. A blank partname falls back to lot_id
+    // alone (as before). A lot first stocked without a partname is adopted, not duplicated.
+    private function resolveLot(string $lotId, ?string $partname): ?Lot
+    {
+        $query = Lot::where('lot_id', $lotId)->lockForUpdate();
+
+        if ($partname === null) {
+            return $query->orderByRaw("status = 'staged' desc")->orderByDesc('id')->first();
+        }
+
+        return (clone $query)->where('partname', $partname)->latest('id')->first()
+            ?? $query->whereNull('partname')->latest('id')->first();
     }
 
     /**
@@ -178,7 +208,7 @@ class LotService
      * @param  string  $releasedBy
      * @return Lot
      */
-    public function release(string $lotId, string $withdrawerId, string $releasedBy): Lot
+    public function release(string $lotId, string $withdrawerId, string $releasedBy, ?string $partname = null): Lot
     {
         $lock = Cache::lock("releasing_lot_{$lotId}", 10);
 
@@ -188,9 +218,9 @@ class LotService
             ]);
         }
         try {
-            return DB::transaction(function () use ($lotId, $withdrawerId, $releasedBy) {
+            return DB::transaction(function () use ($lotId, $withdrawerId, $releasedBy, $partname) {
                 $now = Carbon::now('UTC');
-                $lot = $this->lots->findLastStaged($lotId);
+                $lot = $this->lots->findLastStaged($lotId, $partname);
 
                 if (!$lot) {
                     throw ValidationException::withMessages([
@@ -231,8 +261,16 @@ class LotService
                     'released_at' => $now,
                 ])->fresh(['activePositions']);
 
-                if (!empty($rackSlotIds)) {
-                    $this->slots->clearManyFull($rackSlotIds);
+                // Own positions are already released above, so what is left belongs to other lots.
+                $stillOccupied = LotPosition::whereIn('rack_slot_id', $rackSlotIds)
+                    ->whereNull('released_at')
+                    ->pluck('rack_slot_id')
+                    ->all();
+
+                $toClear = array_values(array_diff($rackSlotIds, $stillOccupied));
+
+                if (!empty($toClear)) {
+                    $this->slots->clearManyFull($toClear);
                 }
 
                 return $updated->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);

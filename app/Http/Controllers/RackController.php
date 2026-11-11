@@ -5,11 +5,13 @@ namespace App\Http\Controllers;
 use Illuminate\Http\RedirectResponse;
 use Inertia\Inertia;
 use Inertia\Response;
+use App\Http\Requests\SaveRackFloorMapRequest;
 use App\Models\ProductionLine;
 use App\Models\RackPage;
 use App\Repositories\Interfaces\RackRepositoryInterface;
 use App\Repositories\Interfaces\ProductionLineRepositoryInterface;
 use App\Repositories\Interfaces\RackSlotRepositoryInterface;
+use App\Services\RackFloorMapService;
 use Illuminate\Support\Facades\Log;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 
@@ -20,6 +22,7 @@ class RackController extends Controller
         protected ProductionLineRepositoryInterface $productionLines,
         protected LotPositionRepositoryInterface  $lotPositionRepo,
         protected RackSlotRepositoryInterface $rackSlotRepo,
+        protected RackFloorMapService $floorMaps,
     ) {}
 
     public function index(?string $productionLine = null): Response
@@ -47,7 +50,38 @@ class RackController extends Controller
             'occupancy'       => fn() => $page
                 ? $this->lotPositionRepo->getOccupancyByRackPage($page->id)
                 : collect(),
+            // Top view floor map. null when no production line is selected (no page to attach it to).
+            'floorMap'        => fn() => $page ? $this->floorMaps->forPage($page) : null,
             'productionLines' => $this->productionLines->allActive(),
+        ]);
+    }
+
+    // Floor map editor: one canvas per rack page, so a production line is required.
+    public function layoutEditor(string $productionLine): Response
+    {
+        $page = RackPage::where('key', strtoupper($productionLine))
+            ->firstOrFail();
+
+        return Inertia::render('RackLayoutEditor', [
+            // same racks (with `shelves`) the Rack page gets for this page
+            'racks'    => $this->repo->getAllByRackPage($page->id),
+            'rackPage' => $page,
+            'floorMap' => $this->floorMaps->forPage($page),
+        ]);
+    }
+
+    // Saves the whole floor map of a rack page (canvas size + every block position).
+    public function updateFloorMap(SaveRackFloorMapRequest $request, string $productionLine)
+    {
+        $page = RackPage::where('key', strtoupper($productionLine))
+            ->firstOrFail();
+
+        $floorMap = $this->floorMaps->save($page, $request->validated());
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Floor map saved.',
+            'data'    => $floorMap,
         ]);
     }
 

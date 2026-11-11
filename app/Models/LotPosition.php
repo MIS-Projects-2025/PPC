@@ -19,6 +19,8 @@ class LotPosition extends Model
         'assigned_by',
         'released_at',
         'released_by',
+        'box_count',
+        'presumed_released_at',
     ];
 
     protected $casts = [

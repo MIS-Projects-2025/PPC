@@ -6,13 +6,15 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use App\Models\Lot;
 use Carbon\Carbon;
+use App\Models\LotStaging;
 
 interface LotRepositoryInterface
 {
     public function find(int $id): Lot;
     public function all(): Collection;
     public function findById(int $id): ?Lot;
-    public function findLastStaged(string $lotId): ?Lot;
+    public function findLastStaged(string $lotId, ?string $partname = null): ?Lot;
+    public function createStaging(Lot $lot, array $slotIds, string $actorEmployId, Carbon $now, array $extra = []): LotStaging;
     public function today(): Collection;
     public function staged(): Collection;
     public function aging(): Collection;
@@ -20,5 +22,4 @@ interface LotRepositoryInterface
     public function paginate(array $filters, int $rackPageId): LengthAwarePaginator;
     public function create(array $data): Lot;
     public function update(int $id, array $data): Lot;
-    public function createStaging(Lot $lot, array $slotIds, string $actorEmployId, Carbon $now);
 }

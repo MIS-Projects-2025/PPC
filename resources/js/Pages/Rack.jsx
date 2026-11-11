@@ -1,7 +1,8 @@
+import RackTopView from "@/Components/RackTopView";
 import { useToast } from "@/Hooks/useToast";
 import { router } from "@inertiajs/react";
 import clsx from "clsx";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaTimes } from "react-icons/fa";
 import { PiArrowFatDownFill } from "react-icons/pi";
 import { Tooltip } from "react-tooltip";
@@ -12,18 +13,25 @@ const useInternalStore = create((set) => ({
 	selectedSlot: null,
 	isDetailedView: true,
 	slotsMap: {},
+	viewMode: "grid",
+	setViewMode: (viewMode) => set({ viewMode }),
 	initializeRacks: (racks) => set({ racks }),
 	updateSlot: (slotId, payload) =>
 		set((state) => ({
 			racks: state.racks.map((rack) => ({
 				...rack,
 				shelves: Object.fromEntries(
-					Object.entries(rack.shelves).map(([label, slots]) => [
+					Object.entries(rack.shelves ?? {}).map(([label, slots]) => [
 						label,
 						slots.map((s) => (s.id === slotId ? { ...s, ...payload } : s)),
 					]),
 				),
 			})),
+			// Keep the selected slot's snapshot in sync (it is a copy, not a reference).
+			selectedSlot:
+				state.selectedSlot?.id === slotId
+					? { ...state.selectedSlot, ...payload }
+					: state.selectedSlot,
 		})),
 	setSelectedSlot: (slot) => set({ selectedSlot: slot }),
 	clearSelectedSlot: () => set({ selectedSlot: null }),
@@ -32,6 +40,10 @@ const useInternalStore = create((set) => ({
 		set((state) => ({ isDetailedView: !state.isDetailedView })),
 }));
 
+const NO_RECOMMENDATION = [];
+const NO_SELECTION = new Set();
+const NO_LOTS = [];
+
 export default function RackManagement({
 	racks,
 	occupancy,
@@ -39,15 +51,70 @@ export default function RackManagement({
 	initialDetailedView = true,
 	disableSideDetailPanel = false,
 	multiSelect = false,
-	selectedSlotIds = new Set(),
+	selectedSlotIds = NO_SELECTION,
+	recommendedSlotIds = NO_RECOMMENDATION,
+	initialView = "grid",
+	floorMap,
+	floorMaps,
 }) {
 	const [primedVisible, setPrimedVisible] = useState(false);
 	const isDetailedView = useInternalStore((state) => state.isDetailedView);
 	const initializeRacks = useInternalStore((state) => state.initializeRacks);
 	const storeRacks = useInternalStore((state) => state.racks);
 
+	const viewMode = useInternalStore((s) => s.viewMode);
+	const setViewMode = useInternalStore((s) => s.setViewMode);
+	const storeSelectedSlot = useInternalStore((s) => s.selectedSlot);
+
+	// Not memoized on purpose: if the parent mutates the Set in place, a memo keyed on
+	// the unchanged reference would keep showing stale selection state.
+	const pickedIds =
+		selectedSlotIds instanceof Set ? selectedSlotIds : new Set(selectedSlotIds ?? []);
+
+	// The slot that counts as "active" (ring, arrow, lot highlight, side panel).
+	// In multi-select mode it only counts while it is still ticked; the store keeps the last
+	// clicked slot, which used to stay highlighted after the slot was un-clicked.
+	const activeSlot =
+		multiSelect && storeSelectedSlot && !pickedIds.has(storeSelectedSlot.id)
+			? null
+			: storeSelectedSlot;
+
+	// Also clean the store itself. Runs after every render (cheap) so it works even when the
+	// parent mutates the Set in place.
 	useEffect(() => {
-        initializeRacks(racks ?? []);
+		if (multiSelect && storeSelectedSlot && !pickedIds.has(storeSelectedSlot.id)) {
+			useInternalStore.getState().clearSelectedSlot();
+		}
+	});
+
+	useEffect(() => {
+		useInternalStore.getState().setViewMode(initialView);
+	}, []);
+
+	// Refs keep handleSlotPick stable, so the memoized SlotButtons don't re-render on every parent render.
+	const onSlotSelectRef = useRef(onSlotSelect);
+	onSlotSelectRef.current = onSlotSelect;
+	const multiSelectRef = useRef(multiSelect);
+	multiSelectRef.current = multiSelect;
+
+	// One click path for the grid and the top view.
+	const handleSlotPick = useCallback((slot) => {
+		const { selectedSlot, setSelectedSlot, clearSelectedSlot } = useInternalStore.getState();
+		if (!multiSelectRef.current && selectedSlot?.id === slot.id) {
+			clearSelectedSlot(); // clicking the active slot again un-clicks it
+		} else {
+			setSelectedSlot(slot);
+		}
+		onSlotSelectRef.current?.(slot);
+	}, []);
+
+	const recommendedRanks = useMemo(
+		() => new Map(recommendedSlotIds.map((id, i) => [id, i + 1])),
+		[recommendedSlotIds],
+	);
+
+	useEffect(() => {
+		initializeRacks(racks ?? []);
 	}, [racks, initializeRacks]);
 
 	useEffect(() => {
@@ -74,6 +141,13 @@ export default function RackManagement({
 					</h1>
 				</header>
 
+				<div className="join mb-2">
+					<button type="button" onClick={() => setViewMode("grid")}
+						className={clsx("btn btn-sm join-item", viewMode === "grid" && "btn-secondary")}>Grid</button>
+					<button type="button" onClick={() => setViewMode("top")}
+						className={clsx("btn btn-sm join-item", viewMode === "top" && "btn-secondary")}>Top view</button>
+				</div>
+
 				<div className="flex gap-1 mb-2">
 					<div>compact</div>
 					<input
@@ -84,22 +158,38 @@ export default function RackManagement({
 					/>
 				</div>
 
-				<div className="grid w-full gap-4">
-					{storeRacks.map((rack) => (
-						<RackGrid
-							key={rack.id}
-							rack={rack}
-							occupancy={occupancy}
-							onSlotSelect={onSlotSelect}
-							multiSelect={multiSelect}
-							selectedSlotIds={selectedSlotIds}
-							forceVisible={primedVisible}
-						/>
-					))}
-				</div>
+				{viewMode === "grid" ? (
+					<div className="grid w-full gap-4">
+						{storeRacks.map((rack) => (
+							<RackGrid
+								key={rack.id}
+								rack={rack}
+								occupancy={occupancy}
+								activeSlot={activeSlot}
+								onPick={handleSlotPick}
+								multiSelect={multiSelect}
+								selectedSlotIds={pickedIds}
+								forceVisible={primedVisible}
+								recommendedRanks={recommendedRanks}
+							/>
+						))}
+					</div>
+				) : (
+					<RackTopView
+						racks={storeRacks}
+						occupancy={occupancy}
+						selectedSlot={activeSlot}
+						selectedSlotIds={pickedIds}
+						multiSelect={multiSelect}
+						recommendedRanks={recommendedRanks}
+						onSlotPick={handleSlotPick}
+						floorMap={floorMap}
+						floorMaps={floorMaps}
+					/>
+				)}
 			</main>
 
-			{disableSideDetailPanel || <SlotDetailPanel />}
+			{disableSideDetailPanel || <SlotDetailPanel slot={activeSlot} occupancy={occupancy} />}
 		</div>
 	);
 }
@@ -107,14 +197,13 @@ export default function RackManagement({
 function RackGrid({
 	rack,
 	occupancy,
-	onSlotSelect,
+	activeSlot,
+	onPick,
 	multiSelect,
 	selectedSlotIds,
 	forceVisible,
+	recommendedRanks,
 }) {
-	const selectedSlot = useInternalStore((state) => state.selectedSlot);
-	const isDetailedView = useInternalStore((state) => state.isDetailedView);
-
 	const ref = useRef(null);
 	const [visible, setVisible] = useState(false);
 
@@ -135,10 +224,14 @@ function RackGrid({
 	}, [forceVisible]);
 
 	const highlightedSlotIds = useMemo(() => {
-		if (!selectedSlot) return new Set();
-		const lots = occupancy[String(selectedSlot.id)] ?? [];
-		return new Set(lots.flatMap((l) => l.slot_ids));
-	}, [selectedSlot, occupancy]);
+		if (!activeSlot) return new Set();
+		const lots = occupancy?.[String(activeSlot.id)] ?? NO_LOTS;
+		return new Set(lots.flatMap((l) => l.slot_ids ?? []));
+	}, [activeSlot, occupancy]);
+
+	const shelves = rack.shelves ?? {};
+	const entries = Object.entries(shelves);
+	const slotCount = Math.max(0, ...entries.map(([, slots]) => slots.length));
 
 	return (
 		<section
@@ -151,39 +244,35 @@ function RackGrid({
 		>
 			<h2 className="text-xl w-full font-bold mb-2 flex items-center sticky -top-4 bg-base-100 z-10 p-2 rounded-t-lg shadow-sm">
 				{rack.label}
-				{Object.entries(rack.shelves).length === 0 && (
+				{entries.length === 0 && (
 					<span className="ml-2 text-sm font-light text-base-content/70">
 						empty rack
 					</span>
 				)}
 			</h2>
 			<div className="space-y-4 pb-2">
-				{(() => {
-					const entries = Object.entries(rack.shelves);
-					const slotCount = Math.max(0, ...entries.map(([, slots]) => slots.length));
-
-					return Array.from({ length: slotCount }, (_, i) => (
-						<div key={i} className="flex">
-							{entries.map(([rowLabel, rowSlots]) => {
-								const slot = rowSlots[i];
-								if (!slot) return <div key={rowLabel} className="min-w-15 min-h-12" />;
-								// console.log("🚀 ~ SLOT SLOT ~ slot:", slot);
-								return (
-									<SlotButton
-										key={slot.id}
-										slot={slot}
-										lots={occupancy[slot.id] ?? []}
-										isActive={selectedSlot?.id === slot.id}
-										isHighlighted={highlightedSlotIds.has(slot.id)}
-										isSelected={selectedSlotIds.has(slot.id)}
-										multiSelect={multiSelect}
-										onSlotSelect={onSlotSelect}
-									/>
-								);
-							})}
-						</div>
-					));
-				})()}
+				{Array.from({ length: slotCount }, (_, i) => (
+					<div key={i} className="flex">
+						{entries.map(([rowLabel, rowSlots]) => {
+							const slot = rowSlots[i];
+							if (!slot) return <div key={rowLabel} className="min-w-15 min-h-12" />;
+							return (
+								<SlotButton
+									key={slot.id}
+									slot={slot}
+									lots={occupancy?.[slot.id] ?? NO_LOTS}
+									isActive={activeSlot?.id === slot.id}
+									isHighlighted={highlightedSlotIds.has(slot.id)}
+									isSelected={selectedSlotIds.has(slot.id)}
+									multiSelect={multiSelect}
+									onPick={onPick}
+									recommendedRank={recommendedRanks?.get(slot.id)}
+									recommendedTotal={recommendedRanks?.size ?? 0}
+								/>
+							);
+						})}
+					</div>
+				))}
 			</div>
 		</section>
 	);
@@ -195,10 +284,11 @@ const SlotButton = React.memo(function SlotButton({
 	isActive,
 	isHighlighted,
 	multiSelect,
-	onSlotSelect,
+	onPick,
 	isSelected,
+	recommendedRank,
+	recommendedTotal,
 }) {
-	const setSelectedSlot = useInternalStore((state) => state.setSelectedSlot);
 	const isDetailedView = useInternalStore((state) => state.isDetailedView);
 	const updateSlot = useInternalStore((state) => state.updateSlot);
 	const [hovered, setHovered] = useState(false);
@@ -214,12 +304,6 @@ const SlotButton = React.memo(function SlotButton({
 
 	const isSlotEnabled = slot?.is_active;
 
-	const handleSlotClick = (slot) => {
-		setSelectedSlot(slot);
-
-		if (onSlotSelect) onSlotSelect(slot);
-	};
-
 	const handleMarkSlotFullToggle = async () => {
 		const updateType = isManuallyFull ? "clearFull" : "markFull";
 		const url = route(`rack.rack-slot.${updateType}`, { id: slot.id });
@@ -229,22 +313,24 @@ const SlotButton = React.memo(function SlotButton({
 			const response = await fetch(url, {
 				method: "PATCH",
 				headers: {
-					Accept: "application/json", "Content-Type": "application/json",
+					Accept: "application/json",
+					"Content-Type": "application/json",
 					"X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')
 						?.content,
 				},
 				body: JSON.stringify({
-					is_manually_full: !isManuallyFull,
+					is_manually_full: nextValue,
 				}),
 			});
 
 			if (response.ok) {
 				updateSlot(slot.id, { is_manually_full: nextValue });
 				router.reload({ only: ["racks", "occupancy"], preserveState: true, preserveScroll: true });
+				return;
 			}
 
 			const data = await response.json().catch(() => ({}));
-			if (!response.ok) toast.error(data?.message || "Could not update the slot. Please try again.");
+			toast.error(data?.message || "Could not update the slot. Please try again.");
 		} catch (error) {
 			console.error(error);
 			toast.error("Network error. The slot was not updated.");
@@ -253,24 +339,21 @@ const SlotButton = React.memo(function SlotButton({
 
 	return (
 		<div
-            role="button"
+			role="button"
 			onClick={() => {
 				if (isManuallyFull || !isSlotEnabled) return;
-
-				setSelectedSlot(slot);
-				handleSlotClick(slot);
+				onPick?.(slot);
 			}}
 			onMouseEnter={() => setHovered(true)}
 			onMouseLeave={() => setHovered(false)}
 			className={clsx(
-				"relative btn min-h-12 z-20 border transition-all py-1 flex flex-col items-center justify-center relative group",
+				"btn min-h-12 z-20 border transition-all py-1 flex flex-col items-center justify-center relative group",
 				multiSelect && isSelected && "ring-2 ring-primary animate-pulse",
 				"rounded-none -ml-[1px] -mt-[1px]",
 				{
-					"bg-rose-500 border-rose-700 cursor-not-allowed pointer": isManuallyFull,
+					"bg-rose-500 border-rose-700 cursor-not-allowed": isManuallyFull,
 					"bg-black border-black": !isSlotEnabled,
 					"min-w-15 text-xs font-mono p-0": !isDetailedView,
-					"": isHighlighted || hasLots,
 					"font-extrabold border-accent bg-accent/10": isHighlighted,
 					"!border-base-content/20":
 						!isHighlighted && !hasLots && !isManuallyFull,
@@ -279,6 +362,7 @@ const SlotButton = React.memo(function SlotButton({
 					"border-secondary bg-secondary/20": !isHighlighted && isLargeLot,
 					"ring-2 ring-white ring-offset-2 ring-offset-slate-950 animate-pulse":
 						isActive,
+					"outline-2 outline-dashed outline-info outline-offset-[-3px]": !!recommendedRank,
 				},
 			)}
 		>
@@ -296,7 +380,10 @@ const SlotButton = React.memo(function SlotButton({
 					className={clsx(
 						"btn text-neutral hover:bg-primary bg-accent z-100 text-sm rounded",
 					)}
-					onClick={(e) => { e.stopPropagation(); handleMarkSlotFullToggle(); }}
+					onClick={(e) => {
+						e.stopPropagation();
+						handleMarkSlotFullToggle();
+					}}
 				>
 					{isManuallyFull ? "Mark as Empty" : "Mark as Full"}
 				</button>
@@ -310,6 +397,15 @@ const SlotButton = React.memo(function SlotButton({
 						readOnly
 						checked={isSelected}
 					/>
+				</div>
+			)}
+
+			{recommendedRank && (
+				<div
+					className="absolute bottom-0.5 left-0.5 z-30 flex h-4 w-4 items-center justify-center rounded-full bg-info text-info-content text-[10px] font-black"
+					title="Recommended"
+				>
+					{recommendedTotal > 1 ? recommendedRank : "★"}
 				</div>
 			)}
 
@@ -360,11 +456,24 @@ const SlotButton = React.memo(function SlotButton({
 	);
 });
 
-function SlotDetailPanel({}) {
-	const slot = useInternalStore((state) => state.selectedSlot);
+function SlotDetailPanel({ slot, occupancy }) {
+	const racks = useInternalStore((state) => state.racks);
 	const clearSelectedSlot = useInternalStore(
 		(state) => state.clearSelectedSlot,
 	);
+
+	// slot id -> label, so each "Occupies" chip shows its own slot (it used to repeat the selected slot's label).
+	const labelById = useMemo(() => {
+		const map = new Map();
+		for (const rack of racks) {
+			for (const slots of Object.values(rack.shelves ?? {})) {
+				for (const s of slots) map.set(s.id, s.label || s.meta?.label);
+			}
+		}
+		return map;
+	}, [racks]);
+
+	const lots = slot ? (occupancy?.[slot.id] ?? slot.lots ?? NO_LOTS) : NO_LOTS;
 
 	return (
 		<>
@@ -380,7 +489,7 @@ function SlotDetailPanel({}) {
 
 			<div
 				className={clsx(
-					"w-96 h-full fixed right-0 z-50 top-0 flex flex-col bg-base-200 border-l border-base-300/50 transition-all ease-in-out pt-12 pb-16 shadow-2xl animate-in slide-in-from-right duration-300",
+					"h-full fixed right-0 z-50 top-0 flex flex-col bg-base-200 border-l border-base-300/50 transition-all ease-in-out pt-12 pb-16 shadow-2xl animate-in slide-in-from-right duration-300",
 					slot
 						? "w-96 opacity-100 translate-x-0"
 						: "w-0 opacity-0 translate-x-10 border-none",
@@ -400,8 +509,8 @@ function SlotDetailPanel({}) {
 				</div>
 
 				<div className="space-y-2 px-4 overflow-y-auto">
-					{slot?.lots?.length > 0 ? (
-						slot?.lots.map((lot) => (
+					{lots.length > 0 ? (
+						lots.map((lot) => (
 							<div
 								key={lot.id}
 								className="relative bg-base-300/50 p-2 rounded-lg border border-base-content/50"
@@ -427,12 +536,12 @@ function SlotDetailPanel({}) {
 										<span className="text-[10px] text-base-content uppercase font-bold">
 											Occupies:
 										</span>
-										{lot.slot_ids.map((s) => (
+										{(lot.slot_ids ?? []).map((s) => (
 											<span
 												key={s}
 												className="text-[12px] bg-accent text-accent-content px-1.5 rounded-sm"
 											>
-												{slot?.label}
+												{labelById.get(s) ?? s}
 											</span>
 										))}
 									</div>

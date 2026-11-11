@@ -42,6 +42,7 @@ use App\Http\Controllers\{
     LotController,
     RackController,
     RackSlotController,
+    BoxDimensionController,
 };
 use App\Http\Controllers\General\{ProfileController};
 
@@ -54,6 +55,13 @@ if ($app_name) {
 }
 
 require __DIR__ . '/auth.php';
+
+Route::prefix('box-dimensions')->name('box-dimensions.')->group(function () {
+    Route::get('/', [BoxDimensionController::class, 'index'])->name('index');
+    Route::post('/', [BoxDimensionController::class, 'store'])->name('store');
+    Route::patch('/{id}', [BoxDimensionController::class, 'update'])->name('update');
+    Route::delete('/{id}', [BoxDimensionController::class, 'destroy'])->name('destroy');
+});
 
 Route::prefix('rules')->group(function () {
     Route::get('/machine-picker', [CapabilityMatrixController::class, 'machinePicker']);
@@ -223,6 +231,9 @@ Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::patch('/{id}/update', [LotController::class, 'update'])->name('update')->where('lot_id', '[^/]+');
     Route::post('/store', [LotController::class, 'store'])->name('store');
     Route::post('/release', [LotController::class, 'release'])->name('release')->where('lot_id', '[^/]+');
+
+    Route::post('/recommend', [LotController::class, 'recommend'])->name('recommend');
+    Route::post('/recommendation/{id}/didnt-fit', [LotController::class, 'didntFit'])->name('recommendation.didnt-fit');
 });
 
 Route::prefix('/rack')->name('rack.')->group(function () {
@@ -240,6 +251,9 @@ Route::prefix('/rack')->name('rack.')->group(function () {
         Route::patch('{id}/clear-full', [RackSlotController::class, 'clearFull'])->name('clearFull');
     });
 });
+
+Route::get('/racks/{productionLine}/layout-editor', [RackController::class, 'layoutEditor'])->name('rack.layout-editor');
+Route::put('/racks/{productionLine}/floor-map', [RackController::class, 'updateFloorMap'])->name('rack.floor-map.update');
 
 /*
 |--------------------------------------------------------------------------

@@ -25,17 +25,14 @@ class LotRepository implements LotRepositoryInterface
         return Lot::where('id', $id)->latest('received_at')->first();
     }
 
-    public function findLastStaged(string $lotId): ?Lot
+    public function findLastStaged(string $lotId, ?string $partname = null): ?Lot
     {
-        $lot = Lot::where('lot_id', $lotId)
+        return Lot::where('lot_id', $lotId)
+            ->where('status', 'staged')
+            ->when(filled($partname), fn($q) => $q->where('partname', $partname))
+            ->latest('id')
             ->lockForUpdate()
             ->first();
-
-        if (!$lot || $lot->status !== 'staged') {
-            return null;
-        }
-
-        return $lot;
     }
 
     public function all(): Collection
@@ -140,17 +137,20 @@ class LotRepository implements LotRepositoryInterface
         return Lot::create($data);
     }
 
-    public function createStaging(Lot $lot, array $slotIds, string $actorEmployId, Carbon $now): void
+    public function createStaging(Lot $lot, array $slotIds, string $actorEmployId, Carbon $now, array $extra = []): LotStaging
     {
-        $cycle = LotStaging::where('lot_id', $lot->id)->count() + 1;
+        $cycle    = LotStaging::where('lot_id', $lot->id)->count() + 1;
+        $boxCount = $extra['box_count'] ?? null;
 
         $staging = LotStaging::create([
-            'lot_id'    => $lot->id,
-            'partname'  => $lot->partname,
-            'qty'       => $lot->qty,
-            'cycle'     => $cycle,
-            'staged_by' => $actorEmployId,
-            'staged_at' => $now,
+            'lot_id'       => $lot->id,
+            'partname'     => $lot->partname,
+            'qty'          => $lot->qty,
+            'cycle'        => $cycle,
+            'staged_by'    => $actorEmployId,
+            'staged_at'    => $now,
+            'dimension_id' => $extra['dimension_id'] ?? null,
+            'box_count'    => $boxCount,
         ]);
 
         $slots = RackSlot::with('rack')->whereIn('id', $slotIds)->get()->keyBy('id');
@@ -164,10 +164,14 @@ class LotRepository implements LotRepositoryInterface
                 'rack_slot_id'       => $slotId,
                 'production_line_id' => $slot->rack->production_line_id,
                 'rack_page_id'       => $slot->rack->rack_page_id,
+                // Only a single-slot placement knows its box split. Multi-slot stays NULL (= untracked slot).
+                'box_count'          => count($slotIds) === 1 ? $boxCount : null,
                 'assigned_at'        => $now,
                 'assigned_by'        => $actorEmployId,
             ]);
         }
+
+        return $staging;
     }
 
     public function update(int $id, array $data): Lot
@@ -249,6 +253,11 @@ class LotRepository implements LotRepositoryInterface
                             'assigned_by'       => $modifiedBy,
                         ]);
                     }
+
+                    $remaining = LotPosition::where('lot_staging_id', $activeStaging->id)->whereNull('released_at')->get();
+                    $remaining->each->update([
+                        'box_count' => $remaining->count() === 1 ? $activeStaging->box_count : null,
+                    ]);
                 } else {
                     $lot->update([
                         'status' => 'staged',

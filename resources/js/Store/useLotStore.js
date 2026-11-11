@@ -4,6 +4,14 @@ import { create } from "zustand";
 
 const EMPTY_FORM = { lot_id: "", partname: "", qty: "" };
 
+const EMPTY_RECOMMENDATION = {
+	status: "idle", // idle | ready | none | hidden
+	id: null,
+	slots: [], // [{ slot_id, label, boxes, unverified }]
+	reason: null,
+	prefilled: false,
+};
+
 export const useLotStore = create((set, get) => ({
 	lots: [],
 	slots: [],
@@ -22,6 +30,7 @@ export const useLotStore = create((set, get) => ({
 	recentUpdates: {},
 	scanResult: { status: null, at: 0 },
 	lotMutations: {},
+	recommendation: EMPTY_RECOMMENDATION,
 
 	setWithdrawerId: (id) => set({ withdrawerId: id }),
 	clearWithdrawerId: () => set({ withdrawerId: null }),
@@ -72,6 +81,8 @@ export const useLotStore = create((set, get) => ({
 	setScanResult: (status) => set({ scanResult: { status, at: Date.now() } }),
 	setEditingLot: (lot) => set({ pendingLotToBeAdded: lot }),
 	setIsScanning: (isScanning) => set({ isScanning }),
+	setRecommendation: (rec) => set({ recommendation: { ...EMPTY_RECOMMENDATION, ...rec } }),
+	clearRecommendation: () => set({ recommendation: EMPTY_RECOMMENDATION }),
 
 	addPendingLot: (data) => set({ pendingLotToBeAdded: data }),
 
@@ -168,6 +179,7 @@ export const useLotStore = create((set, get) => ({
 			slotPendingLot: [],
 			pendingLotToBeAdded: EMPTY_FORM,
 			editingLot: null,
+			recommendation: EMPTY_RECOMMENDATION,
 		});
 	},
 }));

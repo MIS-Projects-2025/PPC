@@ -19,6 +19,8 @@ class LotStaging extends Model
         'staged_at',
         'released_by',
         'released_at',
+        'dimension_id',
+        'box_count',
         'withdrawer_id',
     ];
 

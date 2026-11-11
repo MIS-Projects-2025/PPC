@@ -18,9 +18,15 @@ class RackSlot extends Model
         'marked_full_by',
         'marked_full_at',
         'is_active',
+        'length',
+        'height',
+        'tracked',
     ];
 
     protected $casts = [
+        'length' => 'float',
+        'height' => 'float',
+        'tracked'          => 'boolean',
         'is_manually_full' => 'boolean',
         'marked_full_at'   => 'datetime',
         'is_active'        => 'boolean',

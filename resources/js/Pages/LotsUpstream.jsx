@@ -1,7 +1,9 @@
 import CancellableActionButton from "@/Components/CancellableActionButton";
+import RecommendationLine from "@/Components/RecommendationLine";
 import { LOT_UPSTREAM_MODES } from "@/Constants/lotUpstreamModes";
 import useBarcodeScanner from "@/Hooks/useBarcodeScanner";
 import { toQty, useLotActions } from "@/Hooks/useLotActions";
+import useRecommendation from "@/Hooks/useRecommendation";
 import { useToast } from "@/Hooks/useToast";
 import { playNotification } from "@/Service/AudioService";
 import { useLotStore } from "@/Store/useLotStore";
@@ -10,7 +12,7 @@ import clsx from "clsx";
 import { format, formatDistanceToNow } from "date-fns";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "react-hot-toast";
-import { FaDownload, FaPlus, FaUpload } from "react-icons/fa";
+import { FaCheck, FaDownload, FaPlus, FaRegCopy, FaUpload } from "react-icons/fa";
 import RackManagement from "./Rack";
 
 const RACK_SELECTION_ID = "lots_upstream_rack_selector_modal";
@@ -27,6 +29,49 @@ import { TiArrowDownThick } from "react-icons/ti";
 
 const RECEIVE = LOT_UPSTREAM_MODES.RECEIVE;
 const RELEASE = LOT_UPSTREAM_MODES.RELEASE;
+
+function CopyLotId({ value }) {
+    const [copied, setCopied] = useState(false);
+
+    const copy = async (e) => {
+        e.stopPropagation();
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+            } else {
+                // Fallback for plain-http intranet hosts, where navigator.clipboard is unavailable
+                const ta = document.createElement("textarea");
+                ta.value = value;
+                ta.style.cssText = "position:fixed;opacity:0";
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+            }
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={copy}
+            title="Copy lot ID"
+            className={clsx(
+                "absolute right-full top-1/2 -translate-y-1/2 text-[11px]",
+                "opacity-0 pointer-events-none transition-opacity",
+                "group-hover/lotid:opacity-100 group-hover/lotid:pointer-events-auto",
+                "focus-visible:opacity-100 focus-visible:pointer-events-auto",
+                copied ? "text-success" : "text-base-content/60 hover:text-base-content",
+            )}
+        >
+            {copied ? <FaCheck /> : <FaRegCopy />}
+        </button>
+    );
+}
 
 function SlotAssign() {
     const { slotPendingLot, removeSlotPendingLot } = useLotStore();
@@ -63,7 +108,8 @@ function SlotAssign() {
     );
 }
 
-function ScanPanel({ lotActions }) {
+function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false })
+{
     const {
         pendingLotToBeAdded,
         isScanning,
@@ -73,6 +119,7 @@ function ScanPanel({ lotActions }) {
         editPendingLotWithRawInput,
         slotPendingLot,
         lotMutations,
+        editPendingLot,
         // mode,
     } = useLotStore();
     const {
@@ -109,6 +156,14 @@ function ScanPanel({ lotActions }) {
         }
 
         lotActions.resetFocus();
+    };
+
+    // A scanner's terminating Enter must not leave focus in a manual field.
+    const blurOnEnter = (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+        }
     };
 
     useEffect(() => {
@@ -190,6 +245,47 @@ function ScanPanel({ lotActions }) {
                     />
                 </div>
             ))}
+
+            {!isEditMode && (
+                <div className="flex gap-2 py-2">
+                    <div className="w-24">
+                        <label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
+                            box count
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            data-no-scanner
+                            className="input w-full"
+                            value={pendingLotToBeAdded.box_count ?? ""}
+                            onChange={(e) =>
+                                editPendingLot("box_count", e.target.value.replace(/\D/g, "").slice(0, 3))
+                            }
+                            onKeyDown={blurOnEnter}
+                            onFocus={(e) => e.target.select()}
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
+                            box size
+                        </label>
+                        <select
+                            data-no-scanner
+                            className="select w-full"
+                            value={pendingLotToBeAdded.dimension_id ?? ""}
+                            onChange={(e) => editPendingLot("dimension_id", e.target.value)}
+                            onKeyDown={blurOnEnter}
+                        >
+                            <option value="">Unknown</option>
+                            {dimensions.map((d) => (
+                                <option key={d.id} value={d.id}>{d.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+            )}
+
+            <RecommendationLine enabled={recommendationsVisible && !isEditMode} />
 
             <SlotAssign />
 
@@ -376,11 +472,23 @@ function ScanPanel({ lotActions }) {
     );
 }
 
-function LastRunBadge({ latestRun }) {
+// Same normalisation as formatLocalTime: staged_at is a naive UTC string.
+const parseUtc = (s) => {
+    const raw = String(s).trim().replace(" ", "T");
+    return new Date(/(Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : raw + "Z");
+};
+
+function LastRunBadge({ latestRun, stagedAt }) {
     if (!latestRun?.end_time) return null;
 
     const endDate = new Date(latestRun.end_time);
     if (isNaN(endDate.getTime())) return null;
+
+    // A run that ended before the latest (re)stock belongs to the previous cycle.
+    if (stagedAt) {
+        const staged = parseUtc(stagedAt);
+        if (!isNaN(staged.getTime()) && endDate <= staged) return null;
+    }
 
     const absolute = format(endDate, "MMM d, yyyy h:mm a");
 
@@ -433,9 +541,12 @@ function ReceivedList({ onEdit, lotActions }) {
                                 <div className="flex items-start gap-3 min-w-0">
                                     <div className="min-w-0">
                                         <div className="flex items-center gap-2">
-                                            <p className="text-[13px] antialiased font-jet-brains font-bold truncate">
-                                                {lot.lot_id}
-                                            </p>
+                                            <div className="w-24 group/lotid relative flex items-center min-w-0">
+                                                <p className="text-[13px] antialiased pl-2 font-jet-brains font-bold truncate">
+                                                    {lot.lot_id}
+                                                </p>
+                                                <CopyLotId value={lot.lot_id} />
+                                            </div>
                                             <p className="text-[11px] antialiased font-jet-brains text-base-content truncate">
                                                 {lot.partname}
                                             </p>
@@ -445,11 +556,7 @@ function ReceivedList({ onEdit, lotActions }) {
                                                 ).toLocaleString()}{" "}
                                                 quantity
                                             </span>
-                                            <LastRunBadge
-                                                latestRun={
-                                                    lot?.latest_run || null
-                                                }
-                                            />
+                                            <LastRunBadge latestRun={lot?.latest_run || null} stagedAt={lastStaging?.staged_at} />
                                             {recentUpdate && (
                                                 <div className="flex items-center gap-0 ml-1">
                                                     {/* arrow */}
@@ -693,8 +800,11 @@ export default function LotsUpstream({
     racks = null,
     occupancy,
     filters: serverFilters,
+    recommendationsVisible = false,
+    dimensions = [],
     productionLine,
     productionLineId,
+    floorMaps,
 }) {
     const currentTheme = LOCATION_THEMES[(String (productionLine)).toUpperCase()] || "bg-base-200 border-base-content";
 
@@ -725,6 +835,7 @@ export default function LotsUpstream({
         setScanResult,
         receiveLot,
         appendRecentUpdate,
+        recommendation,
         pendingLotToBeAdded,
         lotMutations,
         removePendingLot,
@@ -777,6 +888,30 @@ export default function LotsUpstream({
             },
         );
     };
+
+    const searchApply = (search) => {
+        // Base on what the server last applied, so unapplied date/status/etc.
+        // edits aren't pushed along with the search. Those still need "Apply filters".
+        const params = Object.fromEntries(
+            Object.entries({ ...serverFilters, search }).filter(
+                ([, v]) => v !== "" && v !== false && v != null,
+            ),
+        );
+
+        router.get(route("lot-upstream.index", { productionLine }), params, {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true, // don't flood browser history while typing
+        });
+    };
+
+    useEffect(() => {
+        // Skips mount, and skips when the server already has this search.
+        if (filters.search === (serverFilters.search ?? "")) return;
+
+        const t = setTimeout(() => searchApply(filters.search), 200);
+        return () => clearTimeout(t);
+    }, [filters.search]);
 
     const {
         download: downloadLots,
@@ -926,6 +1061,17 @@ export default function LotsUpstream({
     const selectedSlotIds = useMemo(
         () => new Set(slotPendingLot.map((s) => s.id)),
         [slotPendingLot],
+    );
+
+    useRecommendation({
+        rackPageId: productionLineId,
+        enabled: recommendationsVisible,
+    });
+
+    // Order = rank shown in the grid and in the Recommended line.
+    const recommendedSlotIds = useMemo(
+        () => (recommendation.status === "ready" ? recommendation.slots.map((s) => s.slot_id) : []),
+        [recommendation],
     );
 
     // useEffect(() => {
@@ -1093,22 +1239,24 @@ export default function LotsUpstream({
                     <Toaster position="top-left" />
 
                     <div className="flex w-full h-full">
-                        <div className="w-8/12">
+                        <div className="w-9/12">
                             <RackManagement
                                 racks={racks}
                                 occupancy={occupancy}
                                 selectedSlotIds={selectedSlotIds}
+                                recommendedSlotIds={recommendedSlotIds}
                                 initialDetailedView={false}
                                 multiSelect={true}
                                 disableSideDetailPanel
                                 onSlotSelect={handleSelectFromRack}
+                                floorMaps={floorMaps}
                             />
                         </div>
 
                         <div className="w-0.5 h-full bg-base-content/25"></div>
 
-                        <div className="w-4/12 p-4">
-                            <ScanPanel lotActions={lotActions} />
+                        <div className="w-3/12 p-4">
+                            <ScanPanel lotActions={lotActions} dimensions={dimensions} recommendationsVisible={recommendationsVisible} />
                         </div>
                     </div>
                 </div>

@@ -14,6 +14,12 @@ use App\Repositories\Interfaces\RackSlotRepositoryInterface;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 use App\Repositories\Interfaces\LotRunRepositoryInterface;
 use Illuminate\Support\Facades\Log;
+use App\Models\BoxDimension;
+use App\Models\PlacementRecommendation;
+use App\Services\RecommendationService;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\Validator;
+use App\Services\RackFloorMapService;
 
 class LotController extends Controller
 {
@@ -42,7 +48,7 @@ class LotController extends Controller
     // {productionLine} route segment now resolves a rack_pages.key
     // (PL1 / PL6 / RESCON), not a production_lines.name. Kept the param name
     // to avoid touching the route file / frontend links.
-    public function index(string $productionLine): Response
+    public function index(string $productionLine, RecommendationService $recommendations): Response
     {
         $page = RackPage::where('key', strtoupper($productionLine))
             ->firstOrFail();
@@ -87,8 +93,10 @@ class LotController extends Controller
             'racks' => fn() => $this->rackRepo->getAllByRackPage($page->id),
             'occupancy' => fn() => $this->lotPositionRepo->getOccupancyByRackPage($page->id),
             'filters' => $filters,
+            'dimensions' => fn() => BoxDimension::orderBy('length')->orderBy('height')->get(),
             'productionLine' => $page->key,
             'productionLineId' => $page->id,
+            'recommendationsVisible' => fn() => $recommendations->isVisible($page->id),
             'totalEntries' => Lot::whereHas(
                 'positions',
                 fn($q) => $q->where('rack_page_id', $page->id)
@@ -103,6 +111,7 @@ class LotController extends Controller
             'totalReceived' => Lot::whereHas('positions', fn($q) => $q->where('rack_page_id', $page->id))
                 ->whereBetween('received_at', [$todayStart, $todayEnd])
                 ->count(),
+            'floorMaps' => app(RackFloorMapService::class)->forPages(RackPage::orderBy('id')->get()),
         ]);
     }
 
@@ -115,6 +124,37 @@ class LotController extends Controller
         ]);
     }
 
+    // POST lot-upstream/recommend
+    // Advisory and fail-open: any problem answers 200 with no slots, never an error the UI would show.
+    public function recommend(RecommendationService $recommendations)
+    {
+        $validator = Validator::make(request()->all(), [
+            'lot_id'       => 'required|string|max:50',
+            'partname'     => 'nullable|string|max:255',
+            'qty'          => 'nullable|integer|min:1|max:9999999', // accepted, not used by the engine
+            'box_count'    => 'nullable|integer|min:1|max:999',
+            'dimension_id' => 'nullable|integer',
+            'rack_page_id' => 'required|integer|exists:rack_pages,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['id' => null, 'slots' => [], 'reason' => 'error', 'prefill' => null]);
+        }
+
+        return response()->json($recommendations->forRequest($validator->validated()));
+    }
+
+    // POST lot-upstream/recommendation/{id}/didnt-fit
+    // The optional tap: the recommended slot was physically full. Slot IDs come from `recommended`.
+    public function didntFit(int $id)
+    {
+        PlacementRecommendation::whereKey($id)
+            ->whereNull('didnt_fit_at')
+            ->update(['didnt_fit_at' => Carbon::now('UTC')]);
+
+        return response()->json(['status' => 'success']);
+    }
+
     // POST /lots
     // Called when WCO confirms a scan + slot assignment
     public function store()
@@ -125,6 +165,9 @@ class LotController extends Controller
             'qty'       => 'required|integer|min:1|max:9999999',
             'slot_ids'  => 'sometimes|array|min:0',
             'slot_ids.*' => ['sometimes', 'integer', \Illuminate\Validation\Rule::exists('rack_slots', 'id')->whereNull('deleted_at')],
+            'recommendation_id' => 'nullable|integer',
+            'box_count'    => 'nullable|integer|min:1|max:999', // keep in sync with MAX_BOX_COUNT in useLotActions
+            'dimension_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists((new BoxDimension)->getTable(), 'id')],
         ]);
 
         $data['received_by'] = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
@@ -174,6 +217,7 @@ class LotController extends Controller
 
         $data = request()->validate([
             'lot_id'    => 'required|string|max:50',
+            'partname' => 'nullable|string|max:255',
             'withdrawer_id' => [
                 'required',
                 'string',
@@ -185,7 +229,7 @@ class LotController extends Controller
             ],
         ]);
 
-        $releasedLot = $this->lotService->release($data['lot_id'], $data['withdrawer_id'] ?? "", $releasedBy);
+        $releasedLot = $this->lotService->release($data['lot_id'], $data['withdrawer_id'] ?? "", $releasedBy, $data['partname'] ?? null);
 
         return response()->json([
             'status'  => 'success',
