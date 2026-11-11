@@ -108,7 +108,121 @@ function SlotAssign() {
     );
 }
 
-function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false })
+// Lets a lot that sits on boxes already in the rack join their "box group":
+// same slots, same box count and size, and it is released together with them.
+// Stocking: pick the slot(s) where the boxes are, then tap the chip.
+// Editing: only shows a note (slot changes apply to the whole group on the server).
+// FUTURE: an "unlink from group" button (give the staging its own box_group_id, unlock box count/size)
+// could be added here for wrong taps. Not built on purpose. See LotRepository::update and LotService::release.
+function SharedBoxes({ occupancy }) {
+    const {
+        isEditMode,
+        slotPendingLot,
+        setSlotPendingLot,
+        pendingLotToBeAdded,
+        editPendingLot,
+        slots,
+    } = useLotStore();
+
+    const activeGroupId = pendingLotToBeAdded?.box_group_id ?? null;
+
+    // Stocking: groups already sitting in the slots picked so far.
+    const groups = useMemo(() => {
+        if (isEditMode) return [];
+        const map = new Map();
+        for (const s of slotPendingLot) {
+            for (const o of occupancy?.[s.id] ?? []) {
+                if (!o.box_group_id) continue;
+                const g = map.get(o.box_group_id) ?? {
+                    id: o.box_group_id,
+                    lots: new Set(),
+                    slotIds: new Set(),
+                    box_count: o.box_count,
+                    dimension_id: o.dimension_id,
+                };
+                g.lots.add(o.id);
+                (o.slot_ids ?? []).forEach((id) => g.slotIds.add(id));
+                map.set(o.box_group_id, g);
+            }
+        }
+        return [...map.values()];
+    }, [isEditMode, slotPendingLot, occupancy]);
+
+    // Editing: the other lots on the same boxes as this one.
+    const editGroupId = isEditMode
+        ? ((pendingLotToBeAdded?.stagings ?? []).find((s) => !s.released_at)?.box_group_id ?? null)
+        : null;
+
+    const mates = useMemo(() => {
+        if (!editGroupId) return [];
+        const rows = Object.values(occupancy ?? {}).flat();
+        return [
+            ...new Set(
+                rows
+                    .filter(
+                        (r) =>
+                            Number(r.box_group_id) === Number(editGroupId) &&
+                            r.id !== pendingLotToBeAdded?.lot_id,
+                    )
+                    .map((r) => r.id),
+            ),
+        ];
+    }, [editGroupId, occupancy, pendingLotToBeAdded?.lot_id]);
+
+    if (isEditMode) {
+        if (mates.length === 0) return null;
+        return (
+            <div className="py-2 text-[11px] text-warning">
+                Shares boxes with <b>{mates.join(", ")}</b>. Changing slots moves all of them.
+                Releasing releases all of them.
+            </div>
+        );
+    }
+
+    if (groups.length === 0 && !activeGroupId) return null;
+
+    return (
+        <div className="py-2">
+            <label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
+                Same boxes as
+            </label>
+            <div className="flex flex-wrap gap-1">
+                {groups.map((g) => (
+                    <button
+                        key={g.id}
+                        type="button"
+                        className={clsx(
+                            "btn btn-xs",
+                            Number(activeGroupId) === Number(g.id) ? "btn-primary" : "btn-outline",
+                        )}
+                        onClick={() => {
+                            editPendingLot("box_group_id", g.id);
+                            editPendingLot("box_count", g.box_count ?? "");
+                            editPendingLot("dimension_id", g.dimension_id ?? "");
+                            setSlotPendingLot(
+                                [...g.slotIds].map((id) => slots[id]).filter(Boolean),
+                            );
+                        }}
+                    >
+                        {[...g.lots].join(" + ")}
+                    </button>
+                ))}
+                {activeGroupId && (
+                    // Only deselects the chip on this form (stock as new boxes). It does not touch saved lots.
+                    <button
+                        type="button"
+                        className="btn btn-xs btn-ghost"
+                        onClick={() => editPendingLot("box_group_id", null)}
+                    >
+                        not shared
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false, occupancy })
 {
     const {
         pendingLotToBeAdded,
@@ -256,6 +370,7 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
                             type="text"
                             inputMode="numeric"
                             data-no-scanner
+                            disabled={!!pendingLotToBeAdded.box_group_id}
                             className="input w-full"
                             value={pendingLotToBeAdded.box_count ?? ""}
                             onChange={(e) =>
@@ -271,6 +386,7 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
                         </label>
                         <select
                             data-no-scanner
+                            disabled={!!pendingLotToBeAdded.box_group_id}
                             className="select w-full"
                             value={pendingLotToBeAdded.dimension_id ?? ""}
                             onChange={(e) => editPendingLot("dimension_id", e.target.value)}
@@ -285,7 +401,9 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
                 </div>
             )}
 
-            <RecommendationLine enabled={recommendationsVisible && !isEditMode} />
+            <RecommendationLine enabled={recommendationsVisible && !isEditMode && !pendingLotToBeAdded.box_group_id} />
+
+            <SharedBoxes occupancy={occupancy} />
 
             <SlotAssign />
 
@@ -1115,6 +1233,23 @@ export default function LotsUpstream({
     //     return () => window.Echo.leave("lot-updates");
     // }, []);
 
+    // Lots that share boxes with the one being released leave together (the server releases the whole group).
+    // FUTURE: "release only this lot" would change this memo and LotService::release.
+    const releaseGroupLotIds = useMemo(() => {
+        const code = lotToBeReleased?.lot_id;
+        if (!code) return [];
+        const rows = Object.values(occupancy ?? {}).flat();
+        const mine = rows.find((r) => r.id === code && r.box_group_id);
+        if (!mine) return [code];
+        return [
+            ...new Set(
+                rows
+                    .filter((r) => Number(r.box_group_id) === Number(mine.box_group_id))
+                    .map((r) => r.id),
+            ),
+        ];
+    }, [occupancy, lotToBeReleased]);
+
     const handleWithdrawerClose = () => {
         const s = useLotStore.getState();
         s.clearWithdrawerId(); // a leftover ID would be attributed to the NEXT release
@@ -1177,9 +1312,14 @@ export default function LotsUpstream({
 
                     <div className="flex flex-col w-full h-full justify-center items-center">
                         <div className="w-full mb-4">
+                            {releaseGroupLotIds.length > 1 && (
+                                <div className="text-[11px] opacity-70 mb-1">
+                                    These lots share the same boxes, so they are released together.
+                                </div>
+                            )}
                             Releasing{" "}
-                            <span className="badge badge-primary badge-sm">
-                                {lotToBeReleased?.lot_id}
+                            <span className="badge badge-primary badge-sm h-auto whitespace-normal py-0.5">
+                                {releaseGroupLotIds.join(" + ") || lotToBeReleased?.lot_id}
                             </span>
                         </div>
                         <div className="flex gap-2 justify-between">
@@ -1256,7 +1396,7 @@ export default function LotsUpstream({
                         <div className="w-0.5 h-full bg-base-content/25"></div>
 
                         <div className="w-3/12 p-4">
-                            <ScanPanel lotActions={lotActions} dimensions={dimensions} recommendationsVisible={recommendationsVisible} />
+                            <ScanPanel lotActions={lotActions} dimensions={dimensions} recommendationsVisible={recommendationsVisible} occupancy={occupancy} />
                         </div>
                     </div>
                 </div>

@@ -122,6 +122,7 @@ export function useLotActions() {
         const rec = store.recommendation;
         const lotId = pendingLotToBeAdded?.lot_id?.trim();
         const qty = toQty(pendingLotToBeAdded?.qty);
+        const boxGroupId = pendingLotToBeAdded?.box_group_id ?? null;
 
         if (!lotId) {
             return fail(
@@ -155,7 +156,8 @@ export function useLotActions() {
                     slot_ids: slotIds,
                     box_count: toBoxCount(pendingLotToBeAdded.box_count),
                     dimension_id: Number(pendingLotToBeAdded.dimension_id) || null,
-                    recommendation_id: rec?.id ?? null,
+                    box_group_id: boxGroupId,
+                    recommendation_id: boxGroupId ? null : (rec?.id ?? null),
                 },
                 additionalHeaders: {
                     ...(socketId && { "X-Socket-ID": socketId }),
@@ -174,6 +176,7 @@ export function useLotActions() {
             // "the recommended slot was full" can be true.
             const recommendedSlots = rec?.slots ?? [];
             if (
+                !boxGroupId &&
                 rec?.id &&
                 recommendedSlots.length > 0 &&
                 recommendedSlots.some((s) => !slotIds.includes(s.slot_id))
@@ -293,7 +296,12 @@ export function useLotActions() {
             promise,
             {
                 loading: "Releasing...",
-                success: `Released ${lotId}`,
+                success: (res) => {
+                    const others = (res?.data?.also_released ?? []).map((l) => l.lot_id);
+                    return others.length
+                        ? `Released ${lotId} + ${others.join(" + ")}`
+                        : `Released ${lotId}`;
+                },
                 error: (err) =>
                     isAbortError(err)
                         ? "Cancelled. Checking the server for the final state…"
@@ -305,7 +313,10 @@ export function useLotActions() {
         try {
             const result = await promise;
             if (result?.data?.id) store.updateLot(result.data.id, result.data);
-            store.incrementTotalReleased();
+            // Lots that shared the boxes were released with it.
+            const alsoReleased = result?.data?.also_released ?? [];
+            alsoReleased.forEach((l) => store.updateLot(l.id, l));
+            for (let i = 0; i <= alsoReleased.length; i++) store.incrementTotalReleased();
             // A leftover ID would be attributed to the NEXT release.
             store.clearWithdrawerId();
             store.clearLotToBeReleased();

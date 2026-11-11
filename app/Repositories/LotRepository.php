@@ -151,7 +151,13 @@ class LotRepository implements LotRepositoryInterface
             'staged_at'    => $now,
             'dimension_id' => $extra['dimension_id'] ?? null,
             'box_count'    => $boxCount,
+            'box_group_id' => $extra['box_group_id'] ?? null,
         ]);
+
+        // New boxes start their own group. Lots sharing boxes pass the existing group id in $extra.
+        if (!$staging->box_group_id) {
+            $staging->update(['box_group_id' => $staging->id]);
+        }
 
         $slots = RackSlot::with('rack')->whereIn('id', $slotIds)->get()->keyBy('id');
 
@@ -174,7 +180,7 @@ class LotRepository implements LotRepositoryInterface
         return $staging;
     }
 
-    public function update(int $id, array $data): Lot
+    public function update(int $id, array $data, bool $syncGroup = true): Lot
     {
         return DB::transaction(function () use ($id, $data) {
             $lot = Lot::lockForUpdate()->findOrFail($id);
@@ -252,6 +258,22 @@ class LotRepository implements LotRepositoryInterface
                             'assigned_at'       => $now,
                             'assigned_by'       => $modifiedBy,
                         ]);
+                    }
+
+                    // Shared boxes physically move together: mirror this slot change onto every other lot in the group.
+                    // $syncGroup = false stops the siblings from syncing back (infinite loop).
+                    // FUTURE: if an "unlink from group" action is ever added, a lot that was unlinked
+                    // simply gets its own box_group_id and is no longer found here.
+                    if ($syncGroup && $activeStaging->box_group_id) {
+                        LotStaging::where('box_group_id', $activeStaging->box_group_id)
+                            ->where('id', '!=', $activeStaging->id)
+                            ->whereNull('released_at')
+                            ->pluck('lot_id')
+                            ->each(fn($siblingLotId) => $this->update(
+                                $siblingLotId,
+                                ['slot_ids' => $slotIds, 'modified_by' => $modifiedBy],
+                                false,
+                            ));
                     }
 
                     $remaining = LotPosition::where('lot_staging_id', $activeStaging->id)->whereNull('released_at')->get();

@@ -21,6 +21,7 @@ class LotStaging extends Model
         'released_at',
         'dimension_id',
         'box_count',
+        'box_group_id',
         'withdrawer_id',
     ];
 

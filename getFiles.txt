@@ -39,6 +39,7 @@
       "LotPosition"
       "RackSlot"
       "RecommendationService"
+      "RackTopView"
       "PlacementSetting"
       "PlacementRecommendation"
       "BoxDimension"

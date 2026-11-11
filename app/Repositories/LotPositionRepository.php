@@ -66,7 +66,16 @@ class LotPositionRepository implements LotPositionRepositoryInterface
         $rows = LotPosition::whereNull('lot_positions.released_at')
             ->where('lot_positions.rack_page_id', $rackPageId)
             ->join('lots', 'lots.id', '=', 'lot_positions.lot_id')
-            ->select('lot_positions.rack_slot_id', 'lot_positions.lot_id as lot_pk', 'lots.lot_id as lot_code', 'lots.received_at')
+            ->leftJoin('lot_stagings', 'lot_stagings.id', '=', 'lot_positions.lot_staging_id')
+            ->select(
+                'lot_positions.rack_slot_id',
+                'lot_positions.lot_id as lot_pk',
+                'lots.lot_id as lot_code',
+                'lots.received_at',
+                'lot_stagings.box_group_id',
+                'lot_stagings.box_count as staging_box_count',
+                'lot_stagings.dimension_id as staging_dimension_id',
+            )
             ->get();
 
         $slotIdsByLot = $rows->groupBy('lot_pk')->map(
@@ -80,6 +89,9 @@ class LotPositionRepository implements LotPositionRepositoryInterface
             'slot_ids'                   => $slotIdsByLot[$row->lot_pk],
             'has_exceeded_age_threshold' => Carbon::parse($row->received_at, 'UTC')->lte($threshold),
             'rack_slot_id'               => (int) $row->rack_slot_id,
+            'box_group_id'               => $row->box_group_id ? (int) $row->box_group_id : null,
+            'box_count'                  => $row->staging_box_count ? (int) $row->staging_box_count : null,
+            'dimension_id'               => $row->staging_dimension_id ? (int) $row->staging_dimension_id : null,
         ])->groupBy('rack_slot_id');
     }
 

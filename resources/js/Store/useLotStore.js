@@ -122,10 +122,16 @@ export const useLotStore = create((set, get) => ({
 				slotPendingLot: already
 					? state.slotPendingLot.filter((s) => s.id !== slot.id)
 					: [...state.slotPendingLot, slot],
+				// Picking slots by hand leaves the "same boxes as" choice (the group dictates the slots).
+				pendingLotToBeAdded: state.pendingLotToBeAdded?.box_group_id
+					? { ...state.pendingLotToBeAdded, box_group_id: null }
+					: state.pendingLotToBeAdded,
 			};
 		}),
 
 	clearSlotPendingLot: () => set({ slotPendingLot: [] }),
+
+	setSlotPendingLot: (slotPendingLot) => set({ slotPendingLot }),
 
 	removeSlotPendingLot: (slotId) =>
 		set((state) => ({

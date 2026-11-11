@@ -391,13 +391,16 @@ function SlotRow({
 	isActive,
 	isHighlighted,
 	isSelected, // already false unless multiSelect is on (see pickedIds in RackTopView)
+	multiSelect,
 	isRecommended,
 	recommendedRank,
 	recommendedTotal,
 	onPick,
 }) {
 	const state = slotState(slot, lots);
-	const blocked = state === "full" || state === "disabled";
+	// A full slot holding lots can still be picked in the stock dialog, to join the boxes already in it.
+	// The server still rejects a normal lot into a full slot unless "Same boxes as" was used.
+	const blocked = state === "disabled" || (state === "full" && !(multiSelect && lots.length > 0));
 	const slotLabel = slot?.label || slot?.meta?.label;
 
 	const text =
@@ -422,7 +425,7 @@ function SlotRow({
 			className={clsx(
 				"relative flex h-9 w-full items-center gap-2 rounded border px-2 text-left transition-colors",
 				// One border/background set only, so the highlight never fights with the state colors.
-				!blocked && isHighlighted ? ROW_HIGHLIGHT_CLASS : ROW_CLASS[state],
+				!blocked && state !== "full" && isHighlighted ? ROW_HIGHLIGHT_CLASS : ROW_CLASS[state],
 				blocked ? "cursor-not-allowed" : "hover:border-primary",
 				(isActive || isSelected) && "ring-2 ring-primary",
 				isRecommended && "outline-2 outline-dashed outline-info outline-offset-[-3px]",

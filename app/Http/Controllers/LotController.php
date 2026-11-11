@@ -166,6 +166,7 @@ class LotController extends Controller
             'slot_ids'  => 'sometimes|array|min:0',
             'slot_ids.*' => ['sometimes', 'integer', \Illuminate\Validation\Rule::exists('rack_slots', 'id')->whereNull('deleted_at')],
             'recommendation_id' => 'nullable|integer',
+            'box_group_id' => 'nullable|integer', // stock on the same boxes as lots already in the rack
             'box_count'    => 'nullable|integer|min:1|max:999', // keep in sync with MAX_BOX_COUNT in useLotActions
             'dimension_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists((new BoxDimension)->getTable(), 'id')],
         ]);

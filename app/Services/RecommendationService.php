@@ -192,7 +192,7 @@ class RecommendationService
      *
      * @return array{recommended: ?array, actual_slot_ids: int[], model_contradicted: ?bool, rack_page_id: ?int}
      */
-    public function shadow(array $actualSlotIds, ?int $dimensionId, ?int $boxCount, int $lotId): array
+    public function shadow(array $actualSlotIds, ?int $dimensionId, ?int $boxCount, int $lotId, bool $sharesBoxes = false): array
     {
         $payload = [
             'recommended'        => null,
@@ -207,6 +207,10 @@ class RecommendationService
             }
 
             $payload['rack_page_id'] = RackSlot::find($actualSlotIds[0])?->rack?->rack_page_id;
+
+            if ($sharesBoxes) {
+                return $payload; // no recommendation to judge: these boxes were already placed
+            }
 
             if (!$dimensionId || !$boxCount || !$payload['rack_page_id']) {
                 return $payload;
@@ -320,7 +324,7 @@ class RecommendationService
         $positions = LotPosition::query()
             ->whereNull('released_at')
             ->whereIn('rack_slot_id', $slots->pluck('id'))
-            ->with('staging:id,dimension_id')
+            ->with('staging:id,dimension_id,box_group_id')
             ->get(['id', 'lot_id', 'lot_staging_id', 'rack_slot_id', 'box_count', 'presumed_released_at'])
             ->groupBy('rack_slot_id');
 
@@ -356,7 +360,13 @@ class RecommendationService
                     continue;
                 }
 
-                $entries[] = ['dim' => $dim, 'boxes' => (int) $p->box_count, 'presumed' => $p->presumed_released_at !== null];
+                // One entry per physical box set, however many lots share it (lots in one box group).
+                $key = $p->staging?->box_group_id ?? 'p' . $p->id;
+
+                $entries[$key] ??= ['dim' => $dim, 'boxes' => 0, 'presumed' => true];
+                $entries[$key]['boxes']    = max($entries[$key]['boxes'], (int) $p->box_count);
+                // Presumed gone only if every lot sharing the boxes is presumed gone.
+                $entries[$key]['presumed'] = $entries[$key]['presumed'] && $p->presumed_released_at !== null;
             }
 
             if ($known) {

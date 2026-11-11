@@ -341,7 +341,9 @@ const SlotButton = React.memo(function SlotButton({
 		<div
 			role="button"
 			onClick={() => {
-				if (isManuallyFull || !isSlotEnabled) return;
+				if (!isSlotEnabled) return;
+				// A full slot can still be picked in the stock dialog, to join the boxes already in it.
+				if (isManuallyFull && !(multiSelect && hasLots)) return;
 				onPick?.(slot);
 			}}
 			onMouseEnter={() => setHovered(true)}

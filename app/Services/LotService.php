@@ -39,6 +39,18 @@ class LotService
         return DB::transaction(function () use ($data) {
             $now = Carbon::now('UTC');
 
+            // Same physical boxes as lots already in the rack: location and box facts come from the
+            // group, never from the form.
+            $group = !empty($data['box_group_id'])
+                ? $this->resolveSharedGroup((int) $data['box_group_id'])
+                : null;
+
+            if ($group) {
+                $data['slot_ids']     = $group['slot_ids'];
+                $data['dimension_id'] = $group['dimension_id'];
+                $data['box_count']    = $group['box_count'];
+            }
+
             // lots can be placed in multiple slots, in different racks.
 
             $data['slot_ids'] = array_values(array_unique($data['slot_ids'] ?? []));
@@ -64,7 +76,8 @@ class LotService
                     ]);
                 }
 
-                if (!$slot->isAvailable()) {
+                // A full slot must not block a lot joining boxes that are already there.
+                if (!$group && !$slot->isAvailable()) {
                     throw ValidationException::withMessages([
                         'slot_ids' => "Slot {$slot->label} is marked full.",
                     ]);
@@ -132,6 +145,7 @@ class LotService
                 $data['dimension_id'] ?? null,
                 $data['box_count'] ?? null,
                 $lot->id,
+                sharesBoxes: (bool) $group,
             );
 
             $staging = $this->lots->createStaging(
@@ -139,10 +153,14 @@ class LotService
                 $data['slot_ids'],
                 $data['received_by'],
                 $now,
-                ['dimension_id' => $data['dimension_id'] ?? null, 'box_count' => $data['box_count'] ?? null],
+                [
+                    'dimension_id' => $data['dimension_id'] ?? null,
+                    'box_count'    => $data['box_count'] ?? null,
+                    'box_group_id' => $group['id'] ?? null, // null = new boxes = new group
+                ],
             );
 
-            $this->recommendations->record($staging, $shadow, $data['recommendation_id'] ?? null);
+            $this->recommendations->record($staging, $shadow, $group ? null : ($data['recommendation_id'] ?? null));
 
             return ['lot' => $lot->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
         });
@@ -224,7 +242,8 @@ class LotService
 
                 if (!$lot) {
                     throw ValidationException::withMessages([
-                        'lot' => 'No staged lot found for this scan. It may have already been released.',
+                        'lot' => $this->releasedTogetherNote($lotId, $now)
+                            ?? 'No staged lot found for this scan. It may have already been released.',
                     ]);
                 }
 
@@ -245,6 +264,45 @@ class LotService
                 if (!$staging) {
                     throw ValidationException::withMessages([
                         'lot' => 'No active staging record found for this lot.',
+                    ]);
+                }
+
+                // Boxes shared by several lots leave the rack together: release the whole group with the same
+                // withdrawer, in this one transaction.
+                // FUTURE: a "release only this lot" option would skip this block. If it is ever added, it
+                // needs an "unlink from group" action too, or the remaining lots are left staged in a slot
+                // whose boxes are gone.
+                $siblings = $staging->box_group_id
+                    ? LotStaging::where('box_group_id', $staging->box_group_id)
+                        ->where('id', '!=', $staging->id)
+                        ->whereNull('released_at')
+                        ->lockForUpdate()
+                        ->get()
+                    : collect();
+
+                if ($siblings->isNotEmpty()) {
+                    // Their slots must be known before their positions are released below.
+                    $rackSlotIds = array_values(array_unique(array_merge(
+                        $rackSlotIds,
+                        LotPosition::whereIn('lot_staging_id', $siblings->pluck('id'))
+                            ->whereNull('released_at')
+                            ->pluck('rack_slot_id')
+                            ->all(),
+                    )));
+                }
+
+                foreach ($siblings as $sibling) {
+                    $sibling->update([
+                        'released_at'   => $now,
+                        'released_by'   => $releasedBy,
+                        'withdrawer_id' => $withdrawerId,
+                    ]);
+
+                    $this->positions->releaseByLot($sibling->lot_id, $releasedBy);
+                    $this->lots->update($sibling->lot_id, [
+                        'status'      => 'released',
+                        'released_by' => $releasedBy,
+                        'released_at' => $now,
                     ]);
                 }
 
@@ -273,11 +331,76 @@ class LotService
                     $this->slots->clearManyFull($toClear);
                 }
 
-                return $updated->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']);
+                $fresh = ['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy'];
+
+                $result = $updated->fresh($fresh);
+
+                // The other lots released with it, so the frontend can update their rows.
+                $result->setAttribute(
+                    'also_released',
+                    $siblings->isEmpty()
+                        ? collect()
+                        : Lot::with($fresh)->whereIn('id', $siblings->pluck('lot_id'))->get(),
+                );
+
+                return $result;
             });
         } finally {
             $lock->release();
         }
+    }
+
+    // The chosen group must still have lots in the rack. Location and box facts come from it.
+    private function resolveSharedGroup(int $groupId): array
+    {
+        $positions = LotPosition::whereNull('released_at')
+            ->whereHas('staging', fn($q) => $q->where('box_group_id', $groupId))
+            ->get(['rack_slot_id', 'lot_staging_id']);
+
+        if ($positions->isEmpty()) {
+            throw ValidationException::withMessages([
+                'box_group_id' => 'Those boxes are no longer in the rack. Stock this lot normally.',
+            ]);
+        }
+
+        $facts = LotStaging::whereIn('id', $positions->pluck('lot_staging_id'))
+            ->orderByDesc('box_count') // a staging with unknown box facts sorts last
+            ->first(['dimension_id', 'box_count']);
+
+        return [
+            'id'           => $groupId,
+            'slot_ids'     => $positions->pluck('rack_slot_id')->unique()->values()->all(),
+            'dimension_id' => $facts?->dimension_id,
+            'box_count'    => $facts?->box_count,
+        ];
+    }
+
+    // A scan of a lot that was just released together with others (e.g. LOT-B scanned after LOT-A
+    // released both) gets a clear message instead of the generic "not found".
+    private function releasedTogetherNote(string $lotId, Carbon $now): ?string
+    {
+        $recent = LotStaging::join('lots', 'lots.id', '=', 'lot_stagings.lot_id')
+            ->where('lots.lot_id', $lotId)
+            ->whereNotNull('lot_stagings.box_group_id')
+            ->where('lot_stagings.released_at', '>=', $now->copy()->subMinutes(10))
+            ->orderByDesc('lot_stagings.released_at')
+            ->first(['lot_stagings.id', 'lot_stagings.box_group_id']);
+
+        if (!$recent) {
+            return null;
+        }
+
+        $others = LotStaging::join('lots', 'lots.id', '=', 'lot_stagings.lot_id')
+            ->where('lot_stagings.box_group_id', $recent->box_group_id)
+            ->where('lot_stagings.id', '!=', $recent->id)
+            ->pluck('lots.lot_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        return $others
+            ? "{$lotId} was already released together with " . implode(', ', $others) . '.'
+            : null;
     }
 
     public function downloadFilteredExport(array $filters, $rackPageId)
