@@ -20,7 +20,15 @@ function SlotBarcode({ value, label, className = null }) {
 	}, [value]);
 
 	return (
-		<div className={clsx("flex flex-col items-center rounded w-45", className)}>
+		<div
+			className={clsx(
+				"flex flex-col items-center rounded w-45",
+				"border border-dashed border-gray-500",
+				"px-3 py-2 box-border",
+				"print:break-inside-avoid",
+				className,
+			)}
+		>
 			<svg ref={ref} />
 			<span className="text-xs font-bold mt-1">{label}</span>
 		</div>
