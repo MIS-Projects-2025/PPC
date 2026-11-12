@@ -8,25 +8,27 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        // Master list of box sizes (mm). depth_units: 2 = full depth, 1 = mini-pizza (half depth).
-        Schema::create('box_dimensions', function (Blueprint $table) {
-            $table->id();
-            $table->unsignedSmallInteger('length');
-            $table->unsignedSmallInteger('height');
-            $table->unsignedTinyInteger('depth_units')->default(2);
-            $table->timestamps();
+        if (! Schema::hasTable('box_dimensions')) {
+            Schema::create('box_dimensions', function (Blueprint $table) {
+                $table->id();
+                $table->unsignedSmallInteger('length');
+                $table->unsignedSmallInteger('height');
+                $table->unsignedTinyInteger('depth_units')->default(2);
+                $table->timestamps();
 
-            $table->unique(['length', 'height', 'depth_units']);
-        });
+                $table->unique(['length', 'height', 'depth_units']);
+            });
+        }
 
-        // key/value so new settings never need a migration.
-        Schema::create('placement_settings', function (Blueprint $table) {
-            $table->string('key', 40)->primary();
-            $table->decimal('value', 8, 2);
-        });
+        if (! Schema::hasTable('placement_settings')) {
+            Schema::create('placement_settings', function (Blueprint $table) {
+                $table->string('key', 40)->primary();
+                $table->decimal('value', 8, 2);
+            });
+        }
 
-        // Placeholder starting values from the requirements (5.6). Tune after measuring real boxes.
-        DB::table('placement_settings')->insert([
+        // insertOrIgnore: never overwrites or duplicates values that already exist.
+        DB::table('placement_settings')->insertOrIgnore([
             ['key' => 'column_gap',       'value' => 10],
             ['key' => 'end_margin',       'value' => 10],
             ['key' => 'height_clearance', 'value' => 10],
@@ -34,51 +36,51 @@ return new class extends Migration {
         ]);
 
         Schema::table('lot_stagings', function (Blueprint $table) {
-            // On the cycle, not the lot: box count changes when a lot returns.
-            $table->foreignId('dimension_id')->nullable()->constrained('box_dimensions');
-            $table->unsignedSmallInteger('box_count')->nullable();
+            if (! Schema::hasColumn('lot_stagings', 'dimension_id')) {
+                $table->foreignId('dimension_id')->nullable()->constrained('box_dimensions');
+            }
+            if (! Schema::hasColumn('lot_stagings', 'box_count')) {
+                $table->unsignedSmallInteger('box_count')->nullable();
+            }
         });
 
         Schema::table('lot_positions', function (Blueprint $table) {
-            $table->unsignedSmallInteger('box_count')->nullable();
-            $table->timestamp('presumed_released_at')->nullable();
+            if (! Schema::hasColumn('lot_positions', 'box_count')) {
+                $table->unsignedSmallInteger('box_count')->nullable();
+            }
+            if (! Schema::hasColumn('lot_positions', 'presumed_released_at')) {
+                $table->timestamp('presumed_released_at')->nullable();
+            }
         });
 
         Schema::table('rack_slots', function (Blueprint $table) {
-            $table->unsignedSmallInteger('length')->nullable();   // mm, NULL = untracked
-            $table->unsignedSmallInteger('height')->nullable();   // mm, NULL = untracked
-            $table->boolean('tracked')->default(true);            // false for tub slots
+            if (! Schema::hasColumn('rack_slots', 'length')) {
+                $table->unsignedSmallInteger('length')->nullable();
+            }
+            if (! Schema::hasColumn('rack_slots', 'height')) {
+                $table->unsignedSmallInteger('height')->nullable();
+            }
+            if (! Schema::hasColumn('rack_slots', 'tracked')) {
+                $table->boolean('tracked')->default(true);
+            }
         });
 
-        // Shadow mode: what the engine would have said vs. what the operator did.
-        Schema::create('placement_recommendations', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('lot_staging_id')->unique()->constrained('lot_stagings')->cascadeOnDelete();
-            $table->json('recommended')->nullable();      // [{slot_id, boxes}] or NULL = no recommendation
-            $table->json('actual_slot_ids');
-            $table->boolean('model_contradicted')->nullable(); // NULL = could not be evaluated
-            $table->timestamp('created_at')->useCurrent();
-        });
+        if (! Schema::hasTable('placement_recommendations')) {
+            Schema::create('placement_recommendations', function (Blueprint $table) {
+                $table->id();
+                $table->foreignId('lot_staging_id')->unique()->constrained('lot_stagings')->cascadeOnDelete();
+                $table->json('recommended')->nullable();
+                $table->json('actual_slot_ids');
+                $table->boolean('model_contradicted')->nullable();
+                $table->timestamp('created_at')->useCurrent();
+            });
+        }
     }
 
+    // Deliberately conservative: box_dimensions may predate this migration on prod,
+    // so down() must not drop it (or the lot_stagings columns it may not own).
     public function down(): void
     {
         Schema::dropIfExists('placement_recommendations');
-
-        Schema::table('rack_slots', function (Blueprint $table) {
-            $table->dropColumn(['length', 'height', 'tracked']);
-        });
-
-        Schema::table('lot_positions', function (Blueprint $table) {
-            $table->dropColumn(['box_count', 'presumed_released_at']);
-        });
-
-        Schema::table('lot_stagings', function (Blueprint $table) {
-            $table->dropConstrainedForeignId('dimension_id');
-            $table->dropColumn('box_count');
-        });
-
-        Schema::dropIfExists('placement_settings');
-        Schema::dropIfExists('box_dimensions');
     }
 };
