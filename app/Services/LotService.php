@@ -69,12 +69,26 @@ class LotService
                 ]);
             }
 
-            foreach ($data['slot_ids'] as $slotId) {
-                $slot = $this->slots->find($slotId);
+            $slotModels = \App\Models\RackSlot::withTrashed()
+                ->with('rack')
+                ->whereIn('id', $data['slot_ids'])
+                ->get()
+                ->keyBy('id');
 
-                if (!$slot->rack) {
+            foreach ($data['slot_ids'] as $slotId) {
+                $slot = $slotModels->get($slotId);
+
+                if (!$slot) {
                     throw ValidationException::withMessages([
-                        'slot_ids' => "Slot {$slot->label} belongs to a deleted rack.",
+                        'slot_ids' => 'A selected slot no longer exists. Refresh and try again.',
+                    ]);
+                }
+
+                if ($slot->trashed() || !$slot->rack || $slot->rack->trashed()) {
+                    throw ValidationException::withMessages([
+                        'slot_ids' => $group
+                            ? "Slot {$slot->label} was deleted, but the boxes of this set are still recorded there. Edit the lot that holds them and move it to a live slot first."
+                            : "Slot {$slot->label} belongs to a deleted rack.",
                     ]);
                 }
 
@@ -92,12 +106,8 @@ class LotService
                 }
             }
 
-            $productionLineIds = collect($data['slot_ids'])
-                ->map(function ($slotId) {
-                    return $this->slots->find($slotId)
-                        ->rack
-                        ->production_line_id;
-                })
+            $productionLineIds = $slotModels
+                ->map(fn($slot) => $slot->rack->production_line_id)
                 ->unique();
 
             if ($productionLineIds->count() > 1) {
@@ -630,6 +640,7 @@ class LotService
                     ->whereHas('stagings.positions', fn($q) => $q->where('rack_page_id', $rackPageId))
                     ->with([
                         'positions' => fn($q) => $q
+                            ->where('rack_page_id', $rackPageId)
                             ->with(['staging', 'rackSlot.rack.productionLine'])
                             ->orderBy('assigned_at'),
                     ])

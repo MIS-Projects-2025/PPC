@@ -535,7 +535,7 @@ function SlotDetailPanel({ slot, occupancy }) {
 									</div>
 								)}
 								<p className="text-sm font-medium text-base-content">
-									{lot.part}
+									{lot.partname ?? lot.part}
 								</p>
 								<div className="mt-4 flex gap-1 items-center justify-between">
 									<div className="flex gap-1 items-center">

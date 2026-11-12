@@ -39,6 +39,8 @@ class Rack extends Model
     {
         return Attribute::make(
             get: fn() => $this->slots
+                // Natural order (A1, A2, A10) so "slot 1 = top" holds whatever order the rows were created in.
+                ->sortBy('label', SORT_NATURAL | SORT_FLAG_CASE)
                 ->groupBy(fn($slot) => preg_replace('/\d+$/', '', $slot->label))
                 // Optional: Sort keys so shelf A comes before B
                 ->pipe(fn($col) => $col->sortKeysUsing(function ($a, $b) {

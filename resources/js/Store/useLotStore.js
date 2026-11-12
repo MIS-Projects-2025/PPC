@@ -160,7 +160,6 @@ export const useLotStore = create((set, get) => ({
 		set((state) => ({ lots: state.lots.filter((l) => l.id !== id) })),
 
 	updateLot: (id, updatedData) => {
-		console.log("[store] updateLot called", id, updatedData?.status);
 		set((state) => ({
 			lots: state.lots.map((l) => (l.id === id ? { ...l, ...updatedData } : l)),
 		}));

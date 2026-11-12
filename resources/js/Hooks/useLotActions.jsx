@@ -126,7 +126,17 @@ export function useLotActions() {
             );
         }
         if (qty === null) return fail(QTY_ERROR);
-        if (slotPendingLot.length === 0) {
+        // A lot joining boxes already in the rack goes where those boxes are. Those slots can be on another
+        // rack page (so not in this page's slot map); the server decides the slots in that case anyway.
+        const joinSlots = rec?.joins ? (rec.slots ?? []) : [];
+        const slotIds = joinSlots.length
+            ? joinSlots.map((s) => s.slot_id)
+            : slotPendingLot.map((s) => s.id);
+        const slotLabels = joinSlots.length
+            ? joinSlots.map((s) => s.label).join(", ")
+            : slotPendingLot.map((s) => s.label || s.name).join(", ");
+
+        if (slotIds.length === 0) {
             return fail(
                 "Error: No rack slots selected. Please select at least one rack slot and try again.",
             );
@@ -134,10 +144,6 @@ export function useLotActions() {
         if (store.lotMutations[lotId]?.isLoading) return;
 
         const socketId = window.Echo?.socketId();
-        const slotIds = slotPendingLot.map((s) => s.id);
-        const slotLabels = slotPendingLot
-            .map((s) => s.label || s.name)
-            .join(", ");
 
         store.setLotLoading(lotId, true);
 

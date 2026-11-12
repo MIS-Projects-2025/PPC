@@ -5,6 +5,7 @@ namespace App\Repositories;
 use Illuminate\Database\Eloquent\Collection;
 use App\Models\LotPosition;
 use App\Models\Lot;
+use App\Models\BoxDimension;
 use App\Repositories\Interfaces\LotPositionRepositoryInterface;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -63,10 +64,13 @@ class LotPositionRepository implements LotPositionRepositoryInterface
     // production_line_id alone can't express.
     public function getOccupancyByRackPage(int $rackPageId)
     {
+        $dims = (new BoxDimension)->getTable();
+
         $rows = LotPosition::whereNull('lot_positions.released_at')
             ->where('lot_positions.rack_page_id', $rackPageId)
             ->join('lots', 'lots.id', '=', 'lot_positions.lot_id')
             ->leftJoin('lot_stagings', 'lot_stagings.id', '=', 'lot_positions.lot_staging_id')
+            ->leftJoin($dims, "{$dims}.id", '=', 'lot_stagings.dimension_id')
             ->select(
                 'lot_positions.rack_slot_id',
                 'lot_positions.lot_id as lot_pk',
@@ -77,6 +81,12 @@ class LotPositionRepository implements LotPositionRepositoryInterface
                 'lot_stagings.dimension_id as staging_dimension_id',
                 'lot_stagings.box_source',
                 'lot_stagings.source_group_id',
+                'lot_positions.box_count as slot_box_count',
+                'lots.partname',
+                'lots.qty',
+                'lot_stagings.box_details',
+                "{$dims}.name as dimension_name",
+                "{$dims}.depth_units as depth_units",
             )
             ->get();
 
@@ -98,6 +108,12 @@ class LotPositionRepository implements LotPositionRepositoryInterface
             'release_group' => $row->box_source && $row->source_group_id
                 ? $row->box_source . ':' . $row->source_group_id
                 : ($row->box_group_id ? 'b:' . $row->box_group_id : null),
+            'slot_box_count' => $row->slot_box_count ? (int) $row->slot_box_count : null,
+            'partname'       => $row->partname,
+            'qty'            => (int) $row->qty,
+            'box_details'    => $row->box_details,
+            'dimension_name' => $row->dimension_name,
+            'depth_units'    => $row->depth_units ? (int) $row->depth_units : null,
         ])->groupBy('rack_slot_id');
     }
 

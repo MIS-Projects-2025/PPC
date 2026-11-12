@@ -58,6 +58,10 @@ export default function useLotMatch({ rackPageId }) {
                 if (!res.ok) throw new Error(`match failed (${res.status})`);
 
                 const data = await res.json();
+
+                // A newer request (or a cleared form) already took over: drop this answer.
+                if (controller.signal.aborted) return;
+
                 const live = useLotStore.getState();
 
                 live.setMatch(data.match ?? null, data.warnings ?? []);
@@ -99,5 +103,5 @@ export default function useLotMatch({ rackPageId }) {
             clearTimeout(timer);
             controller.abort();
         };
-    }, [lotId, isEditMode, refreshKey, rackPageId]);
+    }, [lotId, mode, isEditMode, refreshKey, rackPageId]);
 }

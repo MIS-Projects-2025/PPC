@@ -101,21 +101,20 @@ class LotController extends Controller
             'untrackedSlots' => fn() => $recommendations->isVisible($page->id)
                 ? $recommendations->untrackedSummary($page->id)
                 : null,
-            'totalEntries' => Lot::whereHas(
+            'totalEntries' => fn() => Lot::whereHas(
                 'positions',
                 fn($q) => $q->where('rack_page_id', $page->id)
             )->count(),
-            'totalReleased' => Lot::whereHas(
+            'totalReleased' => fn() => Lot::whereHas(
                 'stagings',
                 fn($q) => $q
                     ->whereBetween('released_at', [$todayStart, $todayEnd])
-            )
-                ->whereHas('stagings.positions', fn($q) => $q->where('rack_page_id', $page->id))
-                ->count(),
-            'totalReceived' => Lot::whereHas('positions', fn($q) => $q->where('rack_page_id', $page->id))
+                    ->whereHas('positions', fn($p) => $p->where('rack_page_id', $page->id))
+            )->count(),
+            'totalReceived' => fn() => Lot::whereHas('positions', fn($q) => $q->where('rack_page_id', $page->id))
                 ->whereBetween('received_at', [$todayStart, $todayEnd])
                 ->count(),
-            'floorMaps' => app(RackFloorMapService::class)->forPages(RackPage::orderBy('id')->get()),
+            'floorMaps' => fn() => app(RackFloorMapService::class)->forPages(RackPage::orderBy('id')->get()),
         ]);
     }
 

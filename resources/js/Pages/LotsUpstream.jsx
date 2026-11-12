@@ -451,7 +451,7 @@ function LastRunBadge({ latestRun, stagedAt }) {
         <>
             <span
                 data-tooltip-id={`run-${latestRun.id}`}
-                className="cursor-pointer text-[10px] font-semibold rounded bg-primary text-base-content border border-primary px-1.5 py-0.5 cursor-default"
+                className="cursor-pointer text-[10px] font-semibold rounded bg-primary text-base-content border border-primary px-1.5 py-0.5"
             >
                 ✓ Completed: {absolute}
             </span>
@@ -945,8 +945,14 @@ export default function LotsUpstream({
     useEffect(() => {
         if (!scanResult.status) return;
 
+        // showModal() throws if the dialog is already open, and every scan re-sets OPEN.
+        const open = (id) => {
+            const dlg = document.getElementById(id);
+            if (dlg && !dlg.open) dlg.showModal();
+        };
+
         if (scanResult.status === LOT_UPSTREAM_MODES.OPEN_WITHDRAWAL) {
-            document.getElementById(WITHDRAWER_SELECTION_ID)?.showModal();
+            open(WITHDRAWER_SELECTION_ID);
 
             // Push the focus to the next tick of the event loop
             setTimeout(() => {
@@ -957,8 +963,7 @@ export default function LotsUpstream({
         }
 
         if (scanResult.status === LOT_UPSTREAM_MODES.OPEN) {
-            // lotActions.resetFocus();
-            document.getElementById(RACK_SELECTION_ID)?.showModal();
+            open(RACK_SELECTION_ID);
             return;
         }
 
@@ -1014,8 +1019,14 @@ export default function LotsUpstream({
             type !== LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE &&
             lotActions.focusedField
         ) {
-            const current = useLotStore.getState().pendingLotToBeAdded[lotActions.focusedField] ?? "";
-            editPendingLot(lotActions.focusedField, current.slice(0, -1));
+            // The scanner typed the start of this scan into the focused input before it was recognised.
+            // If the field is just a piece of the scan, it is junk: clear it.
+            const current = String(
+                useLotStore.getState().pendingLotToBeAdded?.[lotActions.focusedField] ?? "",
+            );
+            if (current && currentBuffer.startsWith(current)) {
+                editPendingLot(lotActions.focusedField, "");
+            }
         }
 
         if (
@@ -1091,10 +1102,11 @@ export default function LotsUpstream({
     // Lots of the same external group leave together (the server releases the whole group).
     // FUTURE: "release only this lot" would change this memo and LotService::release.
     const releaseGroupLotIds = useMemo(() => {
-        const code = lotToBeReleased?.lot_id;
+        const code = lotToBeReleased?.lot_id?.trim();
         if (!code) return [];
+        const norm = (v) => String(v ?? "").trim().toLowerCase();
         const rows = Object.values(occupancy ?? {}).flat();
-        const mine = rows.find((r) => r.id === code && r.release_group);
+        const mine = rows.find((r) => norm(r.id) === norm(code) && r.release_group);
         if (!mine) return [code];
         return [...new Set(rows.filter((r) => r.release_group === mine.release_group).map((r) => r.id))];
     }, [occupancy, lotToBeReleased]);
@@ -1514,15 +1526,21 @@ export default function LotsUpstream({
                                     positionAnchor: "--anchor-status-select",
                                 }}
                             >
-                                <li onClick={() => set("status", "")}>
-                                    <a>All Status</a>
-                                </li>
-                                <li onClick={() => set("status", "staged")}>
-                                    <a>Staged</a>
-                                </li>
-                                <li onClick={() => set("status", "released")}>
-                                    <a>Released</a>
-                                </li>
+                                {[
+                                    ["", "All Status"],
+                                    ["staged", "Staged"],
+                                    ["released", "Released"],
+                                ].map(([value, text]) => (
+                                    <li
+                                        key={value}
+                                        onClick={() => {
+                                            set("status", value);
+                                            document.getElementById("status-select")?.hidePopover?.();
+                                        }}
+                                    >
+                                        <a>{text}</a>
+                                    </li>
+                                ))}
                             </ul>
                         </div>
 

@@ -223,12 +223,12 @@ class LotSourceRepository
 
     private function fromTraveler(object $r): array
     {
-        return $this->row(self::PT, $r->id, $r->lot_number, $r->part_number, $r->qty, $r->box_group_id, $r->box_details, $r->no_of_box, $r->date_created);
+        return $this->row(self::PT, $r->id, $r->lot_number, $r->part_number, $r->qty, $r->box_group_id, $r->box_details, $r->no_of_box, $r->date_created ?? $r->DATE_CREATED ?? null);
     }
 
     private function fromPickup(object $r): array
     {
-        return $this->row(self::PPC, $r->id_pickup, $r->LOTID, $r->PARTNAME, $r->QTY, $r->box_group_id, $r->box_details, $r->no_of_box, $r->DATE_CREATED);
+        return $this->row(self::PPC, $r->id_pickup, $r->LOTID, $r->PARTNAME, $r->QTY, $r->box_group_id, $r->box_details, $r->no_of_box, $r->DATE_CREATED ?? $r->date_created ?? null);
     }
 
     private function row(string $source, $rowId, $lot, $part, $qty, $gid, $details, $count, $at): array
