@@ -20,6 +20,7 @@ use App\Services\RecommendationService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Validator;
 use App\Services\RackFloorMapService;
+use App\Repositories\LotSourceRepository;
 
 class LotController extends Controller
 {
@@ -97,6 +98,9 @@ class LotController extends Controller
             'productionLine' => $page->key,
             'productionLineId' => $page->id,
             'recommendationsVisible' => fn() => $recommendations->isVisible($page->id),
+            'untrackedSlots' => fn() => $recommendations->isVisible($page->id)
+                ? $recommendations->untrackedSummary($page->id)
+                : null,
             'totalEntries' => Lot::whereHas(
                 'positions',
                 fn($q) => $q->where('rack_page_id', $page->id)
@@ -124,26 +128,6 @@ class LotController extends Controller
         ]);
     }
 
-    // POST lot-upstream/recommend
-    // Advisory and fail-open: any problem answers 200 with no slots, never an error the UI would show.
-    public function recommend(RecommendationService $recommendations)
-    {
-        $validator = Validator::make(request()->all(), [
-            'lot_id'       => 'required|string|max:50',
-            'partname'     => 'nullable|string|max:255',
-            'qty'          => 'nullable|integer|min:1|max:9999999', // accepted, not used by the engine
-            'box_count'    => 'nullable|integer|min:1|max:999',
-            'dimension_id' => 'nullable|integer',
-            'rack_page_id' => 'required|integer|exists:rack_pages,id',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['id' => null, 'slots' => [], 'reason' => 'error', 'prefill' => null]);
-        }
-
-        return response()->json($recommendations->forRequest($validator->validated()));
-    }
-
     // POST lot-upstream/recommendation/{id}/didnt-fit
     // The optional tap: the recommended slot was physically full. Slot IDs come from `recommended`.
     public function didntFit(int $id)
@@ -166,9 +150,6 @@ class LotController extends Controller
             'slot_ids'  => 'sometimes|array|min:0',
             'slot_ids.*' => ['sometimes', 'integer', \Illuminate\Validation\Rule::exists('rack_slots', 'id')->whereNull('deleted_at')],
             'recommendation_id' => 'nullable|integer',
-            'box_group_id' => 'nullable|integer', // stock on the same boxes as lots already in the rack
-            'box_count'    => 'nullable|integer|min:1|max:999', // keep in sync with MAX_BOX_COUNT in useLotActions
-            'dimension_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists((new BoxDimension)->getTable(), 'id')],
         ]);
 
         $data['received_by'] = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
@@ -190,6 +171,70 @@ class LotController extends Controller
             'status'  => 'success',
             'message' => "Lot {$data['lot_id']} received successfully.",
             'data'    => $result,
+        ]);
+    }
+
+    // POST lot-upstream/match
+    // Read-only source match + recommendation in one round trip. Fail-open like recommend().
+    public function match(LotSourceRepository $source, RecommendationService $recommendations)
+    {
+        $v = Validator::make(request()->all(), [
+            'lot_id'       => 'required|string|max:50',
+            'partname'     => 'nullable|string|max:255',
+            'qty'          => 'nullable|integer|min:1|max:9999999',
+            'rack_page_id' => 'required|integer|exists:rack_pages,id',
+            'recommend' => 'sometimes|boolean',
+        ]);
+
+        if ($v->fails()) {
+            return response()->json([
+                'match' => ['status' => 'error'],
+                'warnings' => [],
+                'recommendation' => null
+            ]);
+        }
+
+        $in    = $v->validated();
+        $match = $source->resolve($in['lot_id']);
+
+        return response()->json([
+            'match'          => $match,
+            'warnings'       => $source->warnings($match, $in['partname'] ?? null, $in['qty'] ?? null),
+            'recommendation' => ($in['recommend'] ?? true)
+                ? $recommendations->forRequest($in + ['match' => $match])
+                : null,
+        ]);
+    }
+
+    // POST lot-upstream/box-override
+    public function boxOverride()
+    {
+        $by = session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
+
+        $data = request()->validate([
+            'lot_id'      => 'required|string|max:50',
+            'set_key'     => 'present|nullable|string|max:100', // '' arrives as null for a set with no box name
+            'box_details' => ['required', 'string', \Illuminate\Validation\Rule::exists((new BoxDimension)->getTable(), 'name')],
+            'no_of_box'   => 'required|integer|min:1|max:999',
+        ]);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'Box info corrected.',
+            'data'    => $this->lotService->correctBoxInfo($data['lot_id'], (string) ($data['set_key'] ?? ''), $data['box_details'], (int) $data['no_of_box'], $by),
+        ]);
+    }
+
+    // POST lot-upstream/recheck
+    public function recheck()
+    {
+        session('emp_data')['emp_id'] ?? abort(401, 'Session expired. Please log in again.');
+
+        $data = request()->validate(['lot_id' => 'required|string|max:50']);
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => $this->lotService->recheckLot($data['lot_id']),
         ]);
     }
 

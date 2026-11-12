@@ -13,7 +13,7 @@ const useInternalStore = create((set) => ({
 	selectedSlot: null,
 	isDetailedView: true,
 	slotsMap: {},
-	viewMode: "grid",
+	viewMode: "top",
 	setViewMode: (viewMode) => set({ viewMode }),
 	initializeRacks: (racks) => set({ racks }),
 	updateSlot: (slotId, payload) =>
@@ -53,7 +53,7 @@ export default function RackManagement({
 	multiSelect = false,
 	selectedSlotIds = NO_SELECTION,
 	recommendedSlotIds = NO_RECOMMENDATION,
-	initialView = "grid",
+	initialView = "top",
 	floorMap,
 	floorMaps,
 }) {
@@ -135,27 +135,31 @@ export default function RackManagement({
 	return (
 		<div className="flex w-full h-full text-base-content overflow-hidden font-sans">
 			<main className="flex-1 w-full overflow-y-auto p-4">
-				<header className="mb-2">
-					<h1 className="text-xl font-black tracking-tight text-base-content uppercase">
-						Lot Inventory
-					</h1>
-				</header>
+				<div className="flex items-center justify-between">
+					<header className="mb-2">
+						<h1 className="text-xl font-black tracking-tight text-base-content uppercase">
+							Lot Inventory
+						</h1>
+					</header>
 
-				<div className="join mb-2">
-					<button type="button" onClick={() => setViewMode("grid")}
-						className={clsx("btn btn-sm join-item", viewMode === "grid" && "btn-secondary")}>Grid</button>
-					<button type="button" onClick={() => setViewMode("top")}
-						className={clsx("btn btn-sm join-item", viewMode === "top" && "btn-secondary")}>Top view</button>
-				</div>
+					<div className="flex items-center gap-2">
+						<div className="join mb-2">
+							<button type="button" onClick={() => setViewMode("grid")}
+								className={clsx("btn btn-sm join-item", viewMode === "grid" && "btn-secondary")}>Grid</button>
+							<button type="button" onClick={() => setViewMode("top")}
+								className={clsx("btn btn-sm join-item", viewMode === "top" && "btn-secondary")}>Top view</button>
+						</div>
 
-				<div className="flex gap-1 mb-2">
-					<div>compact</div>
-					<input
-						type="checkbox"
-						checked={!isDetailedView}
-						className="toggle toggle-secondary"
-						onChange={handleChangeDetailView}
-					/>
+						{viewMode === "grid" && <div className="flex gap-1 mb-2">
+							<div>compact</div>
+							<input
+								type="checkbox"
+								checked={!isDetailedView}
+								className="toggle toggle-secondary"
+								onChange={handleChangeDetailView}
+							/>
+						</div>}
+					</div>
 				</div>
 
 				{viewMode === "grid" ? (

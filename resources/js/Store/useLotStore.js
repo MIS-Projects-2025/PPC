@@ -4,12 +4,16 @@ import { create } from "zustand";
 
 const EMPTY_FORM = { lot_id: "", partname: "", qty: "" };
 
+const EMPTY_MATCH = { status: "idle", data: null, warnings: [] }; // idle | loading | ready
+
 const EMPTY_RECOMMENDATION = {
-	status: "idle", // idle | ready | none | hidden
+	status: "idle",
 	id: null,
-	slots: [], // [{ slot_id, label, boxes, unverified }]
+	slots: [],
 	reason: null,
 	prefilled: false,
+	joins: false, // the lot joins a box set that is already in the rack
+	plan: [], // [{ box_details, boxes, slots: [{ label, boxes }] }]
 };
 
 export const useLotStore = create((set, get) => ({
@@ -31,6 +35,14 @@ export const useLotStore = create((set, get) => ({
 	scanResult: { status: null, at: 0 },
 	lotMutations: {},
 	recommendation: EMPTY_RECOMMENDATION,
+
+	match: EMPTY_MATCH,
+	matchRefreshKey: 0,
+
+	setMatchLoading: () => set({ match: { ...EMPTY_MATCH, status: "loading" } }),
+	setMatch: (data, warnings = []) => set({ match: { status: "ready", data, warnings } }),
+	clearMatch: () => set({ match: EMPTY_MATCH }),
+	bumpMatchRefresh: () => set((s) => ({ matchRefreshKey: s.matchRefreshKey + 1 })),
 
 	setWithdrawerId: (id) => set({ withdrawerId: id }),
 	clearWithdrawerId: () => set({ withdrawerId: null }),
@@ -122,9 +134,8 @@ export const useLotStore = create((set, get) => ({
 				slotPendingLot: already
 					? state.slotPendingLot.filter((s) => s.id !== slot.id)
 					: [...state.slotPendingLot, slot],
-				// Picking slots by hand leaves the "same boxes as" choice (the group dictates the slots).
 				pendingLotToBeAdded: state.pendingLotToBeAdded?.box_group_id
-					? { ...state.pendingLotToBeAdded, box_group_id: null }
+					? { ...state.pendingLotToBeAdded }
 					: state.pendingLotToBeAdded,
 			};
 		}),
@@ -186,6 +197,7 @@ export const useLotStore = create((set, get) => ({
 			pendingLotToBeAdded: EMPTY_FORM,
 			editingLot: null,
 			recommendation: EMPTY_RECOMMENDATION,
+			match: EMPTY_MATCH,
 		});
 	},
 }));

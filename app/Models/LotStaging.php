@@ -23,6 +23,9 @@ class LotStaging extends Model
         'box_count',
         'box_group_id',
         'withdrawer_id',
+        'box_source',
+        'source_group_id',
+        'box_details',
     ];
 
     protected $casts = [

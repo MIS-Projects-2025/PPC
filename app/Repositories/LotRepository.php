@@ -152,6 +152,9 @@ class LotRepository implements LotRepositoryInterface
             'dimension_id' => $extra['dimension_id'] ?? null,
             'box_count'    => $boxCount,
             'box_group_id' => $extra['box_group_id'] ?? null,
+            'box_source'      => $extra['box_source'] ?? null,
+            'source_group_id' => $extra['source_group_id'] ?? null,
+            'box_details'     => $extra['box_details'] ?? null,
         ]);
 
         // New boxes start their own group. Lots sharing boxes pass the existing group id in $extra.
@@ -171,7 +174,11 @@ class LotRepository implements LotRepositoryInterface
                 'production_line_id' => $slot->rack->production_line_id,
                 'rack_page_id'       => $slot->rack->rack_page_id,
                 // Only a single-slot placement knows its box split. Multi-slot stays NULL (= untracked slot).
-                'box_count'          => count($slotIds) === 1 ? $boxCount : null,
+                // Known split: exact count per slot. Unknown split: the full set count on each slot (upper bound).
+                // It can under-recommend a little but never over-fills, and the slot stays tracked.
+                'box_count' => count($slotIds) === 1
+                    ? $boxCount
+                    : ($extra['slot_boxes'][$slotId] ?? $boxCount),
                 'assigned_at'        => $now,
                 'assigned_by'        => $actorEmployId,
             ]);
@@ -182,7 +189,7 @@ class LotRepository implements LotRepositoryInterface
 
     public function update(int $id, array $data, bool $syncGroup = true): Lot
     {
-        return DB::transaction(function () use ($id, $data) {
+        return DB::transaction(function () use ($id, $data, $syncGroup) {
             $lot = Lot::lockForUpdate()->findOrFail($id);
             $slotIds    = array_key_exists('slot_ids', $data) && $lot->status !== 'released' ? array_values(array_unique($data['slot_ids'])) : null;
             $modifiedBy = $data['modified_by'] ?? null;
@@ -277,9 +284,12 @@ class LotRepository implements LotRepositoryInterface
                     }
 
                     $remaining = LotPosition::where('lot_staging_id', $activeStaging->id)->whereNull('released_at')->get();
-                    $remaining->each->update([
-                        'box_count' => $remaining->count() === 1 ? $activeStaging->box_count : null,
-                    ]);
+                    // Keep known per-slot counts. A single slot holds the whole set, and a newly added slot gets the upper bound.
+                    $remaining->each(fn($p) => $p->update([
+                        'box_count' => ($remaining->count() === 1 || $p->box_count === null)
+                            ? $activeStaging->box_count
+                            : $p->box_count,
+                    ]));
                 } else {
                     $lot->update([
                         'status' => 'staged',

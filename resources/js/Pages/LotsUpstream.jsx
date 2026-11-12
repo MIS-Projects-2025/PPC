@@ -1,15 +1,16 @@
 import CancellableActionButton from "@/Components/CancellableActionButton";
 import RecommendationLine from "@/Components/RecommendationLine";
+import SourceMatchPanel from "@/Components/SourceMatchPanel";
 import { LOT_UPSTREAM_MODES } from "@/Constants/lotUpstreamModes";
 import useBarcodeScanner from "@/Hooks/useBarcodeScanner";
 import { toQty, useLotActions } from "@/Hooks/useLotActions";
-import useRecommendation from "@/Hooks/useRecommendation";
+import useLotMatch from "@/Hooks/useLotMatch";
 import { useToast } from "@/Hooks/useToast";
 import { playNotification } from "@/Service/AudioService";
 import { useLotStore } from "@/Store/useLotStore";
 import formatLocalTime from "@/Utils/formatLocalTime";
 import clsx from "clsx";
-import { format, formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "react-hot-toast";
 import { FaCheck, FaDownload, FaPlus, FaRegCopy, FaUpload } from "react-icons/fa";
@@ -96,9 +97,11 @@ function SlotAssign() {
                                 className="btn btn-sm btn-ghost group relative flex items-center gap-2 overflow-hidden hover:border hover:border-rose-500 hover:text-rose-500"
                             >
                                 <span>{s?.label}</span>
-                                <span className="scale-0 opacity-0 transition-all duration-100 group-hover:max-w-[50px] group-hover:scale-100 group-hover:text-rose-500 group-hover:opacity-100">
-                                    ×
-                                </span>
+                                {!(useLotStore.getState().recommendation.joins) &&
+                                    <span className="scale-0 opacity-0 transition-all duration-100 group-hover:max-w-[50px] group-hover:scale-100 group-hover:text-rose-500 group-hover:opacity-100">
+                                        ×
+                                    </span>
+                                }
                             </button>
                         )}
                     </div>
@@ -108,132 +111,16 @@ function SlotAssign() {
     );
 }
 
-// Lets a lot that sits on boxes already in the rack join their "box group":
-// same slots, same box count and size, and it is released together with them.
-// Stocking: pick the slot(s) where the boxes are, then tap the chip.
-// Editing: only shows a note (slot changes apply to the whole group on the server).
-// FUTURE: an "unlink from group" button (give the staging its own box_group_id, unlock box count/size)
-// could be added here for wrong taps. Not built on purpose. See LotRepository::update and LotService::release.
-function SharedBoxes({ occupancy }) {
-    const {
-        isEditMode,
-        slotPendingLot,
-        setSlotPendingLot,
-        pendingLotToBeAdded,
-        editPendingLot,
-        slots,
-    } = useLotStore();
-
-    const activeGroupId = pendingLotToBeAdded?.box_group_id ?? null;
-
-    // Stocking: groups already sitting in the slots picked so far.
-    const groups = useMemo(() => {
-        if (isEditMode) return [];
-        const map = new Map();
-        for (const s of slotPendingLot) {
-            for (const o of occupancy?.[s.id] ?? []) {
-                if (!o.box_group_id) continue;
-                const g = map.get(o.box_group_id) ?? {
-                    id: o.box_group_id,
-                    lots: new Set(),
-                    slotIds: new Set(),
-                    box_count: o.box_count,
-                    dimension_id: o.dimension_id,
-                };
-                g.lots.add(o.id);
-                (o.slot_ids ?? []).forEach((id) => g.slotIds.add(id));
-                map.set(o.box_group_id, g);
-            }
-        }
-        return [...map.values()];
-    }, [isEditMode, slotPendingLot, occupancy]);
-
-    // Editing: the other lots on the same boxes as this one.
-    const editGroupId = isEditMode
-        ? ((pendingLotToBeAdded?.stagings ?? []).find((s) => !s.released_at)?.box_group_id ?? null)
-        : null;
-
-    const mates = useMemo(() => {
-        if (!editGroupId) return [];
-        const rows = Object.values(occupancy ?? {}).flat();
-        return [
-            ...new Set(
-                rows
-                    .filter(
-                        (r) =>
-                            Number(r.box_group_id) === Number(editGroupId) &&
-                            r.id !== pendingLotToBeAdded?.lot_id,
-                    )
-                    .map((r) => r.id),
-            ),
-        ];
-    }, [editGroupId, occupancy, pendingLotToBeAdded?.lot_id]);
-
-    if (isEditMode) {
-        if (mates.length === 0) return null;
-        return (
-            <div className="py-2 text-[11px] text-warning">
-                Shares boxes with <b>{mates.join(", ")}</b>. Changing slots moves all of them.
-                Releasing releases all of them.
-            </div>
-        );
-    }
-
-    if (groups.length === 0 && !activeGroupId) return null;
-
-    return (
-        <div className="py-2">
-            <label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
-                Same boxes as
-            </label>
-            <div className="flex flex-wrap gap-1">
-                {groups.map((g) => (
-                    <button
-                        key={g.id}
-                        type="button"
-                        className={clsx(
-                            "btn btn-xs",
-                            Number(activeGroupId) === Number(g.id) ? "btn-primary" : "btn-outline",
-                        )}
-                        onClick={() => {
-                            editPendingLot("box_group_id", g.id);
-                            editPendingLot("box_count", g.box_count ?? "");
-                            editPendingLot("dimension_id", g.dimension_id ?? "");
-                            setSlotPendingLot(
-                                [...g.slotIds].map((id) => slots[id]).filter(Boolean),
-                            );
-                        }}
-                    >
-                        {[...g.lots].join(" + ")}
-                    </button>
-                ))}
-                {activeGroupId && (
-                    // Only deselects the chip on this form (stock as new boxes). It does not touch saved lots.
-                    <button
-                        type="button"
-                        className="btn btn-xs btn-ghost"
-                        onClick={() => editPendingLot("box_group_id", null)}
-                    >
-                        not shared
-                    </button>
-                )}
-            </div>
-        </div>
-    );
-}
-
-function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false, occupancy })
+function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false })
 {
     const {
         pendingLotToBeAdded,
         isScanning,
         addPendingLot,
-        editingLot,
         isEditMode,
         editPendingLotWithRawInput,
         slotPendingLot,
         lotMutations,
-        editPendingLot,
         // mode,
     } = useLotStore();
     const {
@@ -241,7 +128,6 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
         setFocusedField,
         editLot,
         confirmLot,
-        isMutateLotLoading,
         mutateLotCancel,
     } = lotActions;
     const inputRefs = useRef({});
@@ -270,14 +156,6 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
         }
 
         lotActions.resetFocus();
-    };
-
-    // A scanner's terminating Enter must not leave focus in a manual field.
-    const blurOnEnter = (e) => {
-        if (e.key === "Enter") {
-            e.preventDefault();
-            e.currentTarget.blur();
-        }
     };
 
     useEffect(() => {
@@ -360,50 +238,9 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
                 </div>
             ))}
 
-            {!isEditMode && (
-                <div className="flex gap-2 py-2">
-                    <div className="w-24">
-                        <label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
-                            box count
-                        </label>
-                        <input
-                            type="text"
-                            inputMode="numeric"
-                            data-no-scanner
-                            disabled={!!pendingLotToBeAdded.box_group_id}
-                            className="input w-full"
-                            value={pendingLotToBeAdded.box_count ?? ""}
-                            onChange={(e) =>
-                                editPendingLot("box_count", e.target.value.replace(/\D/g, "").slice(0, 3))
-                            }
-                            onKeyDown={blurOnEnter}
-                            onFocus={(e) => e.target.select()}
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <label className="block text-[10px] font-bold tracking-widest text-base-content uppercase mb-1">
-                            box size
-                        </label>
-                        <select
-                            data-no-scanner
-                            disabled={!!pendingLotToBeAdded.box_group_id}
-                            className="select w-full"
-                            value={pendingLotToBeAdded.dimension_id ?? ""}
-                            onChange={(e) => editPendingLot("dimension_id", e.target.value)}
-                            onKeyDown={blurOnEnter}
-                        >
-                            <option value="">Unknown</option>
-                            {dimensions.map((d) => (
-                                <option key={d.id} value={d.id}>{d.label}</option>
-                            ))}
-                        </select>
-                    </div>
-                </div>
-            )}
+            <SourceMatchPanel dimensions={dimensions} lotActions={lotActions} />
 
-            <RecommendationLine enabled={recommendationsVisible && !isEditMode && !pendingLotToBeAdded.box_group_id} />
-
-            <SharedBoxes occupancy={occupancy} />
+            <RecommendationLine enabled={recommendationsVisible && !isEditMode} />
 
             <SlotAssign />
 
@@ -626,7 +463,7 @@ function LastRunBadge({ latestRun, stagedAt }) {
 function ReceivedList({ onEdit, lotActions }) {
     const { lots, lastAddedId, recentUpdates, lotMutations, setMode } =
         useLotStore();
-    const { mutateLotCancel, isMutateLotLoading, releaseLotWithdrawerPrompt } =
+    const { mutateLotCancel, releaseLotWithdrawerPrompt } =
         lotActions;
 
     return (
@@ -644,6 +481,7 @@ function ReceivedList({ onEdit, lotActions }) {
                         const recentUpdate = recentUpdates[lot.id];
                         const lastStaging =
                             lot.stagings?.[lot.stagings.length - 1];
+                        const boxUnknown = !lot.released_at && lastStaging && (!lastStaging.dimension_id || !lastStaging.box_count);
 
                         return (
                             <div
@@ -674,6 +512,14 @@ function ReceivedList({ onEdit, lotActions }) {
                                                 ).toLocaleString()}{" "}
                                                 quantity
                                             </span>
+                                            {boxUnknown && (
+                                                <span
+                                                    className="badge badge-warning badge-xs"
+                                                    title="Box info unknown. This lot's slot is untracked for recommendations."
+                                                >
+                                                    no box info
+                                                </span>
+                                            )}
                                             <LastRunBadge latestRun={lot?.latest_run || null} stagedAt={lastStaging?.staged_at} />
                                             {recentUpdate && (
                                                 <div className="flex items-center gap-0 ml-1">
@@ -863,6 +709,16 @@ function ReceivedList({ onEdit, lotActions }) {
                                             )}
                                     </div>
                                     <div className="absolute p-3 backdrop-blur-xs top-1/2 -translate-y-1/2 right-0 hidden group-hover:flex gap-2">
+                                        {boxUnknown && (
+                                            <button
+                                                type="button"
+                                                className="btn btn-sm btn-ghost"
+                                                onClick={() => lotActions.recheckLot(lot)}
+                                            >
+                                                Re-check
+                                            </button>
+                                        )}
+                                        
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -923,6 +779,7 @@ export default function LotsUpstream({
     productionLine,
     productionLineId,
     floorMaps,
+    untrackedSlots = null
 }) {
     const currentTheme = LOCATION_THEMES[(String (productionLine)).toUpperCase()] || "bg-base-200 border-base-content";
 
@@ -1173,6 +1030,7 @@ export default function LotsUpstream({
     });
 
     const handleSelectFromRack = useCallback((slot) => {
+        if (useLotStore.getState().recommendation.joins) return;
         toggleSlotPendingLot(slot);
     }, []);
 
@@ -1181,10 +1039,7 @@ export default function LotsUpstream({
         [slotPendingLot],
     );
 
-    useRecommendation({
-        rackPageId: productionLineId,
-        enabled: recommendationsVisible,
-    });
+    useLotMatch({ rackPageId: productionLineId });
 
     // Order = rank shown in the grid and in the Recommended line.
     const recommendedSlotIds = useMemo(
@@ -1233,21 +1088,15 @@ export default function LotsUpstream({
     //     return () => window.Echo.leave("lot-updates");
     // }, []);
 
-    // Lots that share boxes with the one being released leave together (the server releases the whole group).
+    // Lots of the same external group leave together (the server releases the whole group).
     // FUTURE: "release only this lot" would change this memo and LotService::release.
     const releaseGroupLotIds = useMemo(() => {
         const code = lotToBeReleased?.lot_id;
         if (!code) return [];
         const rows = Object.values(occupancy ?? {}).flat();
-        const mine = rows.find((r) => r.id === code && r.box_group_id);
+        const mine = rows.find((r) => r.id === code && r.release_group);
         if (!mine) return [code];
-        return [
-            ...new Set(
-                rows
-                    .filter((r) => Number(r.box_group_id) === Number(mine.box_group_id))
-                    .map((r) => r.id),
-            ),
-        ];
+        return [...new Set(rows.filter((r) => r.release_group === mine.release_group).map((r) => r.id))];
     }, [occupancy, lotToBeReleased]);
 
     const handleWithdrawerClose = () => {
@@ -1314,7 +1163,7 @@ export default function LotsUpstream({
                         <div className="w-full mb-4">
                             {releaseGroupLotIds.length > 1 && (
                                 <div className="text-[11px] opacity-70 mb-1">
-                                    These lots share the same boxes, so they are released together.
+                                    These lots share the same external group, so they are released together.
                                 </div>
                             )}
                             Releasing{" "}
@@ -1396,7 +1245,7 @@ export default function LotsUpstream({
                         <div className="w-0.5 h-full bg-base-content/25"></div>
 
                         <div className="w-3/12 p-4">
-                            <ScanPanel lotActions={lotActions} dimensions={dimensions} recommendationsVisible={recommendationsVisible} occupancy={occupancy} />
+                            <ScanPanel lotActions={lotActions} dimensions={dimensions} recommendationsVisible={recommendationsVisible} />
                         </div>
                     </div>
                 </div>
@@ -1411,6 +1260,15 @@ export default function LotsUpstream({
                         <div>
                             <span className="text-xs font-bold uppercase tracking-widest opacity-70">Active Location</span>
                             <h1 className="text-5xl font-extrabold tracking-tight">{productionLine.toUpperCase()}</h1>
+
+                            {untrackedSlots?.count > 0 && (
+                            <span
+                                className="badge badge-warning badge-sm"
+                                title={`Untracked (unknown box info): ${untrackedSlots.labels.join(", ")}`}
+                            >
+                                    {untrackedSlots.count} slots untracked
+                                </span>
+                            )}
                         </div>
                     </div>
                     <fieldset

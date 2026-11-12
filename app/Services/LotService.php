@@ -15,6 +15,9 @@ use App\Traits\ExportTrait;
 use Illuminate\Support\Facades\Cache;
 use Box\Spout\Writer\Common\Creator\Style\StyleBuilder;
 use App\Models\LotPosition;
+use App\Repositories\LotSourceRepository;
+use App\Models\PlacementRecommendation;
+use App\Models\BoxDimension;
 
 class LotService
 {
@@ -25,6 +28,7 @@ class LotService
         protected LotPositionRepositoryInterface $positions,
         protected RackSlotRepositoryInterface    $slots,
         protected RecommendationService $recommendations,
+        protected LotSourceRepository $source
     ) {}
 
     /**
@@ -39,16 +43,20 @@ class LotService
         return DB::transaction(function () use ($data) {
             $now = Carbon::now('UTC');
 
-            // Same physical boxes as lots already in the rack: location and box facts come from the
-            // group, never from the form.
-            $group = !empty($data['box_group_id'])
-                ? $this->resolveSharedGroup((int) $data['box_group_id'])
-                : null;
+            // Box facts come from the source tables, never from the client.
+            $box = $this->boxFacts($this->source->resolve($data['lot_id']));
+
+            // Same box set (same source group and box_details) already staged: join its slots and boxes.
+            $joined = $this->findJoinedSet($box);
+            $group  = $joined ? $this->resolveSharedGroup((int) $joined->box_group_id) : null;
 
             if ($group) {
                 $data['slot_ids']     = $group['slot_ids'];
                 $data['dimension_id'] = $group['dimension_id'];
                 $data['box_count']    = $group['box_count'];
+            } else {
+                $data['dimension_id'] = $box['dimension_id'];
+                $data['box_count']    = $box['box_count'];
             }
 
             // lots can be placed in multiple slots, in different racks.
@@ -148,15 +156,21 @@ class LotService
                 sharesBoxes: (bool) $group,
             );
 
+            $slotBoxes = $group ? [] : $this->knownSplit($data['recommendation_id'] ?? null, $data['lot_id'], $data['slot_ids']);
+
             $staging = $this->lots->createStaging(
                 $lot,
                 $data['slot_ids'],
                 $data['received_by'],
                 $now,
                 [
-                    'dimension_id' => $data['dimension_id'] ?? null,
-                    'box_count'    => $data['box_count'] ?? null,
-                    'box_group_id' => $group['id'] ?? null, // null = new boxes = new group
+                    'dimension_id'    => $data['dimension_id'] ?? null,
+                    'box_count'       => $data['box_count'] ?? null,
+                    'box_group_id'    => $group['id'] ?? null,
+                    'box_source'      => $box['box_source'],
+                    'source_group_id' => $box['source_group_id'],
+                    'box_details'     => $box['box_details'],
+                    'slot_boxes'      => $slotBoxes,
                 ],
             );
 
@@ -164,6 +178,65 @@ class LotService
 
             return ['lot' => $lot->fresh(['stagings.withdrawer', 'stagings.positions.rackSlot.rack', 'modifiedBy', 'receivedBy']), 'created' => $wasCreated];
         });
+    }
+
+    private function boxFacts(array $match): array
+    {
+        $none = ['box_source' => null, 'source_group_id' => null, 'box_details' => null, 'dimension_id' => null, 'box_count' => null];
+
+        if (($match['status'] ?? null) !== 'found') {
+            return $none; // not found or source down: unknown box facts, the slot becomes untracked
+        }
+
+        $set = collect($match['sets'])->firstWhere('key', $match['lot_set_key']);
+
+        if (!$set) {
+            return $none;
+        }
+
+        return [
+            'box_source'      => $match['source'],
+            'source_group_id' => $match['group_id'],
+            'box_details'     => $set['original_box_details'], // identity of the set = the original text
+            'dimension_id'    => $set['dimension_id'],
+            'box_count'       => $set['no_of_box'],
+        ];
+    }
+
+    private function findJoinedSet(array $box): ?LotStaging
+    {
+        if (!$box['box_source'] || !$box['source_group_id'] || $box['box_details'] === null) {
+            return null;
+        }
+
+        $key = mb_strtolower(trim($box['box_details']));
+
+        return LotStaging::whereNull('released_at')
+            ->where('box_source', $box['box_source'])
+            ->where('source_group_id', $box['source_group_id'])
+            ->lockForUpdate()
+            ->get()
+            ->first(fn($st) => mb_strtolower(trim((string) $st->box_details)) === $key);
+    }
+
+    // The exact split is only known when the operator placed the lot where the recommendation said.
+    private function knownSplit(?int $recommendationId, string $lotId, array $slotIds): array
+    {
+        if (!$recommendationId || count($slotIds) < 2) {
+            return [];
+        }
+
+        $row = PlacementRecommendation::find($recommendationId);
+
+        if (!$row || !$row->recommended || $row->lot_code !== $lotId) {
+            return [];
+        }
+
+        $rec = collect($row->recommended);
+        $a   = $rec->pluck('slot_id')->map(fn($v) => (int) $v)->sort()->values()->all();
+        $b   = collect($slotIds)->map(fn($v) => (int) $v)->sort()->values()->all();
+
+        return $a === $b ? $rec->pluck('boxes', 'slot_id')->map(fn($v) => (int) $v)->all() : [];
     }
 
     // The unique key is lot_id + partname, so match on both. A blank partname falls back to lot_id
@@ -215,6 +288,122 @@ class LotService
                 'removed_by' => $removedBy,
                 'reason'     => $reason,
             ]);
+        });
+    }
+
+    /**
+     * Audited correction of a box set's name/count. The source tables are not written.
+     * Also fixes what is already staged for that box set, so wrong source data found late still repairs capacity.
+     */
+    public function correctBoxInfo(string $lotId, string $setKey, string $details, int $count, string $by): array
+    {
+        $match = $this->source->resolve($lotId);
+
+        if (($match['status'] ?? null) !== 'found') {
+            throw ValidationException::withMessages([
+                'lot_id' => 'Lot not found in source. Box info cannot be corrected without a source row.',
+            ]);
+        }
+
+        $set = collect($match['sets'])->firstWhere('key', $setKey);
+
+        if (!$set) {
+            throw ValidationException::withMessages(['set_key' => 'Box set not found for this lot. Refresh and try again.']);
+        }
+
+        $dim = BoxDimension::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($details))])->first();
+
+        if (!$dim) {
+            throw ValidationException::withMessages(['box_details' => 'Unknown box size.']);
+        }
+
+        return DB::transaction(function () use ($match, $set, $setKey, $lotId, $dim, $count, $by) {
+            $this->source->saveOverride(
+                $match['source'],
+                $match['group_key'],
+                $setKey,
+                $set['original_box_details'],
+                $set['original_no_of_box'],
+                $dim->name,
+                $count,
+                $by,
+            );
+
+            $stagings = $this->stagingsOfSet($match, $setKey, $lotId);
+
+            foreach ($stagings as $st) {
+                $st->update([
+                    'dimension_id'    => $dim->id,
+                    'box_count'       => $count,
+                    'box_source'      => $st->box_source ?? $match['source'],
+                    'source_group_id' => $st->box_source ? $st->source_group_id : $match['group_id'],
+                    'box_details'     => $st->box_details ?? $set['original_box_details'],
+                ]);
+
+                // A known split is replaced by the upper bound (the full count per slot): safe, never over-fills.
+                LotPosition::where('lot_staging_id', $st->id)->whereNull('released_at')->update(['box_count' => $count]);
+            }
+
+            return ['staging_updated' => $stagings->count()];
+        });
+    }
+
+    // Active stagings of one box set: by source group, plus this lot's own staging when it was stocked unmatched.
+    private function stagingsOfSet(array $match, string $setKey, string $lotId)
+    {
+        $byGroup = $match['group_id']
+            ? LotStaging::whereNull('released_at')
+            ->where('box_source', $match['source'])
+            ->where('source_group_id', $match['group_id'])
+            ->lockForUpdate()->get()
+            ->filter(fn($s) => mb_strtolower(trim((string) $s->box_details)) === $setKey)
+            : collect();
+
+        $byLot = $setKey === $match['lot_set_key']
+            ? LotStaging::whereNull('released_at')->whereNull('box_source')
+            ->whereHas('lot', fn($q) => $q->where('lot_id', $lotId))
+            ->lockForUpdate()->get()
+            : collect();
+
+        return $byGroup->concat($byLot)->unique('id')->values();
+    }
+
+    /**
+     * Backfill box info for a staged lot that had none (no source row at receive, or a row that was fixed later).
+     * The lot keeps its own box set; if another lot of the same box set is staged elsewhere, capacity is counted
+     * twice. That is the safe direction.
+     */
+    public function recheckLot(string $lotId): array
+    {
+        return DB::transaction(function () use ($lotId) {
+            $stagings = LotStaging::whereNull('released_at')
+                ->where(fn($q) => $q->whereNull('dimension_id')->orWhereNull('box_count'))
+                ->whereHas('lot', fn($q) => $q->where('lot_id', $lotId))
+                ->lockForUpdate()->get();
+
+            if ($stagings->isEmpty()) {
+                return ['updated' => false, 'message' => 'Box info is already known for this lot.'];
+            }
+
+            $box = $this->boxFacts($this->source->resolve($lotId));
+
+            if (!$box['dimension_id'] || !$box['box_count']) {
+                return ['updated' => false, 'message' => 'Source still has no usable box info for this lot.'];
+            }
+
+            foreach ($stagings as $st) {
+                $st->update([
+                    'dimension_id'    => $box['dimension_id'],
+                    'box_count'       => $box['box_count'],
+                    'box_source'      => $box['box_source'],
+                    'source_group_id' => $box['source_group_id'],
+                    'box_details'     => $box['box_details'],
+                ]);
+
+                LotPosition::where('lot_staging_id', $st->id)->whereNull('released_at')->update(['box_count' => $box['box_count']]);
+            }
+
+            return ['updated' => true, 'message' => null];
         });
     }
 
@@ -272,13 +461,22 @@ class LotService
                 // FUTURE: a "release only this lot" option would skip this block. If it is ever added, it
                 // needs an "unlink from group" action too, or the remaining lots are left staged in a slot
                 // whose boxes are gone.
-                $siblings = $staging->box_group_id
-                    ? LotStaging::where('box_group_id', $staging->box_group_id)
+                // The whole external group leaves together (every box set of it that is staged).
+                // Stagings from before the source fields existed fall back to the old box_group_id rule.
+                $siblings = $staging->box_source && $staging->source_group_id
+                    ? LotStaging::where('box_source', $staging->box_source)
+                    ->where('source_group_id', $staging->source_group_id)
+                    ->where('id', '!=', $staging->id)
+                    ->whereNull('released_at')
+                    ->lockForUpdate()
+                    ->get()
+                    : ($staging->box_group_id
+                        ? LotStaging::where('box_group_id', $staging->box_group_id)
                         ->where('id', '!=', $staging->id)
                         ->whereNull('released_at')
                         ->lockForUpdate()
                         ->get()
-                    : collect();
+                        : collect());
 
                 if ($siblings->isNotEmpty()) {
                     // Their slots must be known before their positions are released below.
@@ -377,6 +575,8 @@ class LotService
 
     // A scan of a lot that was just released together with others (e.g. LOT-B scanned after LOT-A
     // released both) gets a clear message instead of the generic "not found".
+    // "Together" = the same external group (box_source + source_group_id) released in the same release.
+    // Stagings from before the source fields existed fall back to the old box_group_id rule.
     private function releasedTogetherNote(string $lotId, Carbon $now): ?string
     {
         $recent = LotStaging::join('lots', 'lots.id', '=', 'lot_stagings.lot_id')
@@ -384,15 +584,34 @@ class LotService
             ->whereNotNull('lot_stagings.box_group_id')
             ->where('lot_stagings.released_at', '>=', $now->copy()->subMinutes(10))
             ->orderByDesc('lot_stagings.released_at')
-            ->first(['lot_stagings.id', 'lot_stagings.box_group_id']);
+            ->first([
+                'lot_stagings.id',
+                'lot_stagings.box_group_id',
+                'lot_stagings.box_source',
+                'lot_stagings.source_group_id',
+                'lot_stagings.released_at',
+            ]);
 
         if (!$recent) {
             return null;
         }
 
-        $others = LotStaging::join('lots', 'lots.id', '=', 'lot_stagings.lot_id')
-            ->where('lot_stagings.box_group_id', $recent->box_group_id)
+        $othersQuery = LotStaging::join('lots', 'lots.id', '=', 'lot_stagings.lot_id')
             ->where('lot_stagings.id', '!=', $recent->id)
+            ->where('lots.lot_id', '!=', $lotId)
+            // release() stamps the scanned lot and every sibling with the same $now. Without this, an older
+            // released cycle of another lot in the same external group would be listed as "released together".
+            ->where('lot_stagings.released_at', $recent->released_at);
+
+        if ($recent->box_source && $recent->source_group_id) {
+            $othersQuery
+                ->where('lot_stagings.box_source', $recent->box_source)
+                ->where('lot_stagings.source_group_id', $recent->source_group_id);
+        } else {
+            $othersQuery->where('lot_stagings.box_group_id', $recent->box_group_id);
+        }
+
+        $others = $othersQuery
             ->pluck('lots.lot_id')
             ->unique()
             ->values()

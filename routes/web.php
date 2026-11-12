@@ -232,8 +232,11 @@ Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::post('/store', [LotController::class, 'store'])->name('store');
     Route::post('/release', [LotController::class, 'release'])->name('release')->where('lot_id', '[^/]+');
 
-    Route::post('/recommend', [LotController::class, 'recommend'])->name('recommend');
     Route::post('/recommendation/{id}/didnt-fit', [LotController::class, 'didntFit'])->name('recommendation.didnt-fit');
+
+    Route::post('/match', [LotController::class, 'match'])->name('match');
+    Route::post('/box-override', [LotController::class, 'boxOverride'])->name('box-override');
+    Route::post('/recheck', [LotController::class, 'recheck'])->name('recheck');
 });
 
 Route::prefix('/rack')->name('rack.')->group(function () {

@@ -1,6 +1,8 @@
 import { blockKey, layoutFromBlocks } from "@/Constants/rackLayout";
+import { Link } from '@inertiajs/react';
 import clsx from "clsx";
 import React, { useEffect, useMemo, useState } from "react";
+import { FiLayout } from 'react-icons/fi';
 
 const NO_LOTS = [];
 const NO_RACKS = [];
@@ -192,7 +194,21 @@ function FloorSection({
 
 	return (
 		<section>
-			{title && <h3 className="mb-1 text-sm font-bold uppercase tracking-tight">{title}</h3>}
+			{title && (
+				<h3 className="mb-1 text-sm font-bold uppercase tracking-tight">
+					<Link
+						href={route('rack.layout-editor', title)}
+						className="group inline-flex items-center gap-1.5 hover:text-blue-600"
+						title="Open layout editor"
+					>
+						{title}
+						<FiLayout className="text-xs" />
+						<span className="text-xs font-thin opacity-50 transition-opacity duration-200 group-hover:opacity-100">
+							EDIT
+						</span>
+					</Link>
+				</h3>
+			)}
 
 			{map.id == null ? (
 				<div className="rounded-lg border border-dashed border-base-300 p-4 text-xs text-base-content/70">
@@ -398,8 +414,7 @@ function SlotRow({
 	onPick,
 }) {
 	const state = slotState(slot, lots);
-	// A full slot holding lots can still be picked in the stock dialog, to join the boxes already in it.
-	// The server still rejects a normal lot into a full slot unless "Same boxes as" was used.
+
 	const blocked = state === "disabled" || (state === "full" && !(multiSelect && lots.length > 0));
 	const slotLabel = slot?.label || slot?.meta?.label;
 

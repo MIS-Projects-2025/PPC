@@ -21,13 +21,6 @@ const liveStore = new Proxy(
     { get: (_target, key) => useLotStore.getState()[key] },
 );
 
-const MAX_BOX_COUNT = 999; // keep in sync with the `max:` rule in LotController
-
-const toBoxCount = (value) => {
-    const n = parseInt(String(value ?? "").replace(/\D/g, ""), 10);
-    return n > 0 && n <= MAX_BOX_COUNT ? n : null;
-};
-
 export const toQty = (value) => {
     const cleaned = String(value ?? "").replace(/[,\s]/g, "");
     if (!/^\d+$/.test(cleaned)) return null;
@@ -48,6 +41,10 @@ const refreshServerState = () =>
             "occupancy", "racks",
             "totalEntries",
             "totalReceived",
+            // 7. untrackedSlots runs a full snapshot on every page load and every refresh.
+            // refreshServerState runs after every write. Either wrap untrackedSummary in Cache::remember("untracked:{$pageId}", 30, ...), 
+            // or drop it from the only list and accept a badge that is stale until the next full load.
+            // "untrackedSlots",
             "totalReleased",
         ],
         preserveState: true,
@@ -122,7 +119,6 @@ export function useLotActions() {
         const rec = store.recommendation;
         const lotId = pendingLotToBeAdded?.lot_id?.trim();
         const qty = toQty(pendingLotToBeAdded?.qty);
-        const boxGroupId = pendingLotToBeAdded?.box_group_id ?? null;
 
         if (!lotId) {
             return fail(
@@ -154,10 +150,7 @@ export function useLotActions() {
                     partname: pendingLotToBeAdded.partname?.trim() || null,
                     qty,
                     slot_ids: slotIds,
-                    box_count: toBoxCount(pendingLotToBeAdded.box_count),
-                    dimension_id: Number(pendingLotToBeAdded.dimension_id) || null,
-                    box_group_id: boxGroupId,
-                    recommendation_id: boxGroupId ? null : (rec?.id ?? null),
+                    recommendation_id: rec?.id ?? null, // box facts are read from the source on the server
                 },
                 additionalHeaders: {
                     ...(socketId && { "X-Socket-ID": socketId }),
@@ -176,7 +169,7 @@ export function useLotActions() {
             // "the recommended slot was full" can be true.
             const recommendedSlots = rec?.slots ?? [];
             if (
-                !boxGroupId &&
+                !rec?.joins &&
                 rec?.id &&
                 recommendedSlots.length > 0 &&
                 recommendedSlots.some((s) => !slotIds.includes(s.slot_id))
@@ -330,6 +323,49 @@ export function useLotActions() {
         }
     };
 
+    const correctBoxInfo = async ({ lot_id, set_key, box_details, no_of_box }) => {
+        try {
+            await mutateLot(route("lot-upstream.box-override"), {
+                cancelPrevious: false,
+                method: "POST",
+                body: { lot_id, set_key, box_details, no_of_box },
+            });
+            toast.success("Box info corrected", toastOptions);
+            store.bumpMatchRefresh(); // re-run match + recommendation with the correction applied
+            refreshServerState();
+            return true;
+        } catch (error) {
+            if (!isAbortError(error)) {
+                toast.error(error?.message || "Could not save the correction", toastOptions);
+            }
+            return false;
+        }
+    };
+
+    const recheckLot = async (lot) => {
+        const lotId = lot?.lot_id?.trim();
+        if (!lotId || store.lotMutations[lotId]?.isLoading) return;
+
+        store.setLotLoading(lotId, true);
+        try {
+            const result = await mutateLot(route("lot-upstream.recheck"), {
+                cancelPrevious: false,
+                method: "POST",
+                body: { lot_id: lotId },
+            });
+            const updated = !!result?.data?.updated;
+            const message = updated
+                ? `Box info found for ${lotId}`
+                : (result?.data?.message ?? "Still no usable box info in the source");
+            (updated ? toast.success : toast.info)(message, toastOptions);
+            refreshServerState();
+        } catch (error) {
+            reportFailure(lotId, error);
+        } finally {
+            store.setLotLoading(lotId, false);
+        }
+    };
+
     const releaseLotWithdrawerPrompt = (lot) => {
         store.clearWithdrawerId();
         store.setLotToBeReleased(lot);
@@ -454,6 +490,13 @@ export function useLotActions() {
                 return;
             }
 
+            if (useLotStore.getState().recommendation.joins) {
+                toast.error(
+                    "Slots are set by the boxes already in the rack",
+                );
+                return;
+            }
+
             const slot = slots?.[parsed.slotId];
             if (slot && (slot.is_manually_full || !slot.is_active)) {
                 fail(`Error: Slot ${slot.label} is full or disabled.`);
@@ -484,5 +527,7 @@ export function useLotActions() {
         mutateLotErrorMessage,
         mutateLotErrorData,
         mutateLotCancel,
+        correctBoxInfo,
+        recheckLot
     };
 }

@@ -75,6 +75,8 @@ class LotPositionRepository implements LotPositionRepositoryInterface
                 'lot_stagings.box_group_id',
                 'lot_stagings.box_count as staging_box_count',
                 'lot_stagings.dimension_id as staging_dimension_id',
+                'lot_stagings.box_source',
+                'lot_stagings.source_group_id',
             )
             ->get();
 
@@ -92,6 +94,10 @@ class LotPositionRepository implements LotPositionRepositoryInterface
             'box_group_id'               => $row->box_group_id ? (int) $row->box_group_id : null,
             'box_count'                  => $row->staging_box_count ? (int) $row->staging_box_count : null,
             'dimension_id'               => $row->staging_dimension_id ? (int) $row->staging_dimension_id : null,
+            // Lots that leave together on release. Stagings from before the source fields fall back to the box set.
+            'release_group' => $row->box_source && $row->source_group_id
+                ? $row->box_source . ':' . $row->source_group_id
+                : ($row->box_group_id ? 'b:' . $row->box_group_id : null),
         ])->groupBy('rack_slot_id');
     }
 

@@ -9,6 +9,7 @@ use App\Models\LotStaging;
 use App\Models\PlacementRecommendation;
 use App\Models\PlacementSetting;
 use App\Models\RackSlot;
+use App\Repositories\LotSourceRepository;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -31,6 +32,8 @@ class RecommendationService
         'utilization_cap'  => 0.85,
     ];
 
+    public function __construct(protected LotSourceRepository $source) {}
+
     private ?array $settings = null;
 
     /** Test hook: pin the allowances without touching the database. */
@@ -39,6 +42,26 @@ class RecommendationService
         $this->settings = $settings + self::DEFAULTS;
 
         return $this;
+    }
+
+    /** Slots left untracked by missing/invalid box info (not tub or unmeasured slots). For the rack page indicator. */
+    public function untrackedSummary(int $rackPageId): array
+    {
+        try {
+            $labels = [];
+
+            foreach ($this->snapshot($rackPageId) as $st) {
+                if (!$st['tracked'] && $st['untracked_reason'] === 'unknown_box_info') {
+                    $labels[] = $st['label'];
+                }
+            }
+
+            natsort($labels);
+
+            return ['count' => count($labels), 'labels' => array_slice(array_values($labels), 0, 30)];
+        } catch (\Throwable $e) {
+            return ['count' => 0, 'labels' => []];
+        }
     }
 
     // ------------------------------------------------------------------
@@ -58,84 +81,285 @@ class RecommendationService
     // Visible recommendation (phase 2a)
     // ------------------------------------------------------------------
 
-    /**
-     * Answer the scan dialog's request. Never throws; any failure is reason "error".
-     *
-     * @param  array{lot_id:string, partname?:?string, box_count?:?int, dimension_id?:?int, rack_page_id:int}  $in
-     * @return array{id:?int, slots:array<int, array{slot_id:int,label:string,boxes:int,unverified:bool}>, reason:?string, prefill:?array}
-     */
     public function forRequest(array $in): array
     {
-        $out    = ['id' => null, 'slots' => [], 'reason' => null, 'prefill' => null];
+        $out    = ['id' => null, 'slots' => [], 'reason' => null, 'plan' => [], 'joins' => false];
         $pageId = (int) $in['rack_page_id'];
 
-        if (!$this->isVisible($pageId)) {
-            $out['reason'] = 'disabled';
+        $visible = $this->isVisible($pageId);
 
-            return $out; // not logged: the switch is off
-        }
-
-        $code = trim((string) $in['lot_id']);
-        $rows = null; // raw recommend() result, stored as-is
+        $code  = trim((string) $in['lot_id']);
+        $match = $in['match'] ?? ['status' => 'error'];
+        $rows  = null;
 
         try {
-            $partname    = filled($in['partname'] ?? null) ? trim($in['partname']) : null;
-            $dimensionId = !empty($in['dimension_id']) ? (int) $in['dimension_id'] : null;
-            $boxCount    = !empty($in['box_count']) ? (int) $in['box_count'] : null;
-
-            $lot = $this->findLot($code, $partname);
-
-            if ($lot?->status === 'staged') {
-                // receive() still rejects this until the 2b auto-confirm replaces it.
-                $out['reason'] = 'already_staged';
+            if (($match['status'] ?? null) !== 'found') {
+                $out['reason'] = ($match['status'] ?? null) === 'not_found' ? 'not_found' : 'source_error';
             } else {
-                // A returned lot starts from its last cycle's values (the operator can edit them).
-                // Only fields the operator has not filled are taken, and they are reported as prefill.
-                if ($lot && (!$dimensionId || !$boxCount)) {
-                    $last = LotStaging::where('lot_id', $lot->id)->orderByDesc('cycle')->first(['dimension_id', 'box_count']);
+                $partname = filled($in['partname'] ?? null) ? trim($in['partname']) : null;
+                $lot      = $this->findLot($code, $partname);
 
-                    if (!$dimensionId && $last?->dimension_id) {
-                        $dimensionId                  = (int) $last->dimension_id;
-                        $out['prefill']['dimension_id'] = $dimensionId;
-                    }
-                    if (!$boxCount && $last?->box_count) {
-                        $boxCount                     = (int) $last->box_count;
-                        $out['prefill']['box_count']  = $boxCount;
-                    }
-                }
-
-                $dim = $dimensionId ? BoxDimension::find($dimensionId) : null;
-
-                if (!$dim) {
-                    $out['reason'] = 'unknown_dimension';
-                } elseif (!$boxCount) {
-                    $out['reason'] = 'unknown_box_count';
+                if ($lot?->status === 'staged') {
+                    $out['reason'] = 'already_staged';
                 } else {
-                    $snapshot = $this->snapshot($pageId);
-                    $rows     = $this->recommend($snapshot, $dim, $boxCount, $lot?->id);
+                    $staged  = $this->stagedSets($match);
+                    $key     = $match['lot_set_key'];
+                    $scanned = collect($match['sets'])->firstWhere('key', $key);
 
-                    if ($rows) {
-                        $out['slots'] = array_map(fn($r) => [
-                            'slot_id'    => $r['slot_id'],
-                            'label'      => $snapshot[$r['slot_id']]['label'] ?? '?',
-                            'boxes'      => $r['boxes'],
-                            'unverified' => $r['unverified'],
-                        ], $rows);
+                    if (isset($staged[$key])) {
+                        // Same box set already in the rack: the lot joins those slots, no extra capacity.
+                        $labels = RackSlot::whereIn('id', $staged[$key]['slot_ids'])->pluck('label', 'id');
+                        $out['joins'] = true;
+                        $out['slots'] = array_map(fn($id) => [
+                            'slot_id' => $id,
+                            'label' => $labels[$id] ?? '?',
+                            'boxes' => 0,
+                            'unverified' => false,
+                        ], $staged[$key]['slot_ids']);
+                    } elseif (!$visible) {
+                        $out['reason'] = 'disabled';
+                    } elseif (!$scanned || !$scanned['dimension_id']) {
+                        $out['reason'] = 'unknown_dimension';
+                    } elseif (!$scanned['no_of_box']) {
+                        $out['reason'] = 'unknown_box_count';
                     } else {
-                        $out['reason'] = $this->noneReason($snapshot);
+                        $snapshot = $this->snapshot($pageId);
+                        $sets     = $this->placeableSets($match, $staged);
+                        $affinity = [];
+                        foreach ($staged as $st) {
+                            foreach ($st['slot_ids'] as $id) {
+                                $affinity[$id] = true;
+                            }
+                        }
+
+                        $plan = $this->planGroup($snapshot, $sets, $lot?->id, $affinity);
+                        $rows = $plan[$key] ?? null;
+
+                        if ($rows) {
+                            $out['slots'] = array_map(fn($r) => [
+                                'slot_id'    => $r['slot_id'],
+                                'label'      => $snapshot[$r['slot_id']]['label'] ?? '?',
+                                'boxes'      => $r['boxes'],
+                                'unverified' => $r['unverified'],
+                            ], $rows);
+                        } else {
+                            $out['reason'] = $this->noneReason($snapshot);
+                        }
+
+                        // One line per box set so the operator sees the whole group plan.
+                        foreach ($sets as $set) {
+                            $out['plan'][] = [
+                                'box_details' => $set['box_details'],
+                                'boxes'       => $set['boxes'],
+                                'slots'       => array_map(fn($r) => [
+                                    'label' => $snapshot[$r['slot_id']]['label'] ?? '?',
+                                    'boxes' => $r['boxes'],
+                                ], $plan[$set['key']] ?? []),
+                            ];
+                        }
                     }
                 }
             }
         } catch (\Throwable $e) {
             Log::warning('Placement recommendation failed', ['error' => $e->getMessage()]);
             $out['slots']  = [];
+            $out['plan']   = [];
+            $out['joins']  = false;
             $out['reason'] = 'error';
             $rows          = null;
         }
 
-        $out['id'] = $this->logRequest($pageId, $code, $rows, $out['reason']);
+        $out['id'] = $visible ? $this->logRequest($pageId, $code, $rows, $out['reason']) : null;
 
         return $out;
+    }
+
+    /** Box sets of the scanned lot's group that are already staged: key => [box_group_id, slot_ids]. */
+    private function stagedSets(array $match): array
+    {
+        if (empty($match['group_id'])) {
+            return [];
+        }
+
+        $out = [];
+
+        $stagings = LotStaging::whereNull('released_at')
+            ->where('box_source', $match['source'])
+            ->where('source_group_id', $match['group_id'])
+            ->get(['id', 'box_group_id', 'box_details']);
+
+        foreach ($stagings as $st) {
+            if (trim((string) $st->box_details) === '') continue;
+
+            $key = mb_strtolower(trim((string) $st->box_details));
+            $out[$key]['box_group_id']  = $st->box_group_id;
+            $out[$key]['staging_ids'][] = $st->id;
+        }
+
+        foreach (array_keys($out) as $key) {
+            $out[$key]['slot_ids'] = LotPosition::whereNull('released_at')
+                ->whereIn('lot_staging_id', $out[$key]['staging_ids'])
+                ->pluck('rack_slot_id')->unique()->values()->all();
+        }
+
+        return $out;
+    }
+
+    /** Box sets that still need a place: known size and count, not staged yet. Largest footprint first. */
+    private function placeableSets(array $match, array $staged): array
+    {
+        $dims = BoxDimension::whereIn('id', collect($match['sets'])->pluck('dimension_id')->filter())->get()->keyBy('id');
+        $s    = $this->settings();
+        $out  = [];
+
+        foreach ($match['sets'] as $set) {
+            if (isset($staged[$set['key']]) || !$set['dimension_id'] || !$set['no_of_box'] || !$dims->has($set['dimension_id'])) {
+                continue;
+            }
+
+            $dim   = $dims[$set['dimension_id']];
+            $out[] = [
+                'key'         => $set['key'],
+                'box_details' => $set['box_details'],
+                'dim'         => $dim,
+                'boxes'       => (int) $set['no_of_box'],
+                'weight'      => $this->footprint($dim, (int) $set['no_of_box'], 10000.0, $s), // size ordering only
+            ];
+        }
+
+        usort($out, fn($a, $b) => [$b['dim']->depth_units, $b['weight']] <=> [$a['dim']->depth_units, $a['weight']]);
+
+        return $out;
+    }
+
+    /**
+     * Plan for a whole group. Returns set key => rows [{slot_id, boxes, unverified}] or null.
+     * 1. One slot that takes every set (each simulated into the lanes).
+     * 2. Otherwise set by set, largest first: the best single slot, else the fewest slots (split).
+     *    Slots already used by the group are preferred for the next set.
+     */
+    private function planGroup(array $snapshot, array $sets, ?int $lotId, array $affinitySlots = []): array
+    {
+        $s = $this->settings();
+
+        if (!$sets) {
+            return [];
+        }
+
+        $lotSlots = [];
+        $lotRacks = [];
+        foreach ($snapshot as $st) {
+            if ($lotId && isset($st['lot_ids'][$lotId])) {
+                $lotSlots[$st['id']]       = true;
+                $lotRacks[$st['rack_key']] = true;
+            }
+        }
+        foreach ($affinitySlots as $id => $_) {
+            if (isset($snapshot[$id])) {
+                $lotSlots[$id]                         = true;
+                $lotRacks[$snapshot[$id]['rack_key']]  = true;
+            }
+        }
+
+        $candidates = [];
+
+        foreach ($snapshot as $st) {
+            if (!$st['tracked'] || ($fit = $this->fitAll($st, $sets, $s)) === null) {
+                continue;
+            }
+
+            $sameDim = 1;
+            foreach ($sets as $set) {
+                if (isset($st['dimension_ids'][$set['dim']->id])) {
+                    $sameDim = 0;
+                    break;
+                }
+            }
+
+            $candidates[] = ['st' => $st, 'rank' => [
+                $fit['tier'],
+                isset($lotSlots[$st['id']]) ? 0 : (isset($lotRacks[$st['rack_key']]) ? 1 : 2),
+                $sameDim,
+                -$fit['free'],
+            ]];
+        }
+
+        if ($candidates) {
+            usort($candidates, function ($a, $b) {
+                foreach ($a['rank'] as $i => $v) {
+                    if ($v != $b['rank'][$i]) {
+                        return $v <=> $b['rank'][$i];
+                    }
+                }
+
+                return strnatcmp($a['st']['label'], $b['st']['label']) ?: $a['st']['id'] <=> $b['st']['id'];
+            });
+
+            $best = $candidates[0];
+            $plan = [];
+            foreach ($sets as $set) {
+                $plan[$set['key']] = [['slot_id' => $best['st']['id'], 'boxes' => $set['boxes'], 'unverified' => $best['rank'][0] === 1]];
+            }
+
+            return $plan;
+        }
+
+        // No single slot takes everything.
+        $work   = $snapshot;
+        $plan   = [];
+        $groupSlots = $lotSlots;
+
+        foreach ($sets as $set) {
+            $rows = $this->recommend($work, $set['dim'], $set['boxes'], $lotId, $groupSlots);
+            $plan[$set['key']] = $rows;
+
+            foreach ($rows ?? [] as $r) {
+                $this->reserve($work[$r['slot_id']], $set['dim'], $r['boxes'], $s);
+                $groupSlots[$r['slot_id']] = true;
+            }
+        }
+
+        return $plan;
+    }
+
+    /** Does every set fit in this one slot? Same tier logic as bestTier(), applied to all sets in turn. */
+    private function fitAll(array $st, array $sets, array $s): ?array
+    {
+        foreach ([0 => 'lanes_all', 1 => 'lanes_confirmed'] as $tier => $key) {
+            $tmp  = $st;
+            $min  = INF;
+            $ok   = true;
+
+            foreach ($sets as $set) {
+                $free = $this->freeLength($tmp, $set['dim'], $key, $s);
+                $fp   = $this->footprint($set['dim'], $set['boxes'], $st['height'], $s);
+
+                if ($free < $fp) {
+                    $ok = false;
+                    break;
+                }
+
+                $this->addToLanes($tmp[$key], $set['dim'], $fp);
+                $min = min($min, $free - $fp);
+            }
+
+            if ($ok) {
+                return ['tier' => $tier, 'free' => $min];
+            }
+        }
+
+        return null;
+    }
+
+    // Books boxes into a working copy of the state so the next set of the group sees them.
+    private function reserve(array &$st, BoxDimension $dim, int $boxes, array $s): void
+    {
+        $fp = $this->footprint($dim, $boxes, $st['height'], $s);
+
+        $this->addToLanes($st['lanes_all'], $dim, $fp);
+        $this->addToLanes($st['lanes_confirmed'], $dim, $fp);
+        $st['dimension_ids'][$dim->id] = true;
+        $st['has_mini'] = $st['has_mini'] || $dim->is_mini;
     }
 
     // Same lookup rules as LotService::resolveLot, without the lock.
@@ -346,7 +570,12 @@ class RecommendationService
                 'lot_ids'         => [],
                 'dimension_ids'   => [],
                 'has_mini'        => false,
+                'untracked_reason' => null,
             ];
+
+            $geometryOk = $slot->tracked && $slot->length && $slot->height && $usable > 0;
+            $known      = $geometryOk;
+            $reason     = $geometryOk ? null : 'no_geometry';   // tub or unmeasured slot: expected, not a data problem
 
             $entries = [];
 
@@ -357,6 +586,7 @@ class RecommendationService
 
                 if (!$dim || !$p->box_count) {
                     $known = false; // unknown content = untracked slot
+                    $reason ??= 'unknown_box_info';
                     continue;
                 }
 
@@ -387,6 +617,7 @@ class RecommendationService
             }
 
             $st['tracked'] = $known;
+            $st['untracked_reason'] = $known ? null : $reason;
             $state[$slot->id] = $st;
         }
 
@@ -401,7 +632,7 @@ class RecommendationService
      * @return array<int, array{slot_id:int, boxes:int, unverified:bool}>|null  null = no recommendation.
      *         unverified = the space only exists if lots presumed released are really gone.
      */
-    public function recommend(array $snapshot, BoxDimension $dim, int $boxCount, ?int $lotId = null): ?array
+    public function recommend(array $snapshot, BoxDimension $dim, int $boxCount, ?int $lotId = null, array $affinitySlots = []): ?array
     {
         $s = $this->settings();
 
@@ -411,6 +642,13 @@ class RecommendationService
             if ($lotId && isset($st['lot_ids'][$lotId])) {
                 $sameLotSlots[$st['id']]      = true;
                 $sameLotRacks[$st['rack_key']] = true;
+            }
+        }
+
+        foreach ($affinitySlots as $id => $_) {
+            if (isset($snapshot[$id])) {
+                $sameLotSlots[$id]                        = true;
+                $sameLotRacks[$snapshot[$id]['rack_key']] = true;
             }
         }
 
