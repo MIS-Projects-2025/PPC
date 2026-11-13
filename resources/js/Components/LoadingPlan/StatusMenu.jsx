@@ -21,7 +21,6 @@ export const STATUS_GROUPS = [
             "TNR HOLD",
             "PACK LABEL HOLD",
             "FINAL QA HOLD",
-            "REWORK",
         ],
     },
     {
