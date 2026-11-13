@@ -26,10 +26,12 @@ class LotStaging extends Model
         'box_source',
         'source_group_id',
         'box_details',
+        'box_items',
     ];
 
     protected $casts = [
         'cycle'       => 'integer',
+        'box_items'   => 'array',
     ];
 
     public function lot(): BelongsTo
@@ -40,6 +42,22 @@ class LotStaging extends Model
     public function positions(): HasMany
     {
         return $this->hasMany(LotPosition::class);
+    }
+
+    public function boxItems(): array
+    {
+        $merged = [];
+
+        foreach ((array) $this->box_items as $i) {
+            $id = (int) ($i['dimension_id'] ?? 0);
+            $merged[$id] = ($merged[$id] ?? 0) + (int) ($i['boxes'] ?? 0);
+        }
+
+        if (!$merged && $this->dimension_id && $this->box_count) {
+            $merged[(int) $this->dimension_id] = (int) $this->box_count;
+        }
+
+        return array_map(fn($id, $n) => ['dimension_id' => $id, 'boxes' => $n], array_keys($merged), $merged);
     }
 
     public function isActive(): bool

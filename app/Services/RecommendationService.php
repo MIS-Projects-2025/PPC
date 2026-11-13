@@ -10,6 +10,7 @@ use App\Models\PlacementRecommendation;
 use App\Models\PlacementSetting;
 use App\Models\RackSlot;
 use App\Repositories\LotSourceRepository;
+use App\Support\BoxDetails;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -118,7 +119,7 @@ class RecommendationService
                         ], $staged[$key]['slot_ids']);
                     } elseif (!$visible) {
                         $out['reason'] = 'disabled';
-                    } elseif (!$scanned || !$scanned['dimension_id']) {
+                    } elseif (!$scanned || empty($scanned['items']) || in_array(null, array_column($scanned['items'], 'dimension_id'), true)) {
                         $out['reason'] = 'unknown_dimension';
                     } elseif (!$scanned['no_of_box']) {
                         $out['reason'] = 'unknown_box_count';
@@ -133,7 +134,7 @@ class RecommendationService
                         }
 
                         $plan = $this->planGroup($snapshot, $sets, $lot?->id, $affinity);
-                        $rows = $plan[$key] ?? null;
+                        $rows = $this->rowsForSet($plan, $sets, $key);
 
                         if ($rows) {
                             $out['slots'] = array_map(fn($r) => [
@@ -191,7 +192,7 @@ class RecommendationService
         foreach ($stagings as $st) {
             if (trim((string) $st->box_details) === '') continue;
 
-            $key = mb_strtolower(trim((string) $st->box_details));
+            $key = BoxDetails::key($st->box_details);
             $out[$key]['box_group_id']  = $st->box_group_id;
             $out[$key]['staging_ids'][] = $st->id;
         }
@@ -205,26 +206,37 @@ class RecommendationService
         return $out;
     }
 
-    /** Box sets that still need a place: known size and count, not staged yet. Largest footprint first. */
+    /** Units that still need a place: one per box size of every box set not staged yet. Largest footprint first. */
     private function placeableSets(array $match, array $staged): array
     {
-        $dims = BoxDimension::whereIn('id', collect($match['sets'])->pluck('dimension_id')->filter())->get()->keyBy('id');
+        $ids  = collect($match['sets'])->pluck('items')->flatten(1)->pluck('dimension_id')->filter()->unique();
+        $dims = BoxDimension::whereIn('id', $ids)->get()->keyBy('id');
         $s    = $this->settings();
         $out  = [];
 
         foreach ($match['sets'] as $set) {
-            if (isset($staged[$set['key']]) || !$set['dimension_id'] || !$set['no_of_box'] || !$dims->has($set['dimension_id'])) {
+            $items = $set['items'] ?? [];
+
+            if (isset($staged[$set['key']]) || !$items) {
                 continue;
             }
 
-            $dim   = $dims[$set['dimension_id']];
-            $out[] = [
-                'key'         => $set['key'],
-                'box_details' => $set['box_details'],
-                'dim'         => $dim,
-                'boxes'       => (int) $set['no_of_box'],
-                'weight'      => $this->footprint($dim, (int) $set['no_of_box'], 10000.0, $s), // size ordering only
-            ];
+            // One unknown size or missing count makes the whole set untracked.
+            if (collect($items)->contains(fn($i) => !$i['dimension_id'] || !$i['boxes'] || !$dims->has($i['dimension_id']))) {
+                continue;
+            }
+
+            foreach ($items as $i) {
+                $dim   = $dims[$i['dimension_id']];
+                $out[] = [
+                    'key'         => $set['key'] . '#' . $dim->id,
+                    'set'         => $set['key'],
+                    'box_details' => $dim->name,
+                    'dim'         => $dim,
+                    'boxes'       => (int) $i['boxes'],
+                    'weight'      => $this->footprint($dim, (int) $i['boxes'], 10000.0, $s), // size ordering only
+                ];
+            }
         }
 
         usort($out, fn($a, $b) => [$b['dim']->depth_units, $b['weight']] <=> [$a['dim']->depth_units, $a['weight']]);
@@ -376,6 +388,102 @@ class RecommendationService
             ?? (clone $q)->whereNull('partname')->latest('id')->first($columns);
     }
 
+    /** The scanned box set can be several units (one per box size). Merge their rows per slot. */
+    private function rowsForSet(array $plan, array $units, string $setKey): ?array
+    {
+        $merged = [];
+
+        foreach ($units as $u) {
+            if ($u['set'] !== $setKey) {
+                continue;
+            }
+
+            if (empty($plan[$u['key']])) {
+                return null; // one size has no place: a partial recommendation would mislead
+            }
+
+            foreach ($plan[$u['key']] as $r) {
+                $m = $merged[$r['slot_id']] ?? ['slot_id' => $r['slot_id'], 'boxes' => 0, 'unverified' => false];
+                $m['boxes']      += $r['boxes'];
+                $m['unverified']  = $m['unverified'] || $r['unverified'];
+                $merged[$r['slot_id']] = $m;
+            }
+        }
+
+        return $merged ? array_values($merged) : null;
+    }
+
+    private function unitsFromItems(array $items): array
+    {
+        $dims = BoxDimension::whereIn('id', array_column($items, 'dimension_id'))->get()->keyBy('id');
+        $s    = $this->settings();
+        $out  = [];
+
+        foreach ($items as $i) {
+            $dim = $dims->get($i['dimension_id']);
+
+            if (!$dim || empty($i['boxes'])) {
+                return [];
+            }
+
+            $out[] = [
+                'key'         => 'shadow#' . $dim->id,
+                'set'         => 'shadow',
+                'box_details' => $dim->name,
+                'dim'         => $dim,
+                'boxes'       => (int) $i['boxes'],
+                'weight'      => $this->footprint($dim, (int) $i['boxes'], 10000.0, $s),
+            ];
+        }
+
+        usort($out, fn($a, $b) => [$b['dim']->depth_units, $b['weight']] <=> [$a['dim']->depth_units, $a['weight']]);
+
+        return $out;
+    }
+
+    /** Same as contradicts(), for a set of several box sizes. null = not evaluable. */
+    public function contradictsUnits(array $snapshot, array $units, array $actualSlotIds): ?bool
+    {
+        if (count($actualSlotIds) !== 1) {
+            return null;
+        }
+
+        $st = $snapshot[$actualSlotIds[0]] ?? null;
+
+        if (!$st || !$st['tracked']) {
+            return null;
+        }
+
+        return $this->fitAll($st, $units, $this->settings()) === null;
+    }
+
+    /** @return array<int,int> dimension id => boxes this position holds. [] = unknown. */
+    private function positionItems(LotPosition $p, $dims): array
+    {
+        if (!$p->box_count) {
+            return []; // unknown content = untracked slot (same rule as before)
+        }
+
+        $items = $p->staging?->boxItems() ?? [];
+
+        // A single-size set can have a known per-slot split. A mixed set holds its full list in every slot (upper bound).
+        if (count($items) === 1) {
+            $items[0]['boxes'] = (int) $p->box_count;
+        }
+
+        $out = [];
+
+        foreach ($items as $i) {
+            if (!$dims->has($i['dimension_id']) || empty($i['boxes'])) {
+                return [];
+            }
+
+            $out[(int) $i['dimension_id']] = ($out[(int) $i['dimension_id']] ?? 0) + (int) $i['boxes'];
+        }
+
+        return $out;
+    }
+
     private function noneReason(array $snapshot): string
     {
         foreach ($snapshot as $st) {
@@ -413,10 +521,11 @@ class RecommendationService
 
     /**
      * Evaluate a placement against the state BEFORE it is committed.
+     * $items = [{dimension_id, boxes}] of the box set (empty = unknown box info).
      *
      * @return array{recommended: ?array, actual_slot_ids: int[], model_contradicted: ?bool, rack_page_id: ?int}
      */
-    public function shadow(array $actualSlotIds, ?int $dimensionId, ?int $boxCount, int $lotId, bool $sharesBoxes = false): array
+    public function shadow(array $actualSlotIds, array $items, int $lotId, bool $sharesBoxes = false): array
     {
         $payload = [
             'recommended'        => null,
@@ -436,20 +545,22 @@ class RecommendationService
                 return $payload; // no recommendation to judge: these boxes were already placed
             }
 
-            if (!$dimensionId || !$boxCount || !$payload['rack_page_id']) {
+            if (!$items || !$payload['rack_page_id']) {
                 return $payload;
             }
 
-            $dim = BoxDimension::find($dimensionId);
+            $units = $this->unitsFromItems($items);
 
-            if (!$dim) {
+            if (!$units) {
                 return $payload;
             }
 
             $snapshot = $this->snapshot($payload['rack_page_id']);
 
-            $payload['recommended']        = $this->recommend($snapshot, $dim, $boxCount, $lotId);
-            $payload['model_contradicted'] = $this->contradicts($snapshot, $dim, $boxCount, $actualSlotIds);
+            $payload['recommended'] = count($units) === 1
+                ? $this->recommend($snapshot, $units[0]['dim'], $units[0]['boxes'], $lotId)
+                : $this->rowsForSet($this->planGroup($snapshot, $units, $lotId), $units, 'shadow');
+            $payload['model_contradicted'] = $this->contradictsUnits($snapshot, $units, $actualSlotIds);
         } catch (\Throwable $e) {
             Log::warning('Placement shadow evaluation failed', ['error' => $e->getMessage()]);
         }
@@ -548,7 +659,7 @@ class RecommendationService
         $positions = LotPosition::query()
             ->whereNull('released_at')
             ->whereIn('rack_slot_id', $slots->pluck('id'))
-            ->with('staging:id,dimension_id,box_group_id')
+            ->with('staging:id,dimension_id,box_count,box_group_id,box_items')
             ->get(['id', 'lot_id', 'lot_staging_id', 'rack_slot_id', 'box_count', 'presumed_released_at'])
             ->groupBy('rack_slot_id');
 
@@ -582,9 +693,9 @@ class RecommendationService
             foreach ($positions->get($slot->id, collect()) as $p) {
                 $st['lot_ids'][$p->lot_id] = true;
 
-                $dim = $dims->get($p->staging?->dimension_id);
+                $held = $this->positionItems($p, $dims);
 
-                if (!$dim || !$p->box_count) {
+                if (!$held) {
                     $known = false; // unknown content = untracked slot
                     $reason ??= 'unknown_box_info';
                     continue;
@@ -593,13 +704,24 @@ class RecommendationService
                 // One entry per physical box set, however many lots share it (lots in one box group).
                 $key = $p->staging?->box_group_id ?? 'p' . $p->id;
 
-                $entries[$key] ??= ['dim' => $dim, 'boxes' => 0, 'presumed' => true];
-                $entries[$key]['boxes']    = max($entries[$key]['boxes'], (int) $p->box_count);
+                $entries[$key] ??= ['items' => [], 'presumed' => true];
+                foreach ($held as $dimId => $n) {
+                    $entries[$key]['items'][$dimId] = max($entries[$key]['items'][$dimId] ?? 0, $n);
+                }
                 // Presumed gone only if every lot sharing the boxes is presumed gone.
                 $entries[$key]['presumed'] = $entries[$key]['presumed'] && $p->presumed_released_at !== null;
             }
 
             if ($known) {
+                // One line per box size, so the lane code below is unchanged.
+                $flat = [];
+                foreach ($entries as $e) {
+                    foreach ($e['items'] as $dimId => $n) {
+                        $flat[] = ['dim' => $dims[$dimId], 'boxes' => $n, 'presumed' => $e['presumed']];
+                    }
+                }
+                $entries = $flat;
+
                 // Full-depth first so mini-pizzas fill the emptier lane deterministically.
                 usort($entries, fn($a, $b) => $b['dim']->depth_units <=> $a['dim']->depth_units);
 

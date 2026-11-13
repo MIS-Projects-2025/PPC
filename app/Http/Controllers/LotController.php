@@ -212,8 +212,16 @@ class LotController extends Controller
 
         $data = request()->validate([
             'lot_id'      => 'required|string|max:50',
-            'set_key'     => 'present|nullable|string|max:100', // '' arrives as null for a set with no box name
-            'box_details' => ['required', 'string', \Illuminate\Validation\Rule::exists((new BoxDimension)->getTable(), 'name')],
+            'set_key'     => 'present|nullable|string|max:500', // '' arrives as null for a set with no box name
+            'box_details' => ['required', 'string', 'max:2000', function ($attr, $value, $fail) {
+                // one box name, or a list "[15, 15, 18]"
+                $dims  = BoxDimension::all()->keyBy(fn($d) => mb_strtolower(trim($d->name)));
+                $items = \App\Support\BoxDetails::items($value, 1, $dims);
+
+                if (!$items || in_array(null, array_column($items, 'dimension_id'), true)) {
+                    $fail('Unknown box size.');
+                }
+            }],
             'no_of_box'   => 'required|integer|min:1|max:999',
         ]);
 

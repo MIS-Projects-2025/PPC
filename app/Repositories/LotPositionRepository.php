@@ -85,6 +85,7 @@ class LotPositionRepository implements LotPositionRepositoryInterface
                 'lots.partname',
                 'lots.qty',
                 'lot_stagings.box_details',
+                'lot_stagings.box_items',
                 "{$dims}.name as dimension_name",
                 "{$dims}.depth_units as depth_units",
             )
@@ -95,6 +96,7 @@ class LotPositionRepository implements LotPositionRepositoryInterface
         );
 
         $threshold = Carbon::now('UTC')->subDays(3);
+        $dimMap    = BoxDimension::all()->keyBy('id');
 
         return $rows->toBase()->map(fn($row) => [
             'id'                         => $row->lot_code,
@@ -112,9 +114,35 @@ class LotPositionRepository implements LotPositionRepositoryInterface
             'partname'       => $row->partname,
             'qty'            => (int) $row->qty,
             'box_details'    => $row->box_details,
-            'dimension_name' => $row->dimension_name,
-            'depth_units'    => $row->depth_units ? (int) $row->depth_units : null,
+            'dimension_name' => $this->occupancyBoxFacts($row, $dimMap)['name'],
+            'depth_units'    => $this->occupancyBoxFacts($row, $dimMap)['depth'],
         ])->groupBy('rack_slot_id');
+    }
+
+    // "15" for a single size, "15 ×2 + 18" for a mixed set. depth = the deepest box (full depth wins).
+    private function occupancyBoxFacts($row, $dimMap): array
+    {
+        $items = $row->box_items
+            ? json_decode($row->box_items, true)
+            : ($row->staging_dimension_id && $row->staging_box_count
+                ? [['dimension_id' => (int) $row->staging_dimension_id, 'boxes' => (int) $row->staging_box_count]]
+                : []);
+
+        $parts = [];
+        $depth = 0;
+
+        foreach ((array) $items as $i) {
+            $d = $dimMap->get($i['dimension_id']);
+
+            if (!$d) {
+                return ['name' => null, 'depth' => null];
+            }
+
+            $parts[] = $d->name . (count($items) > 1 && $i['boxes'] > 1 ? " ×{$i['boxes']}" : '');
+            $depth   = max($depth, (int) $d->depth_units);
+        }
+
+        return ['name' => $parts ? implode(' + ', $parts) : null, 'depth' => $depth ?: null];
     }
 
     public function getOccupancyByProductionLine(int $productionLineId): Collection

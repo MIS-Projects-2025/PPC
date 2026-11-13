@@ -22,6 +22,10 @@ export default function useLotMatch({ rackPageId }) {
     useEffect(() => {
         const s = useLotStore.getState();
 
+        // Whatever the previous lot left behind (its joined slot list, its recommendation) must not leak into this lot.
+        if (s.recommendation.joins) s.clearSlotPendingLot();
+        s.clearRecommendation();
+
         if (mode === LOT_UPSTREAM_MODES.RELEASE || lotId.length < MIN_LOT_ID_LENGTH) {
             s.clearMatch();
             s.clearRecommendation();

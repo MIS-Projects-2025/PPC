@@ -7,6 +7,12 @@ const sanitizeFieldValue = (value) => {
 export function parseLotScanInput(input) {
 	const normalized = input.trim().toUpperCase();
 
+	if (normalized === LOT_UPSTREAM_MODES.TOGGLE)
+		return {
+			type: LOT_UPSTREAM_MODES.TYPE_COMMAND,
+			command: LOT_UPSTREAM_MODES.TOGGLE,
+		};
+
 	if (normalized === LOT_UPSTREAM_MODES.DONE)
 		return {
 			type: LOT_UPSTREAM_MODES.TYPE_COMMAND,

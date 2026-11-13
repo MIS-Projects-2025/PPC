@@ -25,11 +25,49 @@ import SearchInput from "@/Components/SearchInput";
 import { useDownloadFile } from "@/Hooks/useDownload";
 import { parseLotScanInput } from "@/Lib/parseLotScanInput";
 import { router } from "@inertiajs/react";
+import JsBarcode from "jsbarcode";
 import { GrAscend, GrDescend } from "react-icons/gr";
 import { TiArrowDownThick } from "react-icons/ti";
 
 const RECEIVE = LOT_UPSTREAM_MODES.RECEIVE;
 const RELEASE = LOT_UPSTREAM_MODES.RELEASE;
+
+// The input drops characters it rejects (the ":" of "[SLOT]:"), so what is left is a subsequence of the scan, not a prefix.
+const isFragmentOf = (fragment, whole) => {
+    let i = 0;
+    for (const ch of whole) if (ch === fragment[i]) i++;
+    return i === fragment.length;
+};
+
+function CommandBarcode({ value, className = "w-full h-16" }) {
+    const ref = useRef(null);
+
+    useEffect(() => {
+        const svg = ref.current;
+        if (!svg) return;
+
+        JsBarcode(svg, value, {
+            format: "CODE128",
+            displayValue: false,
+            width: 4,
+            height: 50,
+            margin: 12,
+            background: "#ffffff",
+            lineColor: "#000000",
+        });
+
+        const w = svg.getAttribute("width");
+        const h = svg.getAttribute("height");
+        if (w && h) {
+            svg.setAttribute("viewBox", `0 0 ${parseFloat(w)} ${parseFloat(h)}`);
+            svg.removeAttribute("width");
+            svg.removeAttribute("height");
+            svg.setAttribute("preserveAspectRatio", "none");
+        }
+    }, [value]); // re-render if the value changes
+
+    return <svg ref={ref} className={clsx("rounded block", className)} />;
+}
 
 function CopyLotId({ value }) {
     const [copied, setCopied] = useState(false);
@@ -93,7 +131,10 @@ function SlotAssign() {
                         {s && (
                             <button
                                 type="button"
-                                onClick={() => removeSlotPendingLot(s.id)}
+                                onClick={() => {
+                                    // Slots are fixed while the lot joins boxes already in the rack.
+                                    if (!useLotStore.getState().recommendation.joins) removeSlotPendingLot(s.id);
+                                }}
                                 className="btn btn-sm btn-ghost group relative flex items-center gap-2 overflow-hidden hover:border hover:border-rose-500 hover:text-rose-500"
                             >
                                 <span>{s?.label}</span>
@@ -415,6 +456,15 @@ function ScanPanel({ lotActions, dimensions = [], recommendationsVisible = false
                 </div>
             )}
 
+            {canConfirm && slotPendingLot.length > 0 && (
+                <div className="my-2 text-center w-full min-w-0">
+                    <CommandBarcode value="DONE" />
+                    <div className="text-[10px] opacity-60">
+                        Scan to {isEditMode ? "save" : "confirm receive"}
+                    </div>
+                </div>
+            )}
+
             <CancellableActionButton
                 abort={mutateLotCancel}
                 refetch={handleConfirm}
@@ -481,7 +531,7 @@ function ReceivedList({ onEdit, lotActions }) {
                         const recentUpdate = recentUpdates[lot.id];
                         const lastStaging =
                             lot.stagings?.[lot.stagings.length - 1];
-                        const boxUnknown = !lot.released_at && lastStaging && (!lastStaging.dimension_id || !lastStaging.box_count);
+                        const boxUnknown = !lot.released_at && lastStaging && !(lastStaging.box_items?.length || (lastStaging.dimension_id && lastStaging.box_count));
 
                         return (
                             <div
@@ -1024,7 +1074,7 @@ export default function LotsUpstream({
             const current = String(
                 useLotStore.getState().pendingLotToBeAdded?.[lotActions.focusedField] ?? "",
             );
-            if (current && currentBuffer.startsWith(current)) {
+            if (current && isFragmentOf(current, currentBuffer)) {
                 editPendingLot(lotActions.focusedField, "");
             }
         }
@@ -1268,72 +1318,77 @@ export default function LotsUpstream({
 
             <div className="flex flex-col gap-4 overflow-hidden rounded-lg p-2">
                 <div className="flex items-center gap-2">
-                    <div className={clsx("flex items-center justify-between px-2 rounded-xl border-l-8 shadow-lg", currentTheme)}>
-                        <div>
-                            <span className="text-xs font-bold uppercase tracking-widest opacity-70">Active Location</span>
-                            <h1 className="text-5xl font-extrabold tracking-tight">{productionLine.toUpperCase()}</h1>
+                    {/* Combined: Active Location + Scanner Mode */}
+                    <div
+                        className={clsx(
+                            "flex items-stretch overflow-hidden rounded-xl bg-base-100 shadow-lg",
+                            {
+                                "shadow-error": mode === RELEASE,
+                                "shadow-secondary": mode === RECEIVE,
+                            },
+                        )}
+                    >
+                        {/* Active Location */}
+                        <div className={clsx("flex flex-col justify-center px-3 py-2 border-l-8", currentTheme)}>
+                            <span className="text-xs font-bold uppercase tracking-widest opacity-70">
+                                Active Location
+                            </span>
+                            <h1 className="text-5xl font-extrabold tracking-tight">
+                                {productionLine.toUpperCase()}
+                            </h1>
 
                             {untrackedSlots?.count > 0 && (
-                            <span
-                                className="badge badge-warning badge-sm"
-                                title={`Untracked (unknown box info): ${untrackedSlots.labels.join(", ")}`}
-                            >
+                                <span
+                                    className="badge badge-warning badge-sm"
+                                    title={`Untracked (unknown box info): ${untrackedSlots.labels.join(", ")}`}
+                                >
                                     {untrackedSlots.count} slots untracked
                                 </span>
                             )}
                         </div>
-                    </div>
-                    <fieldset
-                        className={clsx(
-                            "fieldset bg-base-100 border-base-300 shadow-lg rounded-box w-64 border px-4 py-2",
-                            {
-                                "border-error shadow-error": mode === RELEASE,
-                                "border-secondary shadow-secondary":
-                                    mode === RECEIVE,
-                            },
-                        )}
-                    >
-                        <legend className="fieldset-legend leading-0 mb-1 text-xl">
-                            Scanner Mode
-                        </legend>
-                        <label className="label">
-                            <input
-                                type="checkbox"
-                                checked={mode === RELEASE}
-                                className={clsx("toggle", {
-                                    "toggle-error": mode === RELEASE,
-                                    "toggle-secondary": mode === RECEIVE,
-                                })}
-                                onChange={() =>
-                                    setMode(
-                                        mode === RELEASE ? RECEIVE : RELEASE,
-                                    )
-                                }
-                            />
-                            <div
-                                className={clsx(
-                                    "flex w-full items-center justify-between gap-2 text-xl font-extrabold letter-spacing-2",
-                                    {
-                                        "text-error": mode === RELEASE,
-                                        "text-secondary": mode === RECEIVE,
-                                    },
-                                )}
-                            >
-                                <span className="tracking-[.2em]">
-                                    {mode === RELEASE
-                                        ? "RELEASING"
-                                        : "RECEIVING"}
-                                </span>
-                                <span>
+
+                        {/* Scanner Mode */}
+                        <div className="w-64 border-l border-base-300 px-4 py-2 flex flex-col justify-center">
+                            {/* <div className="mb-1 text-xl leading-none">Scanner Mode</div> */}
+
+                            <div className="mt-1 text-center">
+                                <CommandBarcode value="TOGGLE" className="w-full h-10" />
+                                <div className="text-[9px] opacity-60 tracking-widest">
+                                    SCAN TO SWITCH MODE
+                                </div>
+                            </div>
+
+                            <label className="label cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={mode === RELEASE}
+                                    className={clsx("toggle", {
+                                        "toggle-error": mode === RELEASE,
+                                        "toggle-secondary": mode === RECEIVE,
+                                    })}
+                                    onChange={() => setMode(mode === RELEASE ? RECEIVE : RELEASE)}
+                                />
+                                <div
+                                    className={clsx(
+                                        "flex w-full items-center justify-between gap-2 text-xl font-extrabold",
+                                        {
+                                            "text-error": mode === RELEASE,
+                                            "text-secondary": mode === RECEIVE,
+                                        },
+                                    )}
+                                >
+                                    <span className="tracking-[.2em]">
+                                        {mode === RELEASE ? "RELEASING" : "RECEIVING"}
+                                    </span>
                                     {mode === RELEASE ? (
                                         <FaUpload className="w-5 h-5" />
                                     ) : (
                                         <FaDownload className="w-5 h-5" />
                                     )}
-                                </span>
-                            </div>
-                        </label>
-                    </fieldset>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
 
                     <div className="flex-1 border-base-300 flex flex-wrap gap-2 items-center">
                         <div className="flex flex-col gap-2">

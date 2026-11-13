@@ -23,6 +23,7 @@ export const LOT_UPSTREAM_MODES = {
 	OPEN_WITHDRAWAL: "open_withdrawal",
 	CLOSE: "close",
 	DONE: "DONE",
+	TOGGLE: "TOGGLE",
 	LOTID: LOTID,
 	PARTNAME: PARTNAME,
 	QTY: QTY,

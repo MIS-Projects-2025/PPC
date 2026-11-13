@@ -18,6 +18,7 @@ use App\Models\LotPosition;
 use App\Repositories\LotSourceRepository;
 use App\Models\PlacementRecommendation;
 use App\Models\BoxDimension;
+use App\Support\BoxDetails;
 
 class LotService
 {
@@ -54,9 +55,11 @@ class LotService
                 $data['slot_ids']     = $group['slot_ids'];
                 $data['dimension_id'] = $group['dimension_id'];
                 $data['box_count']    = $group['box_count'];
+                $data['box_items']    = $group['box_items'];
             } else {
                 $data['dimension_id'] = $box['dimension_id'];
                 $data['box_count']    = $box['box_count'];
+                $data['box_items']    = $box['box_items'];
             }
 
             // lots can be placed in multiple slots, in different racks.
@@ -160,13 +163,13 @@ class LotService
             // Shadow mode: evaluate against the state BEFORE this placement. Never throws.
             $shadow = $this->recommendations->shadow(
                 $data['slot_ids'],
-                $data['dimension_id'] ?? null,
-                $data['box_count'] ?? null,
+                $data['box_items'] ?? [],
                 $lot->id,
                 sharesBoxes: (bool) $group,
             );
 
-            $slotBoxes = $group ? [] : $this->knownSplit($data['recommendation_id'] ?? null, $data['lot_id'], $data['slot_ids']);
+            // The exact split is only tracked for single-size sets; mixed sets use the upper bound.
+            $slotBoxes = ($group || count($data['box_items'] ?? []) !== 1) ? [] : $this->knownSplit($data['recommendation_id'] ?? null, $data['lot_id'], $data['slot_ids']);
 
             $staging = $this->lots->createStaging(
                 $lot,
@@ -175,6 +178,7 @@ class LotService
                 $now,
                 [
                     'dimension_id'    => $data['dimension_id'] ?? null,
+                    'box_items'       => $data['box_items'] ?? null,
                     'box_count'       => $data['box_count'] ?? null,
                     'box_group_id'    => $group['id'] ?? null,
                     'box_source'      => $box['box_source'],
@@ -192,7 +196,7 @@ class LotService
 
     private function boxFacts(array $match): array
     {
-        $none = ['box_source' => null, 'source_group_id' => null, 'box_details' => null, 'dimension_id' => null, 'box_count' => null];
+        $none = ['box_source' => null, 'source_group_id' => null, 'box_details' => null, 'dimension_id' => null, 'box_count' => null, 'box_items' => null];
 
         if (($match['status'] ?? null) !== 'found') {
             return $none; // not found or source down: unknown box facts, the slot becomes untracked
@@ -204,12 +208,22 @@ class LotService
             return $none;
         }
 
+        // All or nothing: one unknown box name makes the whole set untracked.
+        $items = collect($set['items'] ?? [])
+            ->groupBy(fn($i) => $i['dimension_id'] ?? 'unknown')
+            ->map(fn($g) => ['dimension_id' => $g->first()['dimension_id'] ?? null, 'boxes' => (int) $g->sum('boxes')])
+            ->values();
+        $known = $items->isNotEmpty() && $items->every(fn($i) => $i['dimension_id'] && $i['boxes'] > 0);
+
         return [
             'box_source'      => $match['source'],
             'source_group_id' => $match['group_id'],
             'box_details'     => $set['original_box_details'], // identity of the set = the original text
-            'dimension_id'    => $set['dimension_id'],
-            'box_count'       => $set['no_of_box'],
+            'dimension_id'    => $known && $items->count() === 1 ? (int) $items->first()['dimension_id'] : null,
+            'box_count'       => $known ? (int) $items->sum('boxes') : null,
+            'box_items'       => $known
+                ? $items->map(fn($i) => ['dimension_id' => (int) $i['dimension_id'], 'boxes' => (int) $i['boxes']])->values()->all()
+                : null,
         ];
     }
 
@@ -219,14 +233,14 @@ class LotService
             return null;
         }
 
-        $key = mb_strtolower(trim($box['box_details']));
+        $key = BoxDetails::key($box['box_details']);
 
         return LotStaging::whereNull('released_at')
             ->where('box_source', $box['box_source'])
             ->where('source_group_id', $box['source_group_id'])
             ->lockForUpdate()
             ->get()
-            ->first(fn($st) => mb_strtolower(trim((string) $st->box_details)) === $key);
+            ->first(fn($st) => BoxDetails::key($st->box_details) === $key);
     }
 
     // The exact split is only known when the operator placed the lot where the recommendation said.
@@ -301,10 +315,6 @@ class LotService
         });
     }
 
-    /**
-     * Audited correction of a box set's name/count. The source tables are not written.
-     * Also fixes what is already staged for that box set, so wrong source data found late still repairs capacity.
-     */
     public function correctBoxInfo(string $lotId, string $setKey, string $details, int $count, string $by): array
     {
         $match = $this->source->resolve($lotId);
@@ -321,37 +331,53 @@ class LotService
             throw ValidationException::withMessages(['set_key' => 'Box set not found for this lot. Refresh and try again.']);
         }
 
-        $dim = BoxDimension::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($details))])->first();
+        // $details is one box name (then $count boxes) or a list "[15, 15, 18]".
+        $dims  = BoxDimension::all()->keyBy(fn($d) => mb_strtolower(trim($d->name)));
+        $items = BoxDetails::items($details, $count, $dims);
 
-        if (!$dim) {
+        if (!$items || in_array(null, array_column($items, 'dimension_id'), true)) {
             throw ValidationException::withMessages(['box_details' => 'Unknown box size.']);
         }
 
-        return DB::transaction(function () use ($match, $set, $setKey, $lotId, $dim, $count, $by) {
+        $names = [];
+        foreach ($items as $i) {
+            $canon = $dims->get(mb_strtolower($i['name']))->name;
+            for ($n = 0; $n < $i['boxes']; $n++) {
+                $names[] = $canon;
+            }
+        }
+
+        $total     = count($names);
+        $canonical = '[' . implode(', ', $names) . ']';
+        $facts     = [
+            'dimension_id' => count($items) === 1 ? (int) $items[0]['dimension_id'] : null,
+            'box_count'    => $total,
+            'box_items'    => array_map(fn($i) => ['dimension_id' => (int) $i['dimension_id'], 'boxes' => (int) $i['boxes']], $items),
+        ];
+
+        return DB::transaction(function () use ($match, $set, $setKey, $lotId, $canonical, $total, $facts, $by) {
             $this->source->saveOverride(
                 $match['source'],
                 $match['group_key'],
                 $setKey,
                 $set['original_box_details'],
                 $set['original_no_of_box'],
-                $dim->name,
-                $count,
+                $canonical,
+                $total,
                 $by,
             );
 
             $stagings = $this->stagingsOfSet($match, $setKey, $lotId);
 
             foreach ($stagings as $st) {
-                $st->update([
-                    'dimension_id'    => $dim->id,
-                    'box_count'       => $count,
+                $st->update($facts + [
                     'box_source'      => $st->box_source ?? $match['source'],
                     'source_group_id' => $st->box_source ? $st->source_group_id : $match['group_id'],
                     'box_details'     => $st->box_details ?? $set['original_box_details'],
                 ]);
 
                 // A known split is replaced by the upper bound (the full count per slot): safe, never over-fills.
-                LotPosition::where('lot_staging_id', $st->id)->whereNull('released_at')->update(['box_count' => $count]);
+                LotPosition::where('lot_staging_id', $st->id)->whereNull('released_at')->update(['box_count' => $total]);
             }
 
             return ['staging_updated' => $stagings->count()];
@@ -366,7 +392,7 @@ class LotService
             ->where('box_source', $match['source'])
             ->where('source_group_id', $match['group_id'])
             ->lockForUpdate()->get()
-            ->filter(fn($s) => mb_strtolower(trim((string) $s->box_details)) === $setKey)
+            ->filter(fn($s) => BoxDetails::key($s->box_details) === $setKey)
             : collect();
 
         $byLot = $setKey === $match['lot_set_key']
@@ -378,15 +404,11 @@ class LotService
         return $byGroup->concat($byLot)->unique('id')->values();
     }
 
-    /**
-     * Backfill box info for a staged lot that had none (no source row at receive, or a row that was fixed later).
-     * The lot keeps its own box set; if another lot of the same box set is staged elsewhere, capacity is counted
-     * twice. That is the safe direction.
-     */
     public function recheckLot(string $lotId): array
     {
         return DB::transaction(function () use ($lotId) {
             $stagings = LotStaging::whereNull('released_at')
+                ->whereNull('box_items')
                 ->where(fn($q) => $q->whereNull('dimension_id')->orWhereNull('box_count'))
                 ->whereHas('lot', fn($q) => $q->where('lot_id', $lotId))
                 ->lockForUpdate()->get();
@@ -397,7 +419,7 @@ class LotService
 
             $box = $this->boxFacts($this->source->resolve($lotId));
 
-            if (!$box['dimension_id'] || !$box['box_count']) {
+            if (!$box['box_items']) {
                 return ['updated' => false, 'message' => 'Source still has no usable box info for this lot.'];
             }
 
@@ -405,6 +427,7 @@ class LotService
                 $st->update([
                     'dimension_id'    => $box['dimension_id'],
                     'box_count'       => $box['box_count'],
+                    'box_items'       => $box['box_items'],
                     'box_source'      => $box['box_source'],
                     'source_group_id' => $box['source_group_id'],
                     'box_details'     => $box['box_details'],
@@ -573,13 +596,14 @@ class LotService
 
         $facts = LotStaging::whereIn('id', $positions->pluck('lot_staging_id'))
             ->orderByDesc('box_count') // a staging with unknown box facts sorts last
-            ->first(['dimension_id', 'box_count']);
+            ->first(['dimension_id', 'box_count', 'box_items']);
 
         return [
             'id'           => $groupId,
             'slot_ids'     => $positions->pluck('rack_slot_id')->unique()->values()->all(),
             'dimension_id' => $facts?->dimension_id,
             'box_count'    => $facts?->box_count,
+            'box_items'    => $facts?->boxItems() ?: null,
         ];
     }
 

@@ -155,6 +155,7 @@ class LotRepository implements LotRepositoryInterface
             'box_source'      => $extra['box_source'] ?? null,
             'source_group_id' => $extra['source_group_id'] ?? null,
             'box_details'     => $extra['box_details'] ?? null,
+            'box_items'       => $extra['box_items'] ?? null,
         ]);
 
         // New boxes start their own group. Lots sharing boxes pass the existing group id in $extra.

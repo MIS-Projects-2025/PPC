@@ -33,7 +33,14 @@ class RackSlotController extends Controller
     public function store(int $rackId)
     {
         request()->validate([
-            'label' => "required|string|max:10|unique:rack_slots,label,NULL,id,rack_id,{$rackId}",
+            'label' => [
+                'required',
+                'string',
+                'max:10',
+                \Illuminate\Validation\Rule::unique('rack_slots', 'label')
+                    ->where('rack_id', $rackId)
+                    ->whereNull('deleted_at'), // soft-deleted slots must not block re-using their label
+            ],
         ]);
 
         $this->repo->create([
@@ -56,6 +63,7 @@ class RackSlotController extends Controller
                 'max:10',
                 \Illuminate\Validation\Rule::unique('rack_slots', 'label')
                     ->where('rack_id', $this->repo->find($id)->rack_id)
+                    ->whereNull('deleted_at')
                     ->ignore($id),
             ],
         ]);

@@ -11,6 +11,7 @@ const SHOWN_ELSEWHERE = new Set([
     "no_box_details",
     "no_box_count",
     "count_conflict",
+    "count_mismatch",
 ]);
 
 const ISSUE_TEXT = {
@@ -18,6 +19,28 @@ const ISSUE_TEXT = {
     no_box_details: "no box name",
     no_box_count: "no box count",
     count_conflict: "rows disagree, highest used",
+    count_mismatch: "count differs from list, list used",
+};
+
+// "[15, 15, 18]" -> ["15","15","18"]; a plain name returns null.
+const listEntries = (text) => {
+    const t = String(text ?? "").trim();
+    if (!t.startsWith("[")) return null;
+    return t.replace(/^\[|\]$/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+};
+
+// A list sets its own count (one entry = one box). A plain name uses the count field.
+const boxCountOf = (form) => {
+    const entries = listEntries(form.name);
+    return entries ? entries.length : Number(form.count);
+};
+
+const boxSummary = (set) => {
+    const parts = (set.items ?? []).map(
+        (i) => `${i.name ?? i.label ?? "?"}${i.boxes > 1 ? ` ×${i.boxes}` : ""}`,
+    );
+    const names = parts.length ? parts.join(" + ") : (set.box_details ?? "no box name");
+    return `${names} · ${set.no_of_box ?? "?"} ${set.no_of_box === 1 ? "box" : "boxes"}`;
 };
 
 const same = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
@@ -75,8 +98,8 @@ export default function SourceMatchPanel({ dimensions = [], lotActions }) {
         const ok = await lotActions.correctBoxInfo({
             lot_id: lotId,
             set_key: set.key,
-            box_details: form.name,
-            no_of_box: Number(form.count),
+            box_details: form.name.trim(),
+            no_of_box: boxCountOf(form),
         });
         setSaving(false);
         if (ok) setEditKey(null);
@@ -119,7 +142,7 @@ export default function SourceMatchPanel({ dimensions = [], lotActions }) {
                         >
                             <div className="flex items-center justify-between gap-2">
                                 <div className="font-bold">
-                                    {set.box_details ?? "no box name"} × {set.no_of_box ?? "?"}
+                                    {boxSummary(set)}
                                     {set.overridden && <span className="badge badge-info badge-xs ml-1">corrected</span>}
                                 </div>
                                 <button
@@ -150,23 +173,28 @@ export default function SourceMatchPanel({ dimensions = [], lotActions }) {
 
                             {editing && (
                                 <div className="flex gap-1 mt-1">
-                                    <select
+                                    <input
                                         data-no-scanner
-                                        className="select select-xs flex-1"
+                                        type="text"
+                                        list="box-size-options"
+                                        placeholder="15 or [15, 15, 18]"
+                                        className="input input-xs flex-1"
                                         value={form.name}
                                         onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                                    >
-                                        <option value="">Box size</option>
+                                        onFocus={(e) => e.target.select()}
+                                    />
+                                    <datalist id="box-size-options">
                                         {dimensions.map((d) => (
                                             <option key={d.id} value={d.name}>{d.label}</option>
                                         ))}
-                                    </select>
+                                    </datalist>
                                     <input
                                         data-no-scanner
                                         type="text"
                                         inputMode="numeric"
                                         className="input input-xs w-14"
-                                        value={form.count}
+                                        disabled={!!listEntries(form.name)}
+                                        value={listEntries(form.name) ? listEntries(form.name).length : form.count}
                                         onChange={(e) =>
                                             setForm((f) => ({ ...f, count: e.target.value.replace(/\D/g, "").slice(0, 3) }))
                                         }
@@ -175,7 +203,7 @@ export default function SourceMatchPanel({ dimensions = [], lotActions }) {
                                     <button
                                         type="button"
                                         className="btn btn-primary btn-xs"
-                                        disabled={saving || !form.name || !(Number(form.count) > 0)}
+                                        disabled={saving || !form.name.trim() || !(boxCountOf(form) > 0)}
                                         onClick={() => save(set)}
                                     >
                                         Save

@@ -75,7 +75,8 @@ export function useLotActions() {
 
     const advanceFocus = (currentField) => {
         const order = LOT_UPSTREAM_MODES.FIELD_ORDER;
-        setFocusedField(order[order.indexOf(currentField) + 1] ?? order[0]);
+        // After the last field nothing is armed. Wrapping to lot_id sent the next scan (the slot) into the lot_id input.
+        setFocusedField(order[order.indexOf(currentField) + 1] ?? null);
     };
 
     const resetFocus = () => {
@@ -394,6 +395,24 @@ export function useLotActions() {
         if (type === LOT_UPSTREAM_MODES.TYPE_COMMAND) {
             if (withdrawalOpen) return;
 
+            if (command === LOT_UPSTREAM_MODES.TOGGLE) {
+                // Only from the main page: a mode flip under an open modal would orphan the form.
+                if (document.querySelector("dialog[open]")) return;
+
+                if (mode === LOT_UPSTREAM_MODES.RECEIVE) {
+                    store.setMode(LOT_UPSTREAM_MODES.RELEASE);
+                    store.setIsEditMode(false);
+                    store.removePendingLot();
+                    store.clearSlotPendingLot();
+                    setFocusedField("lot_id");
+                } else {
+                    store.setMode(LOT_UPSTREAM_MODES.RECEIVE);
+                    store.removePendingLot();
+                    store.clearSlotPendingLot();
+                }
+                return;
+            }
+
             if (command === LOT_UPSTREAM_MODES.DONE) {
                 if (mode === LOT_UPSTREAM_MODES.RECEIVE) {
                     if (store.isEditMode) {
@@ -463,6 +482,7 @@ export function useLotActions() {
         }
 
         if (type === LOT_UPSTREAM_MODES.TYPE_FIELD_VALUE) {
+            if (withdrawalOpen) return;
             if (mode === LOT_UPSTREAM_MODES.RELEASE) {
                 if (withdrawalOpen) return;
                 releaseLotWithdrawerPrompt({ lot_id: parsed.value });

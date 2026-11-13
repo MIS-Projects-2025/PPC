@@ -4,6 +4,7 @@ namespace App\Repositories;
 
 use App\Models\BoxDimension;
 use App\Models\BoxInfoOverride;
+use App\Support\BoxDetails;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -78,7 +79,7 @@ class LotSourceRepository
             'group_key'    => $groupKey,
             'primary'      => $primary,
             'other'        => $other,
-            'lot_set_key'  => mb_strtolower($primary['box_details'] ?? ''),
+            'lot_set_key'  => BoxDetails::key($primary['box_details']),
             'sets'         => $this->buildSets($primary['source'], $groupKey, $this->groupRows($primary)),
         ];
     }
@@ -114,7 +115,7 @@ class LotSourceRepository
 
         $sets = [];
 
-        foreach (collect($rows)->groupBy(fn($r) => mb_strtolower($r['box_details'] ?? '')) as $key => $members) {
+        foreach (collect($rows)->groupBy(fn($r) => BoxDetails::key($r['box_details'])) as $key => $members) {
             $key    = (string) $key;
             $counts = $members->pluck('no_of_box')->filter()->unique()->values();
             $origD  = $members->first()['box_details'];
@@ -123,16 +124,22 @@ class LotSourceRepository
 
             $details = $ov ? $ov->box_details : $origD;
             $count   = $ov ? $ov->no_of_box : $origN;
-            $dim     = $details ? $dims->get(mb_strtolower(trim($details))) : null;
+            $tokens  = BoxDetails::tokens($details, $dims);
+            $items   = BoxDetails::items($details, $count ? (int) $count : null, $dims);
+            $total   = (int) array_sum(array_column($items, 'boxes'));
+            $unknown = $items && in_array(null, array_column($items, 'dimension_id'), true);
 
             $issues = [];
             if (!$details) {
                 $issues[] = 'no_box_details';
-            } elseif (!$dim) {
-                $issues[] = 'unknown_box_details';
+            } elseif (!$items || $unknown) {
+                $issues[] = 'unknown_box_details'; // one unknown name makes the whole set untracked
             }
-            if (!$count) {
+            if ($total < 1) {
                 $issues[] = 'no_box_count';
+            }
+            if (!$ov && $count && $tokens && (count($tokens) > 1 || BoxDetails::isList((string) $details)) && (int) $count !== count($tokens)) {
+                $issues[] = 'count_mismatch'; // the list wins
             }
             if (!$ov && $counts->count() > 1) {
                 $issues[] = 'count_conflict'; // rows of one box set disagree: the max is used
@@ -143,9 +150,11 @@ class LotSourceRepository
                 'original_box_details' => $origD,
                 'original_no_of_box'   => $origN,
                 'box_details'          => $details,
-                'no_of_box'            => $count ? (int) $count : null,
-                'dimension_id'         => $dim?->id,
-                'dimension_label'      => $dim?->label,
+                'no_of_box'            => $total ?: null,
+                'items'                => $items, // [{name,label,dimension_id,boxes}]
+                // Kept for the single-size case so existing UI keeps working. Mixed sets: null, use items.
+                'dimension_id'         => count($items) === 1 ? $items[0]['dimension_id'] : null,
+                'dimension_label'      => $items ? (count($items) === 1 ? $items[0]['label'] : BoxDetails::label($items)) : null,
                 'lots'                 => $members->pluck('lot_id')->unique()->values()->all(),
                 'overridden'           => (bool) $ov,
                 'issues'               => $issues,
@@ -190,6 +199,7 @@ class LotSourceRepository
                     'no_box_details'      => 'Box name missing. That box set is untracked.',
                     'no_box_count'        => "Box count missing for \"{$label}\". That box set is untracked.",
                     'count_conflict'      => "Rows of \"{$label}\" disagree on box count. The highest is used.",
+                    'count_mismatch'      => "Box count of \"{$label}\" differs from the number of boxes listed. The list is used.",
                     default               => $issue,
                 }];
             }

@@ -58,6 +58,19 @@ const useBarcodeScanner = (onScan) => {
                         slowGapCount.current = 0; // reset on fast gap
                     }
                 }
+                // From the 2nd fast character on, it is a scanner, not a person: keep it out of the focused input.
+                // The scan is handled from the buffer on Enter, so the input never needs these characters.
+                // Inputs marked data-no-scanner (withdrawer ID, search) still receive them.
+                if (
+                    buffer.current.length > 0 &&
+                    looksLikeScan.current &&
+                    gap <= SCANNER_MAX_INTERVAL_MS &&
+                    e.target?.dataset?.noScanner === undefined &&
+                    (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
+                ) {
+                    e.preventDefault();
+                }
+
                 buffer.current += e.key;
             }
         };
