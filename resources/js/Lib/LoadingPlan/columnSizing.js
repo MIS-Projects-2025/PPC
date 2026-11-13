@@ -76,6 +76,7 @@ function cellTextForFit(row, key, getMachineLabel) {
     }
     if (key === "accu_time") return fmtHours(row.accu_time);
     if (key === "machine") return getMachineLabel(row.machine ?? null);
+    if (key === "part_name" && row.badges?.length) return `${row.part_name ?? ""}    ${row.badges.join("    ")}`;
     const v = row[key];
     return v == null ? "" : String(v);
 }

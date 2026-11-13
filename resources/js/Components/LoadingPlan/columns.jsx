@@ -13,6 +13,7 @@ import {
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { useContext } from "react";
 import { SelectColumn } from "react-data-grid";
+import { WithBakeIndicator } from "./BakingBadge";
 import { BucketHeaderCell } from "./BucketHeaderBar";
 import { AccuTimeEditor, CellEditor, TimeStartEditor } from "./CellEditor";
 import { DoableCell } from "./DoableCell";
@@ -22,10 +23,7 @@ import { PartNameCell } from "./PartNameCell";
 import { RowDropTargetCell } from "./RowDropTargetCell";
 import { TableActionsContext } from "./TableActionsContext";
 import TimeCell from "./TimeCell";
-import { WithBakeIndicator } from "./BakingBadge";
 // Re-exports so existing `import { ... } from ".../columns"` keep working.
-export { AccuTimeEditor, TimeStartEditor } from "./CellEditor";
-export { TableActionsContext } from "./TableActionsContext";
 export {
     BAKE_COLUMNS,
     DATA_COLUMNS,
@@ -34,8 +32,10 @@ export {
     NUM_COLUMNS,
     PARTNAME_TO_BAKE_KEYS,
     PARTNAME_TO_QTY_KEYS,
-    fmtHours,
+    fmtHours
 } from "@/Lib/LoadingPlan/columnConfig";
+export { AccuTimeEditor, TimeStartEditor } from "./CellEditor";
+export { TableActionsContext } from "./TableActionsContext";
 
 const CUSTOM_EDITORS = { accu_time: AccuTimeEditor, time_start: TimeStartEditor };
 
@@ -154,7 +154,7 @@ function renderDefaultCell(row, key) {
         case "accu_time":
             return fmtHours(row.accu_time);
         case "part_name":
-            return <PartNameCell partName={row.part_name} isBosch={row.is_bosch} />;
+            return <PartNameCell partName={row.part_name} badges={row.badges} />;
         default:
             return row[key];
     }

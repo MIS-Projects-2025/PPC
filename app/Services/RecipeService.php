@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\LoadingPlanEntry;
 use App\Models\LotSplit;
 use App\Models\PartName;
 use App\Models\ProcessTraveler;
@@ -27,10 +28,15 @@ class RecipeService
     /** The root lot a lot_id traces back to (itself unless it is an active split child on $date). */
     public function rootOf(string $lotId, string $date): string
     {
-        return LotSplit::active()
+        return LoadingPlanEntry::where('lot_id', $lotId)
+            ->where('scheduled_date', $date)
+            ->whereNotNull('root_lot_id')
+            ->value('root_lot_id')
+            ?? LotSplit::active()
             ->where('child_lot_id', $lotId)
             ->where('scheduled_date', $date)
-            ->value('root_lot_id') ?? $lotId;
+            ->value('root_lot_id')
+            ?? $lotId;
     }
 
     /** Traveler recipes keyed by lot_number. Includes soft-deleted travelers. */
@@ -67,10 +73,17 @@ class RecipeService
             return collect();
         }
 
-        $roots = LotSplit::active()
-            ->whereIn('child_lot_id', $lotIds)
+        $roots = LoadingPlanEntry::query()
+            ->whereIn('lot_id', $lotIds)
+            ->whereNotNull('root_lot_id')
             ->when($dates, fn($q) => $q->whereIn('scheduled_date', $dates))
-            ->pluck('root_lot_id', 'child_lot_id');
+            ->pluck('root_lot_id', 'lot_id')
+            ->union(
+                LotSplit::active()
+                    ->whereIn('child_lot_id', $lotIds)
+                    ->when($dates, fn($q) => $q->whereIn('scheduled_date', $dates))
+                    ->pluck('root_lot_id', 'child_lot_id')
+            );
 
         $byRoot = $this->forTravelers(collect($lotIds)->map(fn($id) => $roots[$id] ?? $id));
 

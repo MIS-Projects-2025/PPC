@@ -174,13 +174,18 @@ class LoadingPlanController extends Controller
         }
     }
 
-    private function attachBosch($rows)
+    private function attachBadges($rows)
     {
-        $bosch = BoschPart::lookup();
+        $badges = BoschPart::lookup();
 
-        return $rows->map(function ($row) use ($bosch) {
-            $row['is_bosch'] = !($row['is_block'] ?? false)
-                && isset($bosch[strtoupper(trim((string) ($row['part_name'] ?? '')))]);
+        return $rows->map(function ($row) use ($badges) {
+            $found = !($row['is_block'] ?? false)
+                ? ($badges[strtoupper(trim((string) ($row['part_name'] ?? '')))] ?? null)
+                : null;
+
+            // omitted when empty, keeps the payload small (the frontend reads it with `?.`)
+            if ($found) $row['badges'] = $found;
+
             return $row;
         });
     }
@@ -218,6 +223,19 @@ class LoadingPlanController extends Controller
         $mark = fn($label) => Probe::mark($label);
 
         $previousDate     = Carbon::parse($date)->subDay()->toDateString();
+
+        // F3 carry-over trigger: the first editable F3 load of the shift day carries open lots in (idempotent, at most once per 10 min).
+        // Editable page only (withBaseTimes), so the read-only views never write.
+        if (
+            $isF3 && $withBaseTimes && !$machine && !$isPartial && $date === ShiftDay::current('F3')
+            && Cache::add("f3-carry-ran:{$date}", true, now()->addMinutes(10))
+        ) {
+            try {
+                (new LoadingPlanEntryService())->carryOverF3Lots($date);
+            } catch (\Throwable $e) {
+                Log::error('F3 carry-over fallback failed', ['exception' => $e]);
+            }
+        }
 
         // Needed by both the full load and the deferred follow-up
         $svc = new LoadingPlanService($date, $selectedLocation, $previousDate);
@@ -314,7 +332,7 @@ class LoadingPlanController extends Controller
         $bucketIds = $buckets->pluck('id');
 
         $result = $this->attachBuckets($svc->initEntries(), $date);
-        $result = $this->attachBosch($result);
+        $result = $this->attachBadges($result);
 
         // machine view: the machine's own rows (incl. leaked) + lots parked in its groups
         // (parked lots can have machine = null, so matching on machine alone would drop them)
@@ -352,6 +370,7 @@ class LoadingPlanController extends Controller
             'packageGroupNames' => $packages,
             'packageGroups'     => $groups->grouped(),
             'selectedLocation'  => $selectedLocation,
+            'closedStatuses'    => LoadingPlanEntry::CLOSED_STATUSES,
             'status'            => $isF3 ? 'ok' : ($svc->todayWipRows->isEmpty() ? 'not_imported' : 'ok'),
             'buckets'           => $buckets
                 ->map(fn($b) => [

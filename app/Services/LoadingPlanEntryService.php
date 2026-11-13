@@ -27,6 +27,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use App\Models\NonMachine;
+use App\Models\ProcessTraveler;
+use Illuminate\Support\Facades\Cache;
 
 class LoadingPlanEntryService
 {
@@ -741,6 +743,7 @@ class LoadingPlanEntryService
                 'is_pickup'          => $source->is_pickup,
                 'rework_seq'         => $nextSeq,
                 'rework_of_entry_id' => $source->id,
+                'root_lot_id'        => $source->root_lot_id,
                 'lock_version'       => 1,
             ]);
 
@@ -1481,6 +1484,259 @@ class LoadingPlanEntryService
                 'affected_timings' => $this->timingsFor($machinesToLock, $date),
             ];
         });
+    }
+
+    // ------------------------------------------------------------------
+    // F3 carry-over
+    // ------------------------------------------------------------------
+
+    public const F3_CARRY_MAX_AGE_DAYS = 14;
+
+    /**
+     * Copies every open F3 lot entry dated before $date onto $date. Idempotent.
+     *
+     * Rules:
+     *  - latest entry per (lot_id, rework_seq); if a lot has any rework entry, the rework_seq 0 entry is ignored
+     *  - closed status (LoadingPlanEntry::CLOSED_STATUSES), soft-deleted/missing traveler, qty <= 0: not carried
+     *  - chain origin older than F3_CARRY_MAX_AGE_DAYS: not carried
+     *  - lot already has an entry on $date, or has an entry after $date: not carried
+     *  - a row still leaked onto $date (getTodayLeaked) is not carried, or it would show twice
+     *  - lane kept (front of lane); a lane that no longer exists falls back to Unassigned
+     *  - commit_override dropped, doable recomputed
+     *
+     * @return array{carried:int, to_unassigned:int, skipped:int, skipped_leaked:int}
+     *         to_unassigned is a subset of carried (old lane no longer exists)
+     */
+    public function carryOverF3Lots(string $date): array
+    {
+        $date         = Carbon::parse($date)->toDateString();
+        $previousDate = Carbon::parse($date)->subDay()->toDateString();
+        $dayStart     = Carbon::parse($date)->startOfDay();
+        $cutoff       = Carbon::parse($date)->subDays(self::F3_CARRY_MAX_AGE_DAYS)->toDateString();
+        $result       = ['carried' => 0, 'to_unassigned' => 0, 'skipped' => 0, 'skipped_leaked' => 0];
+
+        $lock = Cache::lock("f3-carry:{$date}", 300);
+        if (!$lock->get()) {
+            return $result;
+        }
+
+        try {
+            if (LoadingPlanEntry::where('scheduled_date', $date)->whereNotNull('finalized_at')->exists()) {
+                return $result;
+            }
+
+            $history = LoadingPlanEntry::query()
+                ->where('source', 'f3')
+                ->where('entry_type', 'lot')
+                ->whereNotNull('lot_id')
+                ->where('scheduled_date', '<', $date)
+                ->whereRaw('COALESCE(origin_date, scheduled_date) >= ?', [$cutoff])
+                ->orderBy('scheduled_date')->orderBy('sequence_order')->orderBy('id')
+                ->get();
+
+            if ($history->isEmpty()) {
+                return $result;
+            }
+
+            // latest entry per (lot_id, rework_seq); a reworked lot ignores its original row
+            $latest = $history->groupBy('lot_id')->flatMap(function ($rows) {
+                if ($rows->contains(fn($e) => (int) $e->rework_seq > 0)) {
+                    $rows = $rows->filter(fn($e) => (int) $e->rework_seq > 0);
+                }
+                return $rows->groupBy(fn($e) => (int) $e->rework_seq)->map->last();
+            })->values();
+
+            $onDate = LoadingPlanEntry::where('scheduled_date', $date)
+                ->where('entry_type', 'lot')->whereNotNull('lot_id')
+                ->get(['lot_id', 'rework_seq'])
+                ->map(fn($e) => $e->lot_id . '|' . (int) $e->rework_seq)
+                ->flip();
+
+            $laterLots = LoadingPlanEntry::where('source', 'f3')
+                ->where('entry_type', 'lot')
+                ->where('scheduled_date', '>', $date)
+                ->pluck('lot_id')->unique()->flip();
+
+            $candidates = $latest->filter(function ($e) use ($onDate, $laterLots, $previousDate, $dayStart, &$result) {
+                if ($onDate->has($e->lot_id . '|' . (int) $e->rework_seq) || $laterLots->has($e->lot_id)) {
+                    return false;
+                }
+                if (LoadingPlanEntry::isClosedStatus($e->status)) {
+                    return false;
+                }
+                $leaked = $e->machine_id !== null
+                    && $e->scheduled_date->toDateString() === $previousDate
+                    && $e->time_end !== null
+                    && $e->time_end->gt($dayStart);
+                if ($leaked) {
+                    $result['skipped_leaked']++;
+                    return false;
+                }
+                return true;
+            })->values();
+
+            if ($candidates->isEmpty()) {
+                return $result;
+            }
+
+            // root lot per candidate: stored root, else the split root on the entry's own date
+            $lotIds = $candidates->pluck('lot_id')->unique()->values();
+            $splits = $lotIds->chunk(1000)
+                ->flatMap(fn($ids) => LotSplit::active()->whereIn('child_lot_id', $ids)->get())
+                ->keyBy(fn($s) => $s->child_lot_id . '|' . $s->scheduled_date->toDateString());
+
+            $rootOf = fn($e) => $e->root_lot_id
+                ?? $splits->get($e->lot_id . '|' . $e->scheduled_date->toDateString())?->root_lot_id
+                ?? $e->lot_id;
+
+            // traveler must exist and not be soft-deleted (same "latest row wins" rule as LotSourceService::find)
+            $alive = $candidates->map($rootOf)->unique()->values()->chunk(1000)
+                ->flatMap(fn($ids) => ProcessTraveler::withTrashed()->whereIn('lot_number', $ids)->orderByDesc('id')->get())
+                ->unique('lot_number')
+                ->reject(fn($t) => $t->trashed())
+                ->pluck('lot_number')
+                ->flip();
+
+            $qtys = $lotIds->chunk(1000)
+                ->flatMap(fn($ids) => LotQuantity::whereIn('lot_id', $ids)->get())
+                ->keyBy(fn($q) => $q->lot_id . '|' . $q->scheduled_date->toDateString() . '|' . (int) $q->rework_seq);
+
+            $qtyOf = fn($e) => $qtys->get($e->lot_id . '|' . $e->scheduled_date->toDateString() . '|' . (int) $e->rework_seq);
+
+            $eligible = $candidates->filter(function ($e) use ($alive, $rootOf, $qtyOf, &$result) {
+                $qty = $qtyOf($e);
+                if (!$alive->has($rootOf($e)) || !$qty || $qty->effectiveQty() <= 0) {
+                    $result['skipped']++;
+                    return false;
+                }
+                return true;
+            })->values();
+
+            $activeMachines = QdnMachine::active()->pluck('id')->map(fn($i) => (int) $i)->flip();
+            $nonMachines    = NonMachine::pluck('id')->map(fn($i) => (int) $i)->flip();
+
+            $laneOf = fn($e) => match (true) {
+                $e->machine_id !== null && $activeMachines->has((int) $e->machine_id)       => [(int) $e->machine_id, null],
+                $e->non_machine_id !== null && $nonMachines->has((int) $e->non_machine_id) => [null, (int) $e->non_machine_id],
+                default                                                                     => [null, null],
+            };
+
+            $groups = $eligible->groupBy(fn($e) => implode('|', array_map(fn($v) => $v ?? '-', $laneOf($e))));
+
+            foreach ($groups as $group) {
+                [$machineId, $nonMachineId] = $laneOf($group->first());
+                $isPlaced = $machineId !== null || $nonMachineId !== null;
+
+                // keep the previous relative order: older date first, then old sequence
+                $ordered = $group->sortBy([['scheduled_date', 'asc'], ['sequence_order', 'asc'], ['id', 'asc']])->values();
+                $k = $ordered->count();
+
+                try {
+                    $created = DB::transaction(function () use ($ordered, $k, $date, $machineId, $nonMachineId, $isPlaced, $qtyOf, $rootOf) {
+                        $lane = match (true) {
+                            $machineId !== null    => $this->lockLaneRows([$machineId], [], $date),
+                            $nonMachineId !== null => $this->lockLaneRows([], [$nonMachineId], $date),
+                            default                => collect(),
+                        };
+
+                        // lane starts, captured before anything is inserted
+                        $machineAnchor = $machineId !== null ? $this->machineAnchor($lane) : null;
+                        $laneAnchor    = $nonMachineId !== null ? $this->laneAnchor($lane, $date) : null;
+
+                        // carried rows go ahead of whatever already sits on the lane today
+                        $minSeq = $lane->min('sequence_order');
+                        $seqFor = $minSeq !== null
+                            ? fn($i) => round((float) $minSeq - self::GAP_SEED * ($k - $i), 4)
+                            : fn($i) => ($i + 1) * self::GAP_SEED;
+
+                        $created = collect();
+
+                        foreach ($ordered as $i => $old) {
+                            $oldQty = $qtyOf($old);
+
+                            $entry = LoadingPlanEntry::create([
+                                'entry_type'            => 'lot',
+                                'source'                => 'f3',
+                                'lot_id'                => $old->lot_id,
+                                'package_name'          => $old->package_name,
+                                'scheduled_date'        => $date,
+                                'machine_id'            => $machineId,
+                                'non_machine_id'        => $nonMachineId,
+                                'sequence_order'        => $isPlaced ? $seqFor($i) : null,
+                                'status'                => $old->status ?? 'NONE',
+                                'tag'                   => $old->tag,
+                                'remarks'               => $old->remarks,
+                                'is_manual_expedite'    => (bool) $old->is_manual_expedite,
+                                'is_scm'                => (bool) $old->is_scm,
+                                'is_pickup'             => (bool) $old->is_pickup,
+                                'accu_time'             => $nonMachineId !== null ? $old->accu_time : null, // manual on non-machines
+                                'rework_seq'            => (int) $old->rework_seq,
+                                'rework_of_entry_id'    => $old->rework_of_entry_id,
+                                'carried_from_entry_id' => $old->id,
+                                'origin_date'           => $old->origin_date ?? $old->scheduled_date,
+                                'root_lot_id'           => $rootOf($old),
+                                'lock_version'          => 1,
+                            ]);
+
+                            // base = what was left on the old date; adjustments restart at 0; commit_override dropped
+                            LotQuantity::updateOrCreate(
+                                ['lot_id' => $old->lot_id, 'scheduled_date' => $date, 'rework_seq' => (int) $old->rework_seq],
+                                [
+                                    'part_name'           => $oldQty->part_name ?? '',
+                                    'qty_base'            => $oldQty->effectiveQty(),
+                                    'split_adjustment'    => 0,
+                                    'merge_adjustment'    => 0,
+                                    'commit_override'     => null,
+                                    'commit_override_qty' => null,
+                                ],
+                            );
+
+                            $created->push($entry);
+                        }
+
+                        // doable / capacity / accu_time (entries exist now, so the calculator resolves split roots)
+                        $calc = app(LotScheduleCalculator::class, [
+                            'dates'  => [$date],
+                            'lotIds' => $created->pluck('lot_id')->unique()->all(),
+                        ])->loadPackageList([]);
+
+                        foreach ($created as $entry) {
+                            $calc->recalculateAndRetime($entry, $machineId, retime: false);
+                        }
+
+                        if ($machineId !== null) {
+                            $this->retimeFromFirstRow([$machineId], $date, $calc, [$machineId => $machineAnchor]);
+                        }
+                        if ($nonMachineId !== null) {
+                            $calc->recomputeNonMachineTimes($nonMachineId, $date, $laneAnchor);
+                        }
+
+                        return $created;
+                    });
+                } catch (\Throwable $e) {
+                    Log::error('F3 carry-over failed for a lane', [
+                        'date' => $date,
+                        'machine_id' => $machineId,
+                        'non_machine_id' => $nonMachineId,
+                        'exception' => $e,
+                    ]);
+                    continue;
+                }
+
+                $result['carried'] += $created->count();
+                if (!$isPlaced) {
+                    $result['to_unassigned'] += $ordered
+                        ->filter(fn($o) => $o->machine_id !== null || $o->non_machine_id !== null)
+                        ->count();
+                }
+            }
+
+            Log::info('F3 carry-over', ['date' => $date] + $result);
+
+            return $result;
+        } finally {
+            $lock->release();
+        }
     }
 
     public function bulkDelete(array $ids, array $locks = []): array
@@ -2518,6 +2774,7 @@ class LoadingPlanEntryService
             'is_scm'             => (bool) ($fields['is_scm'] ?? false),
             'rework_seq'         => $reworkSeq,
             'rework_of_entry_id' => $parent?->id,
+            'root_lot_id'        => $parent?->root_lot_id,
             'lock_version'       => 1,
         ]);
 
@@ -3222,7 +3479,9 @@ class LoadingPlanEntryService
 
             $family = $f3Roots->isEmpty() ? collect() : LotSplit::active()
                 ->where('scheduled_date', $date)->whereIn('root_lot_id', $f3Roots)
-                ->pluck('child_lot_id')->concat($f3Roots)->unique()->values();
+                ->pluck('child_lot_id')
+                ->concat(LoadingPlanEntry::where('scheduled_date', $date)->whereIn('root_lot_id', $f3Roots)->pluck('lot_id'))
+                ->concat($f3Roots)->unique()->values();
             $f3Keys = $family->isEmpty()
                 ? collect()
                 : LotQuantity::where('scheduled_date', $date)->whereIn('lot_id', $family)->get()->mapWithKeys(fn($q) => [$keyOf($q) => true]);

@@ -52,8 +52,19 @@ class LotSourceService
                 ->orWhereNotNull('finalized_at'))  // in case finalizing clears the lane
             ->select('lot_id');
 
+        // closed (DONE etc.) on another date: finished, so it never comes back as unassigned
+        $closed = LoadingPlanEntry::CLOSED_STATUSES;
+        $closedElsewhere = LoadingPlanEntry::query()
+            ->where('source', self::F3)
+            ->where('entry_type', 'lot')
+            ->whereNotNull('lot_id')
+            ->where('scheduled_date', '!=', $date)
+            ->whereRaw('UPPER(TRIM(status)) IN (' . implode(',', array_fill(0, count($closed), '?')) . ')', $closed)
+            ->select('lot_id');
+
         return ProcessTraveler::query()            // default scope: soft-deleted excluded
             ->whereNotIn('lot_number', $placedElsewhere)
+            ->whereNotIn('lot_number', $closedElsewhere)
             ->orderByDesc('id')
             ->get()
             ->toBase()
@@ -242,7 +253,9 @@ class LotSourceService
 
         $dateOf = fn($e) => $e->scheduled_date->toDateString();
         $srcOf  = fn($e) => $e->source ?? self::WIP;
-        $rootOf = fn($e) => $splits->get($e->lot_id . '|' . $dateOf($e))?->root_lot_id ?? $e->lot_id;
+        $rootOf = fn($e) => $e->root_lot_id
+            ?? $splits->get($e->lot_id . '|' . $dateOf($e))?->root_lot_id
+            ?? $e->lot_id;
 
         $found = [];
         foreach ($entries->groupBy(fn($e) => $srcOf($e) . '|' . $dateOf($e)) as $key => $group) {

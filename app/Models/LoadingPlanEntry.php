@@ -19,6 +19,23 @@ class LoadingPlanEntry extends Model
     protected $table = 'loading_plan_entries';
     protected $appends = ['is_rework'];
 
+    /** A lot whose entry has one of these statuses is finished: it never carries over. Everything else carries. */
+    // todo: make the statuses db-stored, remove the statuses from the frontend, fetch instead and put this on any constant file
+    public const CLOSED_STATUSES = [
+        'DONE',
+        'FINAL SHIP',
+        'IQA',
+        'OQA',
+        'FVI',
+        'VISUAL (FVI)',
+        'BUY-OFF',
+    ];
+
+    public static function isClosedStatus(?string $status): bool
+    {
+        return in_array(strtoupper(trim((string) $status)), self::CLOSED_STATUSES, true);
+    }
+
     protected $fillable = [
         'entry_type',
         'source',
@@ -45,6 +62,9 @@ class LoadingPlanEntry extends Model
         'matched_rule_id',
         'rework_seq',
         'rework_of_entry_id',
+        'carried_from_entry_id',
+        'origin_date',
+        'root_lot_id',
         'is_pickup',
         'is_scm',
     ];
@@ -55,6 +75,7 @@ class LoadingPlanEntry extends Model
         'is_scm'         => 'boolean',
         'sequence_order' => 'float',
         'finalized_at'   => 'datetime',
+        'origin_date'    => 'date:Y-m-d',
         'time_start'     => 'datetime',
         'time_end'       => 'datetime',
     ];
@@ -155,6 +176,11 @@ class LoadingPlanEntry extends Model
      */
     public function resolveRootLotId(): string
     {
+        // 0. A carried entry remembers its root: its split row lives on an earlier date
+        if ($this->root_lot_id) {
+            return $this->root_lot_id;
+        }
+
         // 1. Use loaded relation if available
         if ($this->relationLoaded('activeLotSplit')) {
             return $this->activeLotSplit?->root_lot_id ?? $this->lot_id;

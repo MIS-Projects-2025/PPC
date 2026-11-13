@@ -22,6 +22,8 @@ class LoadingPlanService
     protected Collection $splitsByChild;
     protected Collection $mergesByTarget;
     protected Collection $mergesBySource;
+    /** lot_id => stored root_lot_id, for carried entries whose split row is on an earlier date */
+    protected array $rootByLot = [];
     public readonly Collection $todayWipRows;
     public readonly Collection $todayLeakedWipRows;
     public readonly Collection $todayLeakedPlannedLotEntries;
@@ -55,7 +57,9 @@ class LoadingPlanService
 
     private function rootLotId(?string $lotId): ?string
     {
-        return $lotId === null ? null : ($this->splitsByChild->get($lotId)?->root_lot_id ?? $lotId);
+        return $lotId === null
+            ? null
+            : ($this->rootByLot[$lotId] ?? $this->splitsByChild->get($lotId)?->root_lot_id ?? $lotId);
     }
 
     /**
@@ -200,6 +204,7 @@ class LoadingPlanService
         $this->todayF3Rows  = $this->sources->poolFor($this->date, $this->selectedLocation);
 
         $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
+        $this->rootByLot = $this->todayLeakedPlannedLotEntries->whereNotNull('root_lot_id')->pluck('root_lot_id', 'lot_id')->all();
 
         $rootsOf = fn($entries) => $entries->pluck('lot_id')
             ->map(fn($id) => $this->rootLotId($id))->unique()->values()->all();
@@ -217,6 +222,11 @@ class LoadingPlanService
             $this->date,
             $this->selectedPackages,
             includeF3: $this->selectedLocation === 'F3'
+        );
+
+        $this->rootByLot = array_merge(
+            $this->rootByLot,
+            $this->todayPlannedLotEntries->whereNotNull('root_lot_id')->pluck('root_lot_id', 'lot_id')->all()
         );
 
         $lots = $this->todayPlannedLotEntries->where('entry_type', 'lot')->filter(fn($e) => $e->lot_id);
@@ -568,6 +578,10 @@ class LoadingPlanService
 
         $isLeaked = $scheduledDate === $this->previousDate;
 
+        $isCarried  = ($entry?->carried_from_entry_id ?? null) !== null;
+        $originRaw  = $entry?->origin_date ?? null;
+        $originDate = $originRaw instanceof CarbonInterface ? $originRaw->toDateString() : $originRaw;
+
         // WIP display fields: null values are dropped from the payload. The
         // frontend reads them with `== null` / `?? ''`, so a missing key
         // behaves the same as null, and the response gets much smaller.
@@ -679,6 +693,10 @@ class LoadingPlanService
             'rework_seq'         => $reworkSeq,
             'is_rework'          => $reworkSeq > 0,
             'rework_of_entry_id' => $entry?->rework_of_entry_id ?? null,
+
+            // Carry-over: show a "carried from <origin_date>" badge on the client
+            'is_carried'  => $isCarried,
+            'origin_date' => $originDate,
 
             // Split & merge metadata
             'split_info' => $splitInfo,
