@@ -11,7 +11,7 @@ use App\Models\MachinePlatformCapacityBand;
 
 class LoadingPlanSettingsController extends Controller
 {
-    public const SECTIONS = ['capacity', 'capacity-bands', 'package-groups', 'non-machines', 'bosch-parts'];
+    public const SECTIONS = ['capacity', 'capacity-bands', 'package-groups', 'non-machines', 'bosch-parts', 'f3-package-codes'];
 
     public function index(string $section = 'capacity'): Response
     {

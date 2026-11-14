@@ -211,48 +211,6 @@ export function applyTimeStartEdit(rows, dndId, machine, newTimeStartStr, baseTi
     return { rows: next, error: null };
 }
 
-// deprecated
-// export function recomputeMachine(rows, machine, baseTimes, referenceDate) {
-//     const machineRows = rows
-//         .filter((r) => r.machine === machine)
-//         .sort((a, b) => a.sequence_order - b.sequence_order);
-
-//     const baseDateTime = machineBaseDateTime(baseTimes, machine, referenceDate);
-
-//     machineRows.reduce((cursor, row) => {
-//         const dur = Number(row.accu_time) || 0;
-//         const start = cursor;
-//         const end = cursor.add(dur, "minute");
-
-//         row.time_start = start.format("HH:mm");
-//         row.time_start_day_offset = start.startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
-//         row.time_end = end.format("HH:mm");
-//         row.time_end_day_offset = end.startOf("day").diff(dayjs(referenceDate).startOf("day"), "day");
-
-//         return end;
-//     }, baseDateTime);
-
-//     // Rebuild the full array: every other machine's rows stay untouched
-//     // and in place; this machine's span gets replaced with the
-//     // freshly-sorted, freshly-timed machineRows.
-//     const otherRows = [];
-//     let insertAt = null;
-//     rows.forEach((r) => {
-//         if (r.machine === machine) {
-//             if (insertAt === null) insertAt = otherRows.length;
-//         } else {
-//             otherRows.push(r);
-//         }
-//     });
-//     if (insertAt === null) insertAt = otherRows.length; // machine had no rows yet
-
-//     return [
-//         ...otherRows.slice(0, insertAt),
-//         ...machineRows,
-//         ...otherRows.slice(insertAt),
-//     ];
-// }
-
 /** CT = Date_Loaded - BE_Starttime in days, 2 dp */
 export function computeCT(row) {
     const loaded = parseDatetime(row.Date_Loaded);

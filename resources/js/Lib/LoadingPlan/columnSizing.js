@@ -6,7 +6,8 @@ import { isBlockRow } from "./helpers";
 export const MIN_COLUMN_WIDTH = 6;
 export const COLLAPSE_HINT_THRESHOLD = 28;
 
-const STORAGE_KEY = "loadingPlan:columnWidths";
+const STORAGE_KEY = "loadingPlan:columnWidths";           // PL1/PL6: unchanged, nobody loses their settings
+const F3_STORAGE_KEY = "loadingPlan:columnWidths:f3";
 
 const AUTO_MIN_WIDTH = 60;
 const AUTO_MAX_WIDTH = 420;
@@ -18,25 +19,48 @@ const FIT_CANDIDATES = 4; // longest N strings per column that actually get meas
 // Extra px for badges/icons rendered next to the text. Tune by eye.
 const COLUMN_EXTRA_PX = { lot_id: 64, status: 40, doable: 44, time_start: 30, time_end: 30, part_name: 24 };
 
+const F3_DEFAULT_HIDDEN = [
+    "lot_type", "prod_area", "lot_status", "lot_entry_time_days", "cr3", "be_osl_days", "osl",
+    "body_size", "end_customer", "bake", "bake_count", "test_lot_id", "backend_leadtime",
+    "date_loaded", "start_time", "part_type", "auto_part", "part_class", "date_code",
+    "focus_group", "process_group", "bulk", "required_time", "lot_entry_time", "stage",
+    "stage_start_time", "ccd", "stage_run_days", "tray", "osl_days", "be_group",
+    "strategy_code", "assy_site", "stock_position", "bake_time_temp",
+];
+
 // ── persistence ──────────────────────────────────────────────────────────
-export function loadColumnWidths() {
-    if (typeof window === "undefined") return {};
+const isF3 = (location) => location === "F3";
+const storageKeyFor = (location) => (isF3(location) ? F3_STORAGE_KEY : STORAGE_KEY);
+
+export function defaultColumnWidths(location) {
+    return isF3(location)
+        ? Object.fromEntries(F3_DEFAULT_HIDDEN.map((k) => [k, MIN_COLUMN_WIDTH]))
+        : {};
+}
+
+export function loadColumnWidths(location) {
+    if (typeof window === "undefined") return defaultColumnWidths(location);
     try {
-        const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}");
+        const raw = window.localStorage.getItem(storageKeyFor(location));
+        if (raw === null) return defaultColumnWidths(location); // never customized: use defaults
         const out = {};
-        for (const [k, w] of Object.entries(parsed ?? {})) {
+        for (const [k, w] of Object.entries(JSON.parse(raw) ?? {})) {
             if (DATA_COLUMN_KEYS.has(k) && Number.isFinite(w) && w >= MIN_COLUMN_WIDTH) out[k] = w;
         }
         return out;
     } catch {
-        return {};
+        return defaultColumnWidths(location);
     }
 }
 
-export function saveColumnWidths(widths) {
+export function saveColumnWidths(widths, location) {
     try {
-        if (Object.keys(widths).length) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(widths));
-        else window.localStorage.removeItem(STORAGE_KEY);
+        const key = storageKeyFor(location);
+        if (sameRecord(widths, defaultColumnWidths(location))) {
+            window.localStorage.removeItem(key);
+        } else {
+            window.localStorage.setItem(key, JSON.stringify(widths));
+        }
     } catch {
         // storage unavailable: widths just won't persist
     }

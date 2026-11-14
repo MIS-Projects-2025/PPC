@@ -1,6 +1,8 @@
 import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 import {
+    PACKAGE_TYPE_KEY,
     BAKE_COLUMNS,
     DATA_COLUMNS,
     EDITABLE_COLUMNS,
@@ -59,6 +61,9 @@ export function toReadOnlyColumns(columns) {
 // Row-kind helpers
 // ---------------------------------------------------------------------
 const isBlock = (row) => isBlockRow(row) || row.entry_type === "block";
+
+const fmtOrigin = (d) =>
+    d ? new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "earlier";
 
 function BlockLabel({ children }) {
     return <span className="font-semibold flex items-center gap-1.5 truncate">{children}</span>;
@@ -189,6 +194,14 @@ function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable }) 
                         reworkSeq={row.rework_seq}
                         otherLocation={row.location && row.location !== selectedLocation ? row.location : null}
                     />
+                    {row.is_carried && (
+                        <span
+                            className="badge badge-xs badge-warning badge-outline whitespace-nowrap shrink-0"
+                            title={`Carried over. Originally planned ${row.origin_date ?? "on an earlier day"}`}
+                        >
+                            ↪ {fmtOrigin(row.origin_date)}
+                        </span>
+                    )}
                 </div>
             );
         },
@@ -245,13 +258,13 @@ function canEditCell(row, key, isLocked) {
     return true;
 }
 
-function dragHandleColumn({ onToggleCollapse, readOnly }) {
+function dragHandleColumn({ onToggleCollapse, readOnly, numColumns }) {
     return {
         key: "dragHandle",
         name: "",
         width: 20,
         resizable: false,
-        colSpan: (args) => (args.type === "ROW" && args.row.__type === "header" ? NUM_COLUMNS : undefined),
+        colSpan: (args) => (args.type === "ROW" && args.row.__type === "header" ? numColumns : undefined),
         renderCell({ row }) {
             if (row.__type === "header") {
                 return row.__headerKind === "bucket" ? (
@@ -281,11 +294,13 @@ export function makeColumns(
     readOnly = false,
 ) {
     const renderers = createCellRenderers({ onStatusClick, selectedLocation, onEditDoable });
+    const showPackageType = selectedLocation === F3_FLAG;
+    const dataColumns = DATA_COLUMNS.filter((c) => c.key !== PACKAGE_TYPE_KEY || showPackageType);
 
     return [
         compact(SelectColumn),
-        dragHandleColumn({ onToggleCollapse, readOnly }),
-        ...DATA_COLUMNS.map((col) => {
+        dragHandleColumn({ onToggleCollapse, readOnly, numColumns: dataColumns.length + 1 }),
+        ...dataColumns.map((col) => {
             const column = {
                 ...col,
                 cellClass: cellClassFor(col.key, highlightedMatch),

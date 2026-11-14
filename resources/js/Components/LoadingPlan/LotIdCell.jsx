@@ -108,9 +108,10 @@ function LotLabel({
                 </span>
             )}
 
-            {isF3 && (
+            {/* might not needed, comment for now */}
+            {/* {isF3 && (
                 <span className="text-xl px-1 bg-accent font-mono font-extrabold mr-1" title="F3 traveler lot">F3</span>
-            )}
+            )} */}
 
             <span className="truncate">{lotId}</span>
 

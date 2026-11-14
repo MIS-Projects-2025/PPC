@@ -25,6 +25,7 @@ export function useEntryOperations({
     date,
     activePackage,
     packageGroups,
+    closedSet = null,
 }) {
     // ── status dropdown ──────────────────────────────────────────────────
     const [statusMenu, setStatusMenu] = useState(null); // { rowId, anchor }
@@ -57,6 +58,10 @@ export function useEntryOperations({
             setIsDirty(true);
             setStatusMenu(null);
 
+            if (row.source === "f3" && closedSet?.has(String(status ?? "").trim().toUpperCase())) {
+                toast?.info?.(`${row.lot_id} is marked ${status}. It won't carry over to the next shift day.`);
+            }
+
             withUpdating(
                 mutate(route("loading-plan.entries.update", { id: row.entry_id ?? 0 }), {
                     method: "PATCH",
@@ -80,7 +85,7 @@ export function useEntryOperations({
                     toast?.error?.("Couldn't save status change — reverted.");
                 });
         },
-        [statusMenu, dataRows, store, update, setIsDirty, beginWrite, withUpdating, mutate, date, syncServerFields, toast],
+        [statusMenu, dataRows, store, update, setIsDirty, beginWrite, withUpdating, mutate, date, syncServerFields, toast, closedSet],
     );
 
     // ── add lot / add block ──────────────────────────────────────────────

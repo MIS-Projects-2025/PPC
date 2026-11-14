@@ -29,6 +29,6 @@ export function buildTabItems({ readOnly, isF3, hasOrphans, packageGroupNames })
         FOR_BAKE_TAB,
         ...(isF3 ? [] : [PICKUP_TAB]),
         ...(hasOrphans ? [ORPHAN_TAB] : []),
-        ...(packageGroupNames ?? []),
+        ...(isF3 ? [] : (packageGroupNames ?? [])),
     ];
 }

@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { memo, useCallback, useLayoutEffect, useRef } from "react";
 import { Row } from "react-data-grid";
 
-function DroppableDataRow({ rowIdxByElement, ...rowProps }) {
+function DroppableDataRow({ rowIdxByElement, flipKey, ...rowProps }) {
     const { row, rowIdx, className } = rowProps;
     const { setNodeRef, isOver } = useDroppable({ id: `row-${row.id}` });
     const elRef = useRef(null);
@@ -21,15 +21,16 @@ function DroppableDataRow({ rowIdxByElement, ...rowProps }) {
     return (
         <Row
             ref={setRefs}
+            data-flip-key={flipKey}
             {...rowProps}
-            className={clsx(className, isOver && "!bg-pink-500 relative drop-target-row")}
+            className={className}
         />
     );
 }
 
-function DroppableRowImpl({ rowIdxByElement, ...rowProps }) {
-    if (rowProps.row.__type === "header") return <Row {...rowProps} />;
-    return <DroppableDataRow rowIdxByElement={rowIdxByElement} {...rowProps} />;
+function DroppableRowImpl({ rowIdxByElement, flipKey, ...rowProps }) {
+    if (rowProps.row.__type === "header") return <Row data-flip-key={flipKey} {...rowProps} />;
+    return <DroppableDataRow rowIdxByElement={rowIdxByElement} flipKey={flipKey} {...rowProps} />;
 }
 
 export const DroppableRow = memo(DroppableRowImpl);

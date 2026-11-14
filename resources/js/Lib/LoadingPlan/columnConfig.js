@@ -17,6 +17,8 @@ const defineColumns = (defs, editable = {}) =>
         ...(width && { width }),
     }));
 
+export const PACKAGE_TYPE_KEY = "package_type";
+
 export const BAKE_COLUMNS = defineColumns([
     ["lotid", "Lot ID", 160],
     ["package", "Package Name"],
@@ -64,6 +66,7 @@ export const DATA_COLUMNS = defineColumns(
         ["machine", "Machine", 110],
         ["part_name", "Part Name"],
         ["lead_count", "Lead Count"],
+        [PACKAGE_TYPE_KEY, "Package"],
         ["package_name", "Package Name"],
         ["lot_id", "Lot ID", 160],
         ["status", "Status"],
@@ -125,7 +128,7 @@ export const NUM_BAKE_COLUMNS = BAKE_COLUMNS.length + 1;
 
 /** Highlight range: Part Name .. Status (cycle-time / expedite colouring). */
 export const PARTNAME_TO_QTY_KEYS = new Set([
-    "part_name", "lead_count", "package_name", "lot_id", "status", "qty",
+    "part_name", "lead_count", "package_name", "lot_id", "status", "qty", "package_type"
 ]);
 
 /** Red-font range for rows that are going for bake: Part Name .. Ramp Time. */
@@ -134,5 +137,5 @@ export const PARTNAME_TO_BAKE_KEYS = new Set([
     "status", "qty", "doable", "capacity_uph", "accu_time",
     "time_start", "time_end", "lot_type", "lot_status",
     "lot_entry_time_days", "cr3", "be_osl_days", "ct",
-    "osl", "body_size", "ramp_time",
+    "osl", "body_size", "ramp_time", "package_type"
 ]);

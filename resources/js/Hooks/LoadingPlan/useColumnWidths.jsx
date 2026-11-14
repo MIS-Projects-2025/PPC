@@ -21,8 +21,28 @@ const DEFAULT_COL_WIDTH = 120;
  *  - "hidden" = shrunk to a thin sliver (resize to the floor, or toggle in the Columns modal)
  *  - double-click a header to drop the override
  */
-export function useColumnWidths({ columns, data, getMachineLabel }) {
-    const [columnWidths, setColumnWidths] = useState(loadColumnWidths);
+export function useColumnWidths({ columns, data, getMachineLabel, location }) {
+    // widths live together with the location they belong to, so a save can never write
+    // one location's widths under the other location's key
+    const [state, setState] = useState(() => ({ location, widths: loadColumnWidths(location) }));
+
+    // Inertia keeps this component mounted when the location changes, so reload during render
+    // (React's supported "adjust state on prop change" pattern: no frame with stale widths)
+    let current = state;
+    if (state.location !== location) {
+        current = { location, widths: loadColumnWidths(location) };
+        setState(current);
+    }
+    const columnWidths = current.widths;
+
+    // same call signature as before, so the callbacks below don't change
+    const setColumnWidths = useCallback((updater) => {
+        setState((s) => {
+            const widths = typeof updater === "function" ? updater(s.widths) : updater;
+            return widths === s.widths ? s : { ...s, widths };
+        });
+    }, []);
+
     const columnWidthsRef = useRef(columnWidths);
     columnWidthsRef.current = columnWidths;
 
@@ -37,9 +57,9 @@ export function useColumnWidths({ columns, data, getMachineLabel }) {
     }, []);
 
     useEffect(() => {
-        const t = setTimeout(() => saveColumnWidths(columnWidths), 300);
+        const t = setTimeout(() => saveColumnWidths(state.widths, state.location), 300);
         return () => clearTimeout(t);
-    }, [columnWidths]);
+    }, [state]);
 
     // ── auto-fit (referentially stable when nothing changed) ─────────────
     const autoWidthsRef = useRef({});

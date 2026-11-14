@@ -102,6 +102,8 @@
     "SchedulerService"
     "MachinePlatformCapacityBand"
     "MachinePlatformCapacityBandController"
+    "PackageLocation"
+    
 #
     ##################### Models
     "BoschPart"
@@ -109,14 +111,15 @@
     "CapacityBand"
 
     ##################### web
-    "routes\web.php"
+    "routes\loading-plan.php"
 
+    "loading-plan" # css
+    
     ##################### ---- Non-PHP (JS/JSX, classified by naming; none matched) ----
     "Deemo"
     "columns"
     "NonMachinesModal"
     "StatusBadge"
-    "loading-plan" # css
     "DroppableRow"
 
     "MachineSelectionGrid"
@@ -139,6 +142,10 @@
     "helpers"
 
     ###################### hooks
+    "useDragPreview" # only for visual (no logic)
+
+
+    "useRowFlip"
     "useColumnWidths"
     "useDoableOperations"
     "useEntryOperations"
@@ -172,7 +179,7 @@
     "MergeHistoryModal"
 
     ###################### ---- paths (file or folder) ----
-    ## 'resources\js\Pages\LoadingPlan\Settings\Index'
+    #'resources\js\Pages\LoadingPlan\Settings\Index'
     ### # './app'
   )
 

@@ -26,6 +26,7 @@ import { SearchBar } from "@/Components/LoadingPlan/SearchBar";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import StatusMenu from "@/Components/LoadingPlan/StatusMenu";
+import { useRowFlip } from "@/Hooks/LoadingPlan/useRowFlip";
 import { StickyMachineHeader, StickyOvenHeader } from "@/Components/LoadingPlan/StickyHeaderOverlay";
 import { HEADER_ROW_HEIGHT, ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
 import {
@@ -66,6 +67,7 @@ import { compareUnassigned, createRowMatchers, getMachineLabel } from "@/Lib/Loa
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
+import { useDragPreview } from "@/Hooks/LoadingPlan/useDragPreview";
 import { router } from "@inertiajs/react";
 import clsx from "clsx";
 import dayjs from "dayjs";
@@ -102,7 +104,7 @@ const noop = () => {}; // bake toolbar actions are not implemented yet
 const getRowKey = (row) => row.id;
 const isRowLocked = (row) => row.isLocked;
 const DEFAULT_COLUMN_OPTIONS = { resizable: true };
-const MACHINE_GRID_STYLE = { blockSize: "80vh" };
+const MACHINE_GRID_STYLE = { blockSize: "80vh", position: "relative" };
 const BAKE_GRID_STYLE = { blockSize: "70vh" };
 
 const toggled = (set, value) => {
@@ -123,6 +125,7 @@ export default function Deemo({
     buckets: serverBuckets,
     date,
     selectedLocation,
+    closedStatuses,
     status,
     baseTimes,
     onLotTransfer,
@@ -138,6 +141,10 @@ export default function Deemo({
 }) {
     const toast = useToast();
     const isF3 = selectedLocation === F3_FLAG;
+    const closedSet = useMemo(
+        () => new Set((closedStatuses ?? []).map((s) => String(s).toUpperCase())),
+        [closedStatuses],
+    );
 
     // ── write lock ───────────────────────────────────────────────────────
     const {
@@ -321,7 +328,7 @@ export default function Deemo({
         handleAddRow, saveBlock, handleAutoSortMachine,
     } = useEntryOperations({
         store: useLoadingPlanStore, dataRows, update, syncServerFields, setIsDirty, readOnly, isF3, isLocked,
-        beginWrite, withUpdating, mutate, toast, date, activePackage, packageGroups,
+        beginWrite, withUpdating, mutate, toast, date, activePackage, packageGroups, closedSet,
     });
 
     const {
@@ -409,8 +416,8 @@ export default function Deemo({
     const {
         decoratedColumns, gridColumnWidths, onColumnWidthsChange, hiddenColumnKeys, hasHiddenColumns,
         isColumnHidden, toggleColumnVisibility, showAllColumns,
-    } = useColumnWidths({ columns, data, getMachineLabel: labelOfMachine });
-
+    } = useColumnWidths({ columns, data, getMachineLabel: labelOfMachine, location: selectedLocation });
+    
     // ── row indexes, tab matching, display rows ──────────────────────────
     const {
         rowsByMachine, rowsByBucket, machineTotalDoable, machineTotalQuantity,
@@ -582,7 +589,7 @@ export default function Deemo({
     );
 
     const {
-        sensors, collisionDetection, draggedRow, draggedCount, handleDragStart, handleDragEnd, handleDragCancel,
+        sensors, collisionDetection, draggedRow, draggedCount, handleDragStart, handleDragEnd, handleDragCancel, isDragRefused
     } = useDragReorder({
         selectedRows, displayRows, collapsedRunsById, dataRows, store: useLoadingPlanStore,
         update, withUpdating, beginWrite, mutate, date, toast, clearSelection, setIsDirty, syncServerFields, selectedLocation,
@@ -609,9 +616,60 @@ export default function Deemo({
 
     // ── hover tools / grid renderers / contexts ──────────────────────────
     const { containerRef, rowIdxByElement } = useRowHoverRefs();
+    const { armFlip } = useRowFlip({ containerRef, displayRows, enabled: !onBake });
+
+    // ids (display order) that move together: the dragged row, or the whole selection
+    const getDragGroupIds = useCallback(
+        (activeId) =>
+            selectedRows.has(activeId) && selectedRows.size > 1
+                ? displayRows.filter((r) => r.__type === "data" && selectedRows.has(r.id)).map((r) => r.id)
+                : [activeId],
+        [selectedRows, displayRows],
+    );
+
+    const dragPreview = useDragPreview({ containerRef, displayRows, getGroupIds: getDragGroupIds });
+    const { start: previewStart, over: previewOver, finish: previewFinish, cancel: previewCancel } = dragPreview;
+
+    const onDragStart = useCallback(
+        (e) => {
+            handleDragStart(e);
+            if (!isDragRefused()) previewStart();
+        },
+        [handleDragStart, isDragRefused, previewStart],
+    );
+
+    const onDragOver = useCallback(
+        (e) => {
+            if (!isDragRefused()) previewOver(e);
+        },
+        [isDragRefused, previewOver],
+    );
+
+    const onDragEnd = useCallback(
+        (e) => {
+            const hadPreview = previewFinish();
+            if (!hadPreview) {
+                // nothing was previewed (dropped on a header, Unassigned...): fall back to the post-drop slide
+                const skip = [e.active.id];
+                if (selectedRows.has(e.active.id)) skip.push(...selectedRows);
+                armFlip(skip);
+            }
+            handleDragEnd(e);
+        },
+        [previewFinish, armFlip, selectedRows, handleDragEnd],
+    );
+
+    const onDragCancel = useCallback(() => {
+        previewCancel();
+        handleDragCancel();
+    }, [previewCancel, handleDragCancel]);
 
     const renderers = useMemo(
-        () => ({ renderRow: (key, props) => <DroppableRow key={key} rowIdxByElement={rowIdxByElement} {...props} /> }),
+        () => ({
+            renderRow: (key, props) => (
+                <DroppableRow key={key} flipKey={key} rowIdxByElement={rowIdxByElement} {...props} />
+            ),
+        }),
         [rowIdxByElement],
     );
 
@@ -627,10 +685,14 @@ export default function Deemo({
                 return clsx("text-xs border-t-4 border-yellow-500 flex machine-header-row", jumped && "machine-jump-flash");
             }
             if (isBlockRow(row)) return "block-row-bg border-l-4 border-warning/60";
-            if (row.is_rework) return clsx("border-l-4 border-info/60", scm || other);
-            return clsx(scm || other) || undefined;
+            const closed =
+                isData && row.source === "f3" && closedSet.has(String(row.status ?? "").trim().toUpperCase())
+                    ? "opacity-60"
+                    : "";
+            if (row.is_rework) return clsx("border-l-4 border-info/60", scm || other, closed);
+            return clsx(scm || other, closed) || undefined;
         },
-        [isOtherLoc, jumpedMachine],
+        [isOtherLoc, jumpedMachine, closedSet],
     );
 
     const tableInteractionValue = useMemo(
@@ -885,9 +947,10 @@ export default function Deemo({
                                 collisionDetection={collisionDetection}
                                 measuring={{ droppable: { strategy: MeasuringStrategy.BeforeDragging } }}
                                 sensors={readOnly || staleInfo ? [] : sensors}
-                                onDragStart={readOnly ? undefined : handleDragStart}
-                                onDragEnd={readOnly ? undefined : handleDragEnd}
-                                onDragCancel={readOnly ? undefined : handleDragCancel}
+                                onDragStart={readOnly ? undefined : onDragStart}
+                                onDragOver={readOnly ? undefined : onDragOver}
+                                onDragEnd={readOnly ? undefined : onDragEnd}
+                                onDragCancel={readOnly ? undefined : onDragCancel}
                             >
                                 <div ref={containerRef} className="border-none" style={{ position: "relative" }}>
                                     <DataGrid
@@ -926,9 +989,10 @@ export default function Deemo({
                                     )}
                                 </div>
 
-                                <DragOverlay>
+                                {/* <DragOverlay dropAnimation={{ duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }}> */}
+                                <DragOverlay dropAnimation={null}>
                                     {!readOnly && draggedRow ? (
-                                        <div className="bg-base-200 w-[300px] p-2 rounded shadow-lg text-sm font-semibold">
+                                        <div className="bg-base-200 w-[300px] p-1 rounded shadow-lg text-xs">
                                             {draggedRow.part_name || "Lot"} - {draggedRow.lot_id} - {draggedRow.package_name}
                                             {draggedCount > 1 && (
                                                 <div className="text-xs font-normal opacity-70">+{draggedCount - 1} more</div>

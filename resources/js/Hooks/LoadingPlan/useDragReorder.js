@@ -413,5 +413,6 @@ export function useDragReorder({
         handleDragStart,
         handleDragEnd,
         handleDragCancel,
+        isDragRefused: () => refusedRef.current,
     };
 }

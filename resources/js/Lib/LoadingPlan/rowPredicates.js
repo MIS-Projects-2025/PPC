@@ -1,11 +1,13 @@
 import {
     ALL_PACKAGES_TAB,
+    F3_FLAG,
     FOR_BAKE_TAB,
     ORPHAN_TAB,
     PICKUP_TAB,
     RES_STATION,
     RES_TAB,
 } from "@/Constants/LoadingPlan/tabs";
+
 import { isNonMachineKey } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { isBlockRow } from "./helpers";
 
@@ -37,7 +39,14 @@ export function getMachineLabel(machine, nonMachineNameByKey) {
 
 /** Predicates that depend on the active tab / location / known machines. */
 export function createRowMatchers({ activePackage, selectedLocation, knownMachineNames }) {
-    const isOtherLoc = (r) => !isBlockRow(r) && r.location != null && r.location !== selectedLocation;
+    const inF3 = selectedLocation === F3_FLAG;
+
+    const isOtherLoc = (r) => {
+        if (isBlockRow(r)) return false;
+        // F3 vs not-F3 is decided by source: location is derived from WIP fields and can be null
+        if (r.source != null && (r.source === "f3") !== inF3) return true;
+        return r.location != null && r.location !== selectedLocation;
+    };
 
     const isOrphanRow = (r) =>
         !!r.machine &&

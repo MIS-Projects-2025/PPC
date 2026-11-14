@@ -12,11 +12,71 @@ import {
 import { PARTNAME_TO_BAKE_KEYS, PARTNAME_TO_QTY_KEYS } from "@/Components/LoadingPlan/columns";
 import ExcelJS from "exceljs";
 import { isBlockRow as defaultIsBlockRow, isForBake } from "./helpers";
+import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 
 const DATE_COLUMN_KEY = "__export_date_loaded";
 const ITEM_COLUMN_KEY = "__export_item";
 const MACHINE_COLUMN_KEY = "__export_machine";
 const RES_STATION = "GTTRES_T";
+
+const EXPEDITE_COLUMN_KEY = "__export_expedite_scm";
+const EXPECTED_PT_COLUMN_KEY = "__export_expected_pt";
+const ISSUE_COLUMN_KEY = "__export_issue";
+
+const TIME_FMT = "h:mm AM/PM"; // time only, whatever the location
+
+const SYNTHETIC_COLUMNS = {
+    [DATE_COLUMN_KEY]: { key: DATE_COLUMN_KEY, name: "Date" },
+    [ITEM_COLUMN_KEY]: { key: ITEM_COLUMN_KEY, name: "Item" },
+    [MACHINE_COLUMN_KEY]: { key: MACHINE_COLUMN_KEY, name: "Machine" },
+    [EXPEDITE_COLUMN_KEY]: { key: EXPEDITE_COLUMN_KEY, name: "EXPEDITE Y/N AND SCM" },
+    [EXPECTED_PT_COLUMN_KEY]: { key: EXPECTED_PT_COLUMN_KEY, name: "Expected PT" },
+    [ISSUE_COLUMN_KEY]: { key: ISSUE_COLUMN_KEY, name: "ISSUE" },
+};
+
+// F3 export, in order. Synthetic keys come from SYNTHETIC_COLUMNS, the rest from DATA_COLUMNS.
+const F3_COLUMN_ORDER = [
+    DATE_COLUMN_KEY, ITEM_COLUMN_KEY, EXPEDITE_COLUMN_KEY, MACHINE_COLUMN_KEY,
+    "ramp_time", // exported as "Input"
+    "part_name", "lead_count", "package_type", "package_name", "lot_id",
+    "status", // exported as "Update"
+    "station", "qty", "doable", "capacity_uph", "accu_time", "time_start", "time_end",
+    EXPECTED_PT_COLUMN_KEY,
+    "lot_type", "prod_area", "lot_status", "lot_entry_time_days", "cr3", "be_osl_days", "osl", "body_size",
+    "end_customer", "bake", "bake_count", "test_lot_id", "backend_leadtime", "date_loaded",
+    "be_starttime", "ct",
+    "start_time", "part_type", "auto_part", "part_class", "date_code", "focus_group", "process_group",
+    "bulk", "required_time", "lot_entry_time", "stage", "stage_start_time", "ccd", "stage_run_days",
+    "tray", "osl_days", "be_group", "strategy_code", "assy_site", "stock_position", "bake_time_temp",
+    ISSUE_COLUMN_KEY,
+    "remarks",
+];
+
+const F3_HIDDEN_KEYS = new Set([
+    "lot_type", "prod_area", "lot_status", "lot_entry_time_days", "cr3", "be_osl_days", "osl", "body_size",
+    "end_customer", "bake", "bake_count", "test_lot_id", "backend_leadtime", "date_loaded",
+    "start_time", "part_type", "auto_part", "part_class", "date_code", "focus_group", "process_group",
+    "bulk", "required_time", "lot_entry_time", "stage", "stage_start_time", "ccd", "stage_run_days",
+    "tray", "osl_days", "be_group", "strategy_code", "assy_site", "stock_position", "bake_time_temp",
+]);
+
+const F3_EMPTY_KEYS = new Set(["be_starttime", "ct"]); // shown, but no values
+const F3_HEADER_LABELS = { status: "Update", ramp_time: "Input" };
+
+/** Time of day only, as an Excel day fraction (no date, no Yest/Tmrw). */
+function toExcelTime(row, field) {
+    const src = row[`${field}_at`] ?? row[field];
+    const m = /(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(String(src ?? ""));
+    if (!m) return null;
+    return (Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0)) / 86400;
+}
+
+/** "56G6L" -> "G6L056", "10VITROX" -> "VTRX010", "01HSI250" -> "HSI250001". No leading number: null. */
+export function formatF3Machine(name) {
+    const m = /^(\d+)(.+)$/.exec(String(name ?? "").trim());
+    if (!m) return null;
+    return `${m[2].replace(/VITROX/i, "VTRX")}${m[1].padStart(3, "0")}`;
+}
 
 const HEADER_LABEL_OVERRIDES = {
     accu_time: "Accu. Time (hrs)",
@@ -81,23 +141,26 @@ function timeNumFmt(row, field) {
 
 function resolveCellValue(col, row, ctx) {
     if (col.key === DATE_COLUMN_KEY) return toExcelDate(row.date_loaded);
+    if (ctx.emptyKeys.has(col.key)) return null;
+    if (col.key === EXPECTED_PT_COLUMN_KEY) return hoursOf(row.accu_time);
+    if (col.key === EXPEDITE_COLUMN_KEY || col.key === ISSUE_COLUMN_KEY) return null;
 
     if (ctx.isBlock(row)) {
         const label = row.block_label ?? "";
         if (col.key === "part_name" || col.key === "package_name" || col.key === "status") return `▨ ${label}`;
         if (col.key === "lot_id") return `${label} ▨`;
         if (col.key === "accu_time") return hoursOf(row.accu_time);
-		if (col.key === "doable") {
-			if (row.doable_status === "no_recipe" && !row.doable_overridden) return "No Recipe";
-			return row.doable > 0 ? Number(row.doable) : "—";
-		}
-        if (col.key === "time_start" || col.key === "time_end") return toExcelDate(row[`${col.key}_at`]);
+        if (col.key === "doable") {
+            if (row.doable_status === "no_recipe" && !row.doable_overridden) return "No Recipe";
+            return row.doable > 0 ? Number(row.doable) : "—";
+        }
+        if (col.key === "time_start" || col.key === "time_end") return toExcelTime(row, col.key);
         return null;
     }
 
     if (col.key === MACHINE_COLUMN_KEY) return ctx.getMachineLabel(row.machine);
     if (col.key === "accu_time") return hoursOf(row.accu_time);
-    if (col.key === "time_start" || col.key === "time_end") return toExcelDate(row[`${col.key}_at`]);
+    if (col.key === "time_start" || col.key === "time_end") return toExcelTime(row, col.key);
     return row[col.key] ?? null;
 }
 
@@ -140,10 +203,8 @@ function writeRows(sheet, rows, ctx) {
             styleDataCell(cell, col, row, ctx);
 
             if (col.key === DATE_COLUMN_KEY) cell.numFmt = "mmmm d, yyyy";
-            if (col.key === "accu_time") cell.numFmt = "0.00";
-            if (col.key === "time_start" || col.key === "time_end") {
-                cell.numFmt = timeNumFmt(row, col.key);
-            }
+            if (col.key === "accu_time" || col.key === EXPECTED_PT_COLUMN_KEY) cell.numFmt = "0.00";
+            if (col.key === "time_start" || col.key === "time_end") cell.numFmt = TIME_FMT;
             if (ctx.isBlock(row) && ["part_name", "package_name", "status", "lot_id"].includes(col.key)) {
                 cell.font = { ...(cell.font || {}), bold: true };
             }
@@ -172,7 +233,7 @@ function renderSection({ sheet, title, rows, groups = [], ctx }) {
         c.font = { bold: true, size: 18, color: { argb: COLORS.sectionTitleFont } };
     }
 
-    const headerRow = sheet.addRow(exportColumns.map((c) => HEADER_LABEL_OVERRIDES[c.key] ?? c.name));
+    const headerRow = sheet.addRow(exportColumns.map((c) => ctx.headerLabels[c.key] ?? c.name));
     headerRow.height = 15;
     for (let i = 1; i <= n; i++) {
         const cell = headerRow.getCell(i);
@@ -336,19 +397,28 @@ export async function exportLoadingPlanToExcel({
         throw new Error("exportLoadingPlanToExcel: `columns` (DATA_COLUMNS) is required");
     }
 
-    const baseColumns = columns.filter((c) => !excludeKeys.includes(c.key));
-    const exportColumns = [
-        { key: DATE_COLUMN_KEY, name: "Date" },
-        { key: ITEM_COLUMN_KEY, name: "Item" },
-        { key: MACHINE_COLUMN_KEY, name: "Machine" },
-        ...baseColumns,
-    ];
+    const isF3 = selectedLocation === F3_FLAG;
+    const byKey = new Map(columns.map((c) => [c.key, c]));
+
+    const exportColumns = isF3
+        ? F3_COLUMN_ORDER.map((k) => SYNTHETIC_COLUMNS[k] ?? byKey.get(k)).filter(Boolean)
+        : [
+            SYNTHETIC_COLUMNS[DATE_COLUMN_KEY],
+            SYNTHETIC_COLUMNS[ITEM_COLUMN_KEY],
+            SYNTHETIC_COLUMNS[MACHINE_COLUMN_KEY],
+            // the Package column only exists in F3
+            ...columns.filter((c) => !excludeKeys.includes(c.key) && c.key !== "package_type"),
+        ];
+
+    const machineLabel = isF3 ? (m) => formatF3Machine(m) ?? getMachineLabel(m) : getMachineLabel;
 
     const ctx = {
         exportColumns,
         isBlock,
-        getMachineLabel,
+        getMachineLabel: machineLabel,
         date,
+        headerLabels: isF3 ? { ...HEADER_LABEL_OVERRIDES, ...F3_HEADER_LABELS } : HEADER_LABEL_OVERRIDES,
+        emptyKeys: isF3 ? F3_EMPTY_KEYS : new Set(),
         partNameIdx: exportColumns.findIndex((c) => c.key === "part_name"),
         timeStartIdx: exportColumns.findIndex((c) => c.key === "time_start"),
     };
@@ -368,7 +438,14 @@ export async function exportLoadingPlanToExcel({
 
     const known = new Set(machines);
     const orphanMachines = [...new Set(rows.map((r) => r.machine).filter((m) => m != null && !known.has(m)))];
-    const allMachines = [...machines, ...orphanMachines];
+
+    // Planned machines first, the Unassigned section (machine === null) last.
+    // Only moved if the caller included it, so tabs that never had it don't gain one.
+    const allMachines = [
+        ...machines.filter((m) => m !== null),
+        ...orphanMachines,
+        ...(machines.includes(null) ? [null] : []),
+    ];
 
     const sheetDefs = [
         { name: "Unassigned", machines: [null], include: (r) => r.machine === null && !isRes(r), optional: true },
@@ -393,6 +470,12 @@ export async function exportLoadingPlanToExcel({
     for (const def of sheetDefs) {
         const sheet = workbook.addWorksheet(sanitizeSheetName(def.name));
         sheet.columns = exportColumns.map((col) => ({ key: col.key, width: widthFromPx(col.width, col.name) }));
+
+        if (isF3) {
+            exportColumns.forEach((col, i) => {
+                if (F3_HIDDEN_KEYS.has(col.key)) sheet.getColumn(i + 1).hidden = true;
+            });
+        }
 
         // "own" = what the table shows on this tab by default. Decides which machines get a section
         // and which rows are dimmed; it never hides a row.
@@ -424,7 +507,7 @@ export async function exportLoadingPlanToExcel({
             const hasOwnParked = groups.some((g) => g.rows.some(own));
             if (!hasOwnLots && !hasOwnParked) continue; // same rule as the table: nothing for this tab, no section
 
-            renderSection({ sheet, title: getMachineLabel(m), rows: mine, groups, ctx: sheetCtx });
+            renderSection({ sheet, title: machineLabel(m), rows: mine, groups, ctx: sheetCtx });
             rendered = true;
         }
 

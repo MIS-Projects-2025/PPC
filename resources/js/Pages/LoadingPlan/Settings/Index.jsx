@@ -5,6 +5,7 @@ import CapacityBandSettings from './CapacityBandSettings';
 import CapacitySettings from './CapacitySettings';
 import NonMachineSettings from './NonMachineSettings';
 import PackageGroupSettings from './PackageGroupSettings';
+import F3PackageCodeSettings from './F3PackageCodeSettings';
 
 // red https://claude.ai/chat/4cf4cbb4-5c0d-4b87-bdc0-102fc60fee59
 
@@ -14,6 +15,7 @@ const SECTIONS = [
     { key: 'package-groups', label: 'Package Groups', href: '/loading-plan/settings/package-groups' },
     { key: 'non-machines', label: 'Non-machines', href: '/loading-plan/settings/non-machines' },
     { key: 'bosch-parts', label: 'Bosch Parts', href: '/loading-plan/settings/bosch-parts' },
+    { key: 'f3-package-codes', label: 'F3 Package Codes', href: '/loading-plan/settings/f3-package-codes' },
 ];
 
 const goBack = () => {
@@ -54,6 +56,7 @@ export default function Index({ section = 'capacity', machines = [], bands = [],
                     {current.key === 'package-groups' && <PackageGroupSettings />}
                     {current.key === 'non-machines' && <NonMachineSettings nonMachines={nonMachines} />}
                     {current.key === 'bosch-parts' && <BoschPartSettings />}
+                    {current.key === 'f3-package-codes' && <F3PackageCodeSettings />}
                 </main>
             </div>
         </>

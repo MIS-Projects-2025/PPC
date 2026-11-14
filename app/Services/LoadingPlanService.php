@@ -6,6 +6,7 @@ use App\Models\CustomerDataWip;
 use App\Models\LoadingPlanEntry;
 use App\Models\LotQuantity;
 use App\Models\PpcPackageMaster;
+use App\Models\F3PackageCodeGroup;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 //TODO: distinguish Collection from Eloquence and Support
@@ -33,6 +34,7 @@ class LoadingPlanService
     public readonly Collection $todayF3Rows;
     private LotSourceService $sources;
     // at the top of the class
+    private ?array $f3PackageTypes = null;
     public static array $acc = [];
 
     private static function tick(string $k, float $t0): void
@@ -560,6 +562,11 @@ class LoadingPlanService
         $focusGroup  = $wipRow?->Focus_Group ?? null;
         $leadCount   = $wipRow?->Lead_Count ?? null;
 
+        // after $leadCount is resolved
+        $packageType = $isF3 && $leadCount !== null
+            ? (($this->f3PackageTypes ??= F3PackageCodeGroup::lookup())[strtoupper(trim((string) $leadCount))] ?? null)
+            : null;
+
         $location = $isF3 ? 'F3' : PackageLocation::resolve($packageName, $focusGroup, $leadCount);
 
         $this->packageGroups ??= app(PackageGroups::class);
@@ -586,6 +593,7 @@ class LoadingPlanService
         // frontend reads them with `== null` / `?? ''`, so a missing key
         // behaves the same as null, and the response gets much smaller.
         $wipDisplay = array_filter([
+            'package_type'        => $packageType,
             'station'             => $wipRow?->Station,
             'lot_type'            => $wipRow?->Lot_Type,
             'prod_area'           => $wipRow?->Prod_Area,
