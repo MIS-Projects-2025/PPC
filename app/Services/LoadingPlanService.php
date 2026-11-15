@@ -9,6 +9,7 @@ use App\Models\PpcPackageMaster;
 use App\Models\F3PackageCodeGroup;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
+use Illuminate\Support\Facades\Log;
 //TODO: distinguish Collection from Eloquence and Support
 use Illuminate\Support\Collection;
 use App\Support\Probe;
@@ -21,6 +22,7 @@ class LoadingPlanService
     protected array $selectedPackages;
     protected Collection $splitsByParent;
     protected Collection $splitsByChild;
+    private array $priorF3Planned = [];
     protected Collection $mergesByTarget;
     protected Collection $mergesBySource;
     /** lot_id => stored root_lot_id, for carried entries whose split row is on an earlier date */
@@ -168,6 +170,28 @@ class LoadingPlanService
     // if ($splitInfo && $splitInfo['rootLotId']) {
     //     $rootWip = $wipRows->firstWhere('Lot_Id', $splitInfo['rootLotId']);
     // }
+
+    private function preloadPriorF3Planned(array $lotIds, string $date): void
+    {
+        $lotIds = array_values(array_diff(array_unique(array_filter($lotIds)), array_keys($this->priorF3Planned)));
+
+        foreach (array_chunk($lotIds, 1000) as $chunk) {
+            $hit = LoadingPlanEntry::where('source', 'f3')
+                ->where('entry_type', 'lot')
+                ->whereIn('lot_id', $chunk)
+                ->where('scheduled_date', '<', $date)
+                ->where(fn($q) => $q->whereNotNull('machine_id')
+                    ->orWhereNotNull('non_machine_id')
+                    ->orWhereNotNull('finalized_at'))
+                ->distinct()
+                ->pluck('lot_id')
+                ->flip();
+
+            foreach ($chunk as $id) {
+                $this->priorF3Planned[$id] = $hit->has($id);
+            }
+        }
+    }
 
     public function __construct(
         protected CarbonInterface|string|null $date = null,
@@ -317,6 +341,13 @@ class LoadingPlanService
                 quantity: $resolvedQuantity
             );
         };
+
+        $this->preloadPriorF3Planned(
+            $this->todayPlannedLotEntries
+                ->where('entry_type', 'lot')->where('source', 'f3')
+                ->pluck('lot_id')->filter()->unique()->all(),
+            $this->date,
+        );
 
         // unassigned from today planned entries, nothing on leaked. I don't know if unassigned leaked is still needed, probably not.
         // unassigned can still have lot quantities (user edit it and unassigned it again) it's lot quantities never got deleted (assuming)
@@ -549,14 +580,14 @@ class LoadingPlanService
                 ? $entry->machine_snapshot
                 : self::timed('getMachineName', fn() => $entry?->getPlacementKey()));
 
-        $formulas = self::timed('Formulas::make', fn() => LoadingPlanFormulas::make($wipRow));
-
         $lotId = $entry?->lot_id ?? $wipRow?->Lot_Id ?? null;
 
         // Array-shaped scheduled_date is already a Y-m-d string.
         $scheduledDate = $entryIsArray
             ? $resolvedScheduledDate
             : ($entry?->scheduled_date?->toDateString() ?? null);
+
+        $formulas = self::timed('Formulas::make', fn() => LoadingPlanFormulas::make($wipRow, $scheduledDate));
 
         $packageName = $wipRow?->Package_Name ?? $entry?->package_name ?? null;
         $focusGroup  = $wipRow?->Focus_Group ?? null;
@@ -584,6 +615,15 @@ class LoadingPlanService
         [$timeEndAt, $timeEnd]     = self::timeParts($entryIsArray ? ($entry->time_end_at ?? null) : ($entry?->time_end ?? null));
 
         $isLeaked = $scheduledDate === $this->previousDate;
+
+        $isF3Replanned = false;
+        if (
+            $isF3 && $lotId && !$isBlocked && $scheduledDate === $this->date
+            && (($entry?->machine_id ?? null) !== null || ($entry?->non_machine_id ?? null) !== null)
+        ) {
+            $this->preloadPriorF3Planned([$lotId], $this->date); // no-op if initEntries already loaded it
+            $isF3Replanned = $this->priorF3Planned[$lotId] ?? false;
+        }
 
         $isCarried  = ($entry?->carried_from_entry_id ?? null) !== null;
         $originRaw  = $entry?->origin_date ?? null;
@@ -646,6 +686,7 @@ class LoadingPlanService
             'is_scm'             => (bool) ($entry?->is_scm ?? false),
             'is_for_bake'        => $formulas->isBakeHighlight,
             'is_pickup'          => $entry?->is_pickup,
+            'is_replanned'       => $isF3Replanned, // for f3 only, might possible for PL1/PL6 in the future.
             'block_label'        => $entry?->block_label,
             'machine'            => $machine,
             'machine_id'         => $entry?->machine_id,

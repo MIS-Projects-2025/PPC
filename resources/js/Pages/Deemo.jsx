@@ -403,8 +403,9 @@ export default function Deemo({
                 selectedLocation,
                 readOnly ? undefined : doable.onEditDoable,
                 readOnly,
+                date,
             ),
-        [isLocked, openStatusMenu, toggleMachineCollapsed, highlightedMatch, selectedLocation, doable.onEditDoable, readOnly],
+        [isLocked, openStatusMenu, toggleMachineCollapsed, highlightedMatch, selectedLocation, doable.onEditDoable, readOnly, date],
     );
     const columns = useMemo(() => (readOnly ? toReadOnlyColumns(rawColumns) : rawColumns), [readOnly, rawColumns]);
 
@@ -685,10 +686,12 @@ export default function Deemo({
                 return clsx("text-xs border-t-4 border-yellow-500 flex machine-header-row", jumped && "machine-jump-flash");
             }
             if (isBlockRow(row)) return "block-row-bg border-l-4 border-warning/60";
-            const closed =
-                isData && row.source === "f3" && closedSet.has(String(row.status ?? "").trim().toUpperCase())
-                    ? "opacity-60"
-                    : "";
+            // const closed =
+            //     isData && row.source === "f3" && closedSet.has(String(row.status ?? "").trim().toUpperCase())
+            //         ? "opacity-60"
+            //         : "";
+
+            const closed = ""; // just normal
             if (row.is_rework) return clsx("border-l-4 border-info/60", scm || other, closed);
             return clsx(scm || other, closed) || undefined;
         },

@@ -9,10 +9,10 @@
     display: inline-flex;
     flex: none;
     align-items: center;
-    gap: 3px;
+    /* gap: 3px; */
     height: 18px;
     padding: 0 7px 0 5px;
-    border-radius: 999px;
+    /* border-radius: 999px; */
     font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.06em;

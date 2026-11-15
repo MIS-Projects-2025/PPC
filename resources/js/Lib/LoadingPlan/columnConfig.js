@@ -18,6 +18,17 @@ const defineColumns = (defs, editable = {}) =>
     }));
 
 export const PACKAGE_TYPE_KEY = "package_type";
+export const PLAN_DATE_KEY = "scheduled_date";
+
+/** "2026-11-13" -> "November 13, 2026" */
+export const fmtPlanDate = (ymd) =>
+    ymd
+        ? new Date(`${ymd}T00:00:00`).toLocaleDateString("en-US", {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+          })
+        : "";
 
 export const BAKE_COLUMNS = defineColumns([
     ["lotid", "Lot ID", 160],
@@ -63,6 +74,7 @@ export const BAKE_COLUMNS = defineColumns([
 
 export const DATA_COLUMNS = defineColumns(
     [
+        [PLAN_DATE_KEY, "Date", 150],
         ["machine", "Machine", 110],
         ["part_name", "Part Name"],
         ["lead_count", "Lead Count"],

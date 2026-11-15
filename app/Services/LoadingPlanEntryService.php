@@ -555,7 +555,7 @@ class LoadingPlanEntryService
                 $lookupMs += (microtime(true) - $t) * 1000;
 
                 $t = microtime(true);
-                $wipDerivatives = LoadingPlanFormulas::make($wipEntry);
+                $wipDerivatives = LoadingPlanFormulas::make($wipEntry, $entry->scheduled_date->toDateString());
                 $formulaMs += (microtime(true) - $t) * 1000;
 
                 return [
@@ -1490,7 +1490,7 @@ class LoadingPlanEntryService
     // F3 carry-over
     // ------------------------------------------------------------------
 
-    public const F3_CARRY_MAX_AGE_DAYS = 14;
+    public const F3_CARRY_MAX_AGE_DAYS = 21; // might change
 
     /**
      * Copies every open F3 lot entry dated before $date onto $date. Idempotent.

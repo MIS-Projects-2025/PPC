@@ -70,15 +70,15 @@
     ##"2026_11_12_000001_add_source_box_fields"
 
     ##################### ---- PHP (matched in your output) ----
+    "ValidatesLoadingPlanEntries"
+    
+    "loadingPlanExcelExporter"
+    
     "LotSourceService"
     "ProcessTraveler"
-    "LoadingPlanSplitController"
-    "LoadingPlanMergeController"
-    "ValidatesLoadingPlanEntries"
-    "NonMachineController"
     "LoadingPlanFormulas"
-    "ShiftDay"
-    "RecipeService"
+    #"ShiftDay"
+    #"RecipeService"
     "LoadingPlanController"
     "LoadingPlanEntryService"
     "LoadingPlanEntry"
@@ -86,23 +86,34 @@
     "LotQuantity"
     "LotScheduleCalculator"
     "CustomerDataWip"
-    "LoadingPlanBucket"
-    "LoadingPlanBucketController"
+    "LoadingPlanService"
+    "PackageLocation"
+    
+    "LotPrioritySorter"
+    
+    "LotSplit"
+    "LoadingPlanSplitController"
+    "LoadingPlanMergeController"
     "LotMergeService"
     "LotSplitService"
-    "LotSplit"
-    "BakeLotService"
-    "LotBucketItem"
-    "LotQuantityObserver"
-    "BaseHistoryObserver"
-    "LoadingPlanService"
-    "LoadingPlanEntryObserver"
+    
+    "NonMachineController"
+    
     "LoadingPlanEntryHistory"
-    "LotPrioritySorter"
+    
+    "LoadingPlanBucket"
+    "LoadingPlanBucketController"
+    "LotBucketItem"
+    
     "SchedulerService"
+
+    "BakeLotService"
     "MachinePlatformCapacityBand"
     "MachinePlatformCapacityBandController"
-    "PackageLocation"
+    
+    "LoadingPlanEntryObserver"
+    "LotQuantityObserver"
+    "BaseHistoryObserver"
     
 #
     ##################### Models
@@ -112,16 +123,14 @@
 
     ##################### web
     "routes\loading-plan.php"
-
-    "loading-plan" # css
     
     ##################### ---- Non-PHP (JS/JSX, classified by naming; none matched) ----
     "Deemo"
+
     "columns"
     "NonMachinesModal"
-    "StatusBadge"
     "DroppableRow"
-
+    "StatusBadge"
     "MachineSelectionGrid"
     "PlanToolbar"
     "SelectionToolbar"
@@ -181,6 +190,8 @@
     ###################### ---- paths (file or folder) ----
     #'resources\js\Pages\LoadingPlan\Settings\Index'
     ### # './app'
+
+    #"loading-plan" # css
   )
 
 

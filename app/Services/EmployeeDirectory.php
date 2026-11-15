@@ -38,6 +38,14 @@ class EmployeeDirectory
                 ->where('ACCSTATUS', 1)
                 ->first();
         } catch (\Throwable $e) {
+            // SQLSTATE class 42 = bad SQL / missing column or table: a bug, not an outage
+            if (
+                $e instanceof \Illuminate\Database\QueryException
+                && str_starts_with((string) $e->getCode(), '42')
+            ) {
+                throw $e;
+            }
+
             Log::warning('Masterlist unreachable, using cache', ['error' => $e->getMessage()]);
             return $this->fromCache($empId);
         }

@@ -60,7 +60,7 @@ export function WithBakeIndicator({ row, children }) {
     if (!info) return children;
 
     return (
-        <div className="flex items-center gap-1 w-full h-full">
+        <div className="flex items-center w-full h-full">
             <div className="min-w-0 flex-1 h-full overflow-hidden">{children}</div>
             <BakingBadge info={info} />
         </div>

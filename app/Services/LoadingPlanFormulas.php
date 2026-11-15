@@ -70,9 +70,11 @@ class LoadingPlanFormulas
     /**
      * Static factory for Model, Array, or null sources.
      */
-    public static function make(Model|array|null $source = null): self
+    public static function make(Model|array|null $source = null, ?string $planDate = null): self
     {
-        return new self($source);
+        $isF3 = (is_array($source) ? ($source['source'] ?? null) : ($source->source ?? null)) === 'f3';
+
+        return new self($source, dateLoaded: $isF3 ? $planDate : null);
     }
 
     /**

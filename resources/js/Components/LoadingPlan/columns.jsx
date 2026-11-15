@@ -2,12 +2,13 @@ import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 import {
+    PLAN_DATE_KEY,
+    fmtPlanDate,
     PACKAGE_TYPE_KEY,
     BAKE_COLUMNS,
     DATA_COLUMNS,
     EDITABLE_COLUMNS,
     NUM_BAKE_COLUMNS,
-    NUM_COLUMNS,
     PARTNAME_TO_BAKE_KEYS,
     PARTNAME_TO_QTY_KEYS,
     fmtHours,
@@ -74,7 +75,7 @@ function StatusButton({ row, onStatusClick }) {
     return (
         <button
             type="button"
-            className="btn btn-ghost btn-xs px-1 btn-block flex-1"
+            className="btn btn-ghost btn-xs p-0! min-h-0! h-full border-0 rounded-none btn-block flex-1"
             onClick={(e) => onStatusClick?.(e, row.id)}
             disabled={isUpdating}
         >
@@ -166,8 +167,9 @@ function renderDefaultCell(row, key) {
 }
 
 /** Columns with their own rendering (everything else uses renderDefaultCell). */
-function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable }) {
+function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable, planDate }) {
     return {
+        [PLAN_DATE_KEY]: (row) => (isBlock(row) ? null : fmtPlanDate(planDate)),
         status: (row) => {
             if (isBlock(row)) return <BlockLabel>▨ {row.block_label}</BlockLabel>;
 
@@ -196,7 +198,7 @@ function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable }) 
                     />
                     {row.is_carried && (
                         <span
-                            className="badge badge-xs badge-warning badge-outline whitespace-nowrap shrink-0"
+                            className="badge badge-xs font-semibold whitespace-nowrap shrink-0 bg-base-100 text-base-content border border-base-content/60"
                             title={`Carried over. Originally planned ${row.origin_date ?? "on an earlier day"}`}
                         >
                             ↪ {fmtOrigin(row.origin_date)}
@@ -225,6 +227,8 @@ function cellClassFor(key, highlightedMatch) {
         if (row.__type === "collapsed") return "bg-base-200 italic text-base-content/60";
 
         const classes = [];
+
+        if (key === "status") classes.push("p-0!");
 
         if (highlightedMatch?.rowId === row.id && highlightedMatch?.columnKey === key) {
             classes.push("ring-5 ring-primary ring-inset");
@@ -292,8 +296,9 @@ export function makeColumns(
     selectedLocation,
     onEditDoable,
     readOnly = false,
+    planDate = null,
 ) {
-    const renderers = createCellRenderers({ onStatusClick, selectedLocation, onEditDoable });
+    const renderers = createCellRenderers({ onStatusClick, selectedLocation, onEditDoable, planDate });
     const showPackageType = selectedLocation === F3_FLAG;
     const dataColumns = DATA_COLUMNS.filter((c) => c.key !== PACKAGE_TYPE_KEY || showPackageType);
 

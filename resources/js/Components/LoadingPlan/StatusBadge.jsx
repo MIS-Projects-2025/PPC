@@ -12,48 +12,24 @@ const TONE = {
     rework: "bg-orange-500/50 text-base-content border-orange-500",
 };
 
-const STATUS_STYLES = {
-    NONE: TONE.neutral,
-
-    RUNNING: TONE.progress,
-    "ON BAKE": TONE.progress,
-    "ON SORT": TONE.progress,
-    "ON BRAND": TONE.progress,
-    "ON LPI": TONE.progress,
-    "ON LLI": TONE.progress,
-    "ON LEADCON": TONE.progress,
-
-    "FOR DO": TONE.queued,
-    "FOR PROCESS": TONE.queued,
-    "FOR BAKE": TONE.queued,
-    "FOR SORT": TONE.queued,
-    "FOR BRAND": TONE.queued,
-    "FOR LPI": TONE.queued,
-    "FOR LLI": TONE.queued,
-    "FOR LEADCON": TONE.queued,
-
-    DONE: TONE.done,
-    "DONE DETAPE": TONE.done,
-    "FINAL SHIP": `${TONE.shipped} font-extrabold`,
-
-    IQA: TONE.qa,
-    OQA: TONE.qa,
-    FVI: TONE.qa,
-    "VISUAL (FVI)": TONE.qa,
-    "BUY-OFF": TONE.qa,
-
-    HANDLER: TONE.handling,
-    DETAPE: TONE.handling,
-    BOXING: TONE.handling,
-
-    HOLD: TONE.hold,
-    "IQA HOLD": TONE.hold,
-    "TNR HOLD": TONE.hold,
-    "PACK LABEL HOLD": TONE.hold,
-    "FINAL QA HOLD": TONE.hold,
-
-    REWORK: TONE.rework,
+export const STATUS_TONE = {
+    NONE: "neutral",
+    RUNNING: "progress", "ON BAKE": "progress", "ON SORT": "progress", "ON BRAND": "progress",
+    "ON LPI": "progress", "ON LLI": "progress", "ON LEADCON": "progress",
+    "FOR DO": "queued", "FOR PROCESS": "queued", "FOR BAKE": "queued", "FOR SORT": "queued",
+    "FOR BRAND": "queued", "FOR LPI": "queued", "FOR LLI": "queued", "FOR LEADCON": "queued",
+    DONE: "done", "DONE DETAPE": "done",
+    "FINAL SHIP": "shipped",
+    IQA: "qa", OQA: "qa", FVI: "qa", "VISUAL (FVI)": "qa", "BUY-OFF": "qa",
+    HANDLER: "handling", DETAPE: "handling", BOXING: "handling",
+    HOLD: "hold", "IQA HOLD": "hold", "TNR HOLD": "hold", "PACK LABEL HOLD": "hold", "FINAL QA HOLD": "hold",
+    REWORK: "rework",
 };
+
+const STATUS_STYLES = Object.fromEntries(
+    Object.entries(STATUS_TONE).map(([status, tone]) => [status, TONE[tone]]),
+);
+STATUS_STYLES["FINAL SHIP"] += " font-extrabold";
 
 export const StatusBadge = memo(function StatusBadge({ status }) {
     const cls =
