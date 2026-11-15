@@ -1150,6 +1150,10 @@ class LoadingPlanEntryService
                 ->sortBy(fn($e) => $requestOrder[$e->id] ?? PHP_INT_MAX)
                 ->values();
 
+            if ($isUnassign && $blockEntries->isNotEmpty()) {
+                throw new \InvalidArgumentException("Time blocks can't be unassigned. Delete the row instead.");
+            }
+
             if ($isUnassign && $lotEntries->contains(fn($e) => $e->rework_seq > 0)) {
                 throw new \InvalidArgumentException('Rework rows cannot be unassigned — delete them instead.');
             }

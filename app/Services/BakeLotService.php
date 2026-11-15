@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\BakeLot;
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -139,6 +140,7 @@ class BakeLotService
                 'b.operator_out',
 
                 'b.bake_status',
+                'b.bake_status AS status',
                 'b.approved_by',
                 'b.added_by',
 

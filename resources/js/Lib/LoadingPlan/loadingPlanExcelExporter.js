@@ -643,7 +643,7 @@ export async function exportLoadingPlanToExcel({
     getMachineLabel = (m) => (m === null || m === undefined ? "Unassigned" : String(m)),
     sortUnassigned = null,
     capacityOverview = null, // { serverMachines, nonMachines, machineCapacity }
-    excludeKeys = ["machine", "id", "entry_id", "sequence_order", "doable_status", "plan_date"],
+    excludeKeys = ["machine", "id", "entry_id", "sequence_order", "doable_status", "plan_date", "scheduled_date"],
 }) {
     if (!Array.isArray(dataRows)) throw new Error("exportLoadingPlanToExcel: `dataRows` must be an array");
     if (!Array.isArray(machines)) throw new Error("exportLoadingPlanToExcel: `machines` must be an array");

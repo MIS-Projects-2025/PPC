@@ -804,7 +804,7 @@ export default function Deemo({
                 columns: DATA_COLUMNS,
                 isBlockRow,
                 sortUnassigned: compareUnassigned,
-                capacityOverview: { serverMachines, nonMachines: serverNonMachines, machineCapacity },
+                capacityOverview: { serverMachines, nonMachines: nonMachineList, machineCapacity },
                 getMachineLabel: labelOfMachine,
             });
             downloadExcelBuffer(buffer, `loading_plan_${date}.xlsx`);

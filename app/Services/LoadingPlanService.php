@@ -587,7 +587,7 @@ class LoadingPlanService
             ? $resolvedScheduledDate
             : ($entry?->scheduled_date?->toDateString() ?? null);
 
-        $formulas = self::timed('Formulas::make', fn() => LoadingPlanFormulas::make($wipRow, $scheduledDate));
+        $formulas = self::timed('Formulas::make', fn() => LoadingPlanFormulas::make($wipRow, $scheduledDate ?? $this->date));
 
         $packageName = $wipRow?->Package_Name ?? $entry?->package_name ?? null;
         $focusGroup  = $wipRow?->Focus_Group ?? null;
