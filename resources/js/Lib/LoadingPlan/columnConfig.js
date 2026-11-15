@@ -132,6 +132,19 @@ export const DATA_COLUMNS = defineColumns(
     EDITABLE_COLUMNS,
 );
 
+/** Data columns for a location. On F3, "Ramp Time" sits right after Machine and is shown as "Input". */
+export function getDataColumns(isF3) {
+    const cols = DATA_COLUMNS.filter((c) => c.key !== PACKAGE_TYPE_KEY || isF3);
+    if (!isF3) return cols;
+
+    const ramp = cols.find((c) => c.key === "ramp_time");
+    const rest = cols.filter((c) => c.key !== "ramp_time");
+    const at = rest.findIndex((c) => c.key === "machine") + 1;
+    if (!ramp || at === 0) return cols; // defensive: leave order alone if either column is missing
+
+    return [...rest.slice(0, at), { ...ramp, name: "Input" }, ...rest.slice(at)];
+}
+
 export const DATA_COLUMN_KEYS = new Set(DATA_COLUMNS.map((c) => c.key));
 
 // header rows span: drag-handle / oven-header column + every data column

@@ -15,6 +15,9 @@ import ExcelJS from "exceljs";
 import { isBlockRow as defaultIsBlockRow, isForBake } from "./helpers";
 import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 
+import { formatF3Machine } from "./f3";
+export { formatF3Machine };
+
 const DATE_COLUMN_KEY = "__export_date_loaded";
 const ITEM_COLUMN_KEY = "__export_item";
 const MACHINE_COLUMN_KEY = "__export_machine";
@@ -115,13 +118,6 @@ function toExcelTime(row, field) {
     return (Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0)) / 86400;
 }
 
-/** "56G6L" -> "G6L056", "10VITROX" -> "VTRX010", "01HSI250" -> "HSI250001". No leading number: null. */
-export function formatF3Machine(name) {
-    const m = /^(\d+)(.+)$/.exec(String(name ?? "").trim());
-    if (!m) return null;
-    return `${m[2].replace(/VITROX/i, "VTRX")}${m[1].padStart(3, "0")}`;
-}
-
 const HEADER_LABEL_OVERRIDES = {
     accu_time: "Accu. Time (hrs)",
     time_start: "Time_start",
@@ -149,6 +145,11 @@ const COLORS = {
     cr3ResFill: "FFFF0000",  // cr3 === "RES"
     dimFont: "FF7F7F7F", // row belongs to another package/location (shown for context)
     border: { style: "thin", color: { argb: "FFB7B7B7" } },
+};
+
+const MIN_COL_WIDTH = {
+    [DATE_COLUMN_KEY]: 20,   // "September 30, 2026" is 18 chars
+    be_starttime: 22,        // "12/31/2026 12:00 PM" is 19 chars
 };
 
 // ---- helpers ----------------------------------------------------------------
@@ -508,10 +509,10 @@ function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }
 
 function renderCapacityOverviewSheet(
     workbook,
-    { serverMachines, nonMachines, machineCapacity, dataRows, summaryRows, location },
+    { serverMachines, nonMachines, machineCapacity, dataRows, summaryRows, location, machineLabel = (m) => m },
 ) {
-    const { byMachine, extraStatuses } = aggregateByMachine({ dataRows, serverMachines, nonMachines });
-    const { groupedSections, grand } = buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity });
+    const { byMachine, extraStatuses, orphanMachines } = aggregateByMachine({ dataRows, serverMachines, nonMachines });
+    const { groupedSections, grand } = buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity, orphanMachines });
     const statusCols = buildStatusCols({ extraStatuses, grand, hideEmpty: true }); // always hide empty
 
     const sheet = workbook.addWorksheet(sanitizeSheetName(OVERVIEW_SHEET_NAME));
@@ -590,7 +591,15 @@ function renderCapacityOverviewSheet(
         for (const r of section.rows) {
             const missingCap = machineCapacity !== undefined && r.kind === "machine" && r.capacity == null;
             addAggRow(
-                { label: r.kind === "non-machine" ? `${r.label} (non-machine)` : r.label, capacity: r.capacity, agg: r.agg },
+                {
+                    label:
+                        r.kind === "non-machine" ? `${r.label} (non-machine)`
+                        : r.kind === "orphan" ? `${machineLabel(r.label)} (not active)`
+                        : r.kind === "machine" ? machineLabel(r.label)
+                        : r.label,
+                    capacity: r.capacity,
+                    agg: r.agg,
+                },
                 { fill: missingCap ? COLORS.lightYellow : null },
             );
         }
@@ -614,8 +623,10 @@ function renderCapacityOverviewSheet(
     renderPtpSummaries(workbook, sheet, {
         summaryRows,
         location,
-        startCol: Math.max(SUMMARY_START_COL, n), // L, unless the main table is already wider
+        startCol: n + 1,
     });
+
+    sheet.getColumn(n + 1).width = 3; // spacer column (1-based = n + 1)
 }
 
 // ---- main -------------------------------------------------------------------
@@ -688,7 +699,11 @@ export async function exportLoadingPlanToExcel({
     const groupSet = new Set(groupNames);
     const bucketIds = new Set(buckets.map((b) => b.id));
     const isParked = (r) => r.bucket_id != null && bucketIds.has(r.bucket_id);
-    const isOtherLoc = (r) => !isBlock(r) && selectedLocation != null && r.location != null && r.location !== selectedLocation;
+    const isOtherLoc = (r) => {
+        if (isBlock(r) || selectedLocation == null) return false;
+        if (r.source != null && (r.source === "f3") !== isF3) return true;
+        return r.location != null && r.location !== selectedLocation;
+    };
     const bucketsFor = (m) => buckets.filter((b) => (b.machine ?? null) === m);
     const byPosition = (a, b) => (a.bucket_position ?? 0) - (b.bucket_position ?? 0);
 
@@ -729,7 +744,10 @@ export async function exportLoadingPlanToExcel({
 
     for (const def of sheetDefs) {
         const sheet = workbook.addWorksheet(sanitizeSheetName(def.name));
-        sheet.columns = exportColumns.map((col) => ({ key: col.key, width: widthFromPx(col.width, col.name) }));
+        sheet.columns = exportColumns.map((col) => ({
+            key: col.key,
+            width: Math.max(widthFromPx(col.width, col.name), MIN_COL_WIDTH[col.key] ?? 0),
+        }));
 
         if (isF3) {
             exportColumns.forEach((col, i) => {
@@ -819,6 +837,7 @@ export async function exportLoadingPlanToExcel({
             dataRows,
             summaryRows,
             location: selectedLocation,
+            machineLabel,
         });
     }
 

@@ -122,10 +122,12 @@ export function aggregateByMachine({ dataRows, serverMachines, nonMachines }) {
     const known = new Set([...serverMachines.map((m) => m.name), ...nonMachines.map((n) => n.key)]);
     const byMachine = new Map();
     const extra = new Set();
+    const orphans = new Set();
 
     for (const row of dataRows) {
-        if (row.machine == null || !known.has(row.machine)) continue; // unassigned / grouped / orphan
+        if (row.machine == null) continue; // unassigned / grouped
         if (isBlockRow(row) || row.is_block) continue;
+        if (!known.has(row.machine)) orphans.add(row.machine);
 
         const status = statusOf(row);
         if (!KNOWN_SET.has(status)) extra.add(status);
@@ -139,13 +141,14 @@ export function aggregateByMachine({ dataRows, serverMachines, nonMachines }) {
         if (!ga) entry.groups.set(g, (ga = emptyAgg()));
         addRow(ga, row, status);
     }
-    return { byMachine, extraStatuses: [...extra].sort() };
+    return { byMachine, extraStatuses: [...extra].sort(), orphanMachines: [...orphans].sort() };
 }
 
-export function buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity }) {
+export function buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity, orphanMachines = [] }) {
     const entities = [
         ...serverMachines.map((m) => ({ key: m.name, label: m.name, kind: "machine", platform: m.platform })),
         ...nonMachines.map((n) => ({ key: n.key, label: n.name, kind: "non-machine" })),
+        ...orphanMachines.map((m) => ({ key: m, label: m, kind: "orphan" })),
     ];
 
     const rows = entities
@@ -279,8 +282,8 @@ function SummaryTable({ sections, grand, grandLabel, statusCols, loading, showUt
                             <SummaryRow
                                 key={`${r.key}-${i}`}
                                 label={r.label}
-                                badge={r.kind === "non-machine" ? "non-machine" : null}
-                                onJump={r.kind !== "manual" ? onJump : undefined}
+                                badge={r.kind === "non-machine" ? "non-machine" : r.kind === "orphan" ? "not active" : null}
+                                onJump={r.kind === "machine" || r.kind === "non-machine" ? onJump : undefined}
                                 jumpKey={r.key}
                                 capacity={r.capacity}
                                 agg={r.agg}
@@ -328,14 +331,14 @@ function OverviewBody({ serverMachines, nonMachines, machineCapacity, dataRows, 
 
     const deferredRows = useDeferredValue(dataRows);
 
-    const { byMachine, extraStatuses } = useMemo(
+    const { byMachine, extraStatuses, orphanMachines } = useMemo(
         () => aggregateByMachine({ dataRows: deferredRows, serverMachines, nonMachines }),
         [deferredRows, serverMachines, nonMachines],
     );
 
     const { simpleSections, groupedSections, grand } = useMemo(
-        () => buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity }),
-        [byMachine, serverMachines, nonMachines, machineCapacity],
+        () => buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity, orphanMachines }),
+        [byMachine, serverMachines, nonMachines, machineCapacity, orphanMachines],
     );
 
     const statusCols = useMemo(

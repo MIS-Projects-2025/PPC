@@ -60,25 +60,45 @@ function bucketSections(ctx, machineKey, isVisible) {
 
 /** Rows planned on a machine that no longer exists in the machine list. */
 function orphanSections(ctx, isVisible) {
-    const { orphanMachines, rowsByMachine, isParked, collapsedMachines } = ctx;
+    const {
+        orphanMachines, rowsByMachine, isParked, collapsedMachines, labelOf,
+        isOtherLoc, rowInActiveTabOwn, expandedMachines, expandedLocations,
+    } = ctx;
 
     return orphanMachines.flatMap((m) => {
-        const rows = (rowsByMachine.get(m) ?? []).filter((r) => !isParked(r) && isVisible(r));
-        if (rows.length === 0) return [];
+        const machineRows = (rowsByMachine.get(m) ?? []).filter((r) => !isParked(r) && isVisible(r));
+        if (machineRows.length === 0) return [];
+
+        const label = labelOf ? labelOf(m) : m;
+        const rowLabel = label !== m ? label : undefined;
+
+        const hiddenKind = (r) => {
+            if (isBlockRow(r)) return null;
+            if (isOtherLoc(r)) return expandedLocations.has(m) ? null : "location";
+            return expandedMachines.has(m) || rowInActiveTabOwn(r) ? null : "package";
+        };
+
+        const shown = collapseHiddenRuns(machineRows, {
+            machine: m,
+            canCollapse: true,
+            kindOf: hiddenKind,
+            toRow: (r) => asDataRow(r, rowLabel),
+        });
+        const dataShown = shown.filter((r) => r.__type === "data");
 
         const isCollapsed = collapsedMachines.has(m);
         const header = {
             id: `header-${m}`,
             __type: "header",
             machine: m,
-            machineLabel: m,
-            __rowCount: rows.length,
-            __lotCount: rows.filter((r) => !isBlockRow(r)).length,
+            machineLabel: label,
+            __rowCount: dataShown.length,
+            __lotCount: dataShown.filter((r) => !isBlockRow(r)).length,
             otherPackageCount: 0,
             __isCollapsed: isCollapsed,
             isLocked: true,
         };
-        return isCollapsed ? [header] : [header, ...rows.map(toDataRow)];
+        return isCollapsed ? [header] : [header, ...shown];
     });
 }
 
@@ -163,7 +183,7 @@ function machineSection(ctx, m) {
     const {
         activePackage, readOnly, rowsByMachine, isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn,
         expandedMachines, expandedLocations, collapsedMachines, nonMachineNameByKey, machinesByName,
-        machinePlatform, otherPackageCounts, showAllMachines, lockedMachine,
+        machinePlatform, otherPackageCounts, showAllMachines, lockedMachine, labelOf,
     } = ctx;
 
     const isAll = activePackage === ALL_PACKAGES_TAB;
@@ -196,11 +216,13 @@ function machineSection(ctx, m) {
     };
 
     const nmName = nonMachineNameByKey.get(m);
+    const fmt = m !== null && labelOf ? labelOf(m) : undefined;
+    const rowLabel = nmName ?? (fmt !== undefined && fmt !== m ? fmt : undefined);
     const shown = collapseHiddenRuns(machineRows, {
         machine: m,
         canCollapse,
         kindOf: hiddenKind,
-        toRow: (r) => asDataRow(r, nmName),
+        toRow: (r) => asDataRow(r, rowLabel),
     });
 
     const dataShown = shown.filter((r) => r.__type === "data");
@@ -219,7 +241,7 @@ function machineSection(ctx, m) {
         nonMachineId: isNonMachine ? Number(m.slice(3)) : undefined,
         machineLocation: machinesByName[m]?.location,
         machineId: machinesByName[m]?.id,
-        machineLabel: getMachineLabel(m, nonMachineNameByKey),
+        machineLabel: labelOf && m !== null ? labelOf(m) : getMachineLabel(m, nonMachineNameByKey),
         platform: machinePlatform.get(m),
         __rowCount: dataShown.length,
         __lotCount: dataShown.filter((r) => !isBlockRow(r)).length,

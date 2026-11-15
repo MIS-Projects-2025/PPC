@@ -47,10 +47,11 @@ import { useDragReorder } from "@/Hooks/LoadingPlan/useDragReorder";
 import { useEntryOperations } from "@/Hooks/LoadingPlan/useEntryOperations";
 import { useLoadingPlanShortcuts } from "@/Hooks/LoadingPlan/useLoadingPlanShortcuts";
 import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
-import { useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
+import { isNonMachineKey, useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
 import { useRowHoverRefs } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useHiddenRowCounts, useRowIndex } from "@/Hooks/LoadingPlan/useRowIndex";
+import { formatF3Machine } from "@/Lib/LoadingPlan/f3";
 import { useSplitMergeOperations } from "@/Hooks/LoadingPlan/useSplitMergeOperations";
 import { useStickyGroupHeader } from "@/Hooks/LoadingPlan/useStickyGroupHeader";
 import { useTableSearch } from "@/Hooks/LoadingPlan/useTableSearch";
@@ -259,10 +260,18 @@ export default function Deemo({
         visitPlan(lockedMachine ? { date: dateStr } : { date: dateStr, location: selectedLocation });
     };
 
+    const lastPlanDate = useRef(isF3 ? null : date);
+    useEffect(() => {
+        if (!isF3) lastPlanDate.current = date;
+    }, [date, isF3]);
+
     const handleLocationChange = (line) => {
         if (line === selectedLocation) return;
-        const crossesF3 = line === F3_FLAG || selectedLocation === F3_FLAG;
-        visitPlan(crossesF3 ? { location: line } : { date, location: line }, { preserveScroll: true, replace: true });
+        const keepDate = line !== F3_FLAG && lastPlanDate.current;
+        visitPlan(
+            keepDate ? { date: lastPlanDate.current, location: line } : { location: line },
+            { preserveScroll: true, replace: true },
+        );
     };
 
     const handleRefresh = () => {
@@ -320,8 +329,13 @@ export default function Deemo({
 
     const nonMachineKeys = useMemo(() => nonMachineList.map((n) => n.key), [nonMachineList]);
     const nonMachineNameByKey = useMemo(() => new Map(nonMachineList.map((n) => [n.key, n.name])), [nonMachineList]);
-    const labelOfMachine = useCallback((m) => getMachineLabel(m, nonMachineNameByKey), [nonMachineNameByKey]);
-
+    const labelOfMachine = useCallback(
+        (m) => {
+            const base = getMachineLabel(m, nonMachineNameByKey);
+            return isF3 && m !== null && !isNonMachineKey(m) ? (formatF3Machine(m) ?? base) : base;
+        },
+        [nonMachineNameByKey, isF3],
+    );
     // ── write operations ─────────────────────────────────────────────────
     const {
         statusMenu, openStatusMenu, closeStatusMenu, handleStatusChange,
@@ -466,13 +480,13 @@ export default function Deemo({
                 activePackage, readOnly, machines, nonMachineKeys, nonMachineNameByKey,
                 rowsByMachine, rowsByBucket, bucketsByMachine, collapsedMachines, expandedMachines, expandedLocations,
                 orphanMachines, machinesByName, machinePlatform, otherPackageCounts, showAllMachines,
-                isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn, lockedMachine
+                isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn, lockedMachine, labelOf: labelOfMachine
             }),
         [
             activePackage, readOnly, machines, nonMachineKeys, nonMachineNameByKey,
             rowsByMachine, rowsByBucket, bucketsByMachine, collapsedMachines, expandedMachines, expandedLocations,
             orphanMachines, machinesByName, machinePlatform, otherPackageCounts, showAllMachines,
-            isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn, lockedMachine
+            isParked, isOtherLoc, rowInActiveTab, rowInActiveTabOwn, lockedMachine, labelOfMachine
         ],
     );
 

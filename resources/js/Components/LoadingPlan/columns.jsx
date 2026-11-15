@@ -4,14 +4,13 @@ import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 import {
     PLAN_DATE_KEY,
     fmtPlanDate,
-    PACKAGE_TYPE_KEY,
     BAKE_COLUMNS,
-    DATA_COLUMNS,
     EDITABLE_COLUMNS,
     NUM_BAKE_COLUMNS,
     PARTNAME_TO_BAKE_KEYS,
     PARTNAME_TO_QTY_KEYS,
     fmtHours,
+    getDataColumns,
 } from "@/Lib/LoadingPlan/columnConfig";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { useContext } from "react";
@@ -198,7 +197,7 @@ function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable, pl
                     />
                     {row.is_carried && (
                         <span
-                            className="badge badge-xs font-semibold whitespace-nowrap shrink-0 bg-base-100 text-base-content border border-base-content/60"
+                            className="badge badge-xs font-semibold whitespace-nowrap shrink-0 bg-base-100 text-base-content border border-base-content/20"
                             title={`Carried over. Originally planned ${row.origin_date ?? "on an earlier day"}`}
                         >
                             ↪ {fmtOrigin(row.origin_date)}
@@ -299,8 +298,7 @@ export function makeColumns(
     planDate = null,
 ) {
     const renderers = createCellRenderers({ onStatusClick, selectedLocation, onEditDoable, planDate });
-    const showPackageType = selectedLocation === F3_FLAG;
-    const dataColumns = DATA_COLUMNS.filter((c) => c.key !== PACKAGE_TYPE_KEY || showPackageType);
+    const dataColumns = getDataColumns(selectedLocation === F3_FLAG);
 
     return [
         compact(SelectColumn),
