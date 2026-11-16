@@ -357,7 +357,7 @@ export default function SelectionToolbar({
 
                     <div className="w-px h-5 bg-base-content/20" />
 
-                    {/* <div className="tooltip" data-tip={reasons.split ?? "Split lot"}>
+                    <div className="tooltip" data-tip={reasons.split ?? "Split lot"}>
                         <button
                             className={`btn btn-ghost text-[11px] font-medium px-2.5 py-1 rounded-lg bg-base-content/10 text-base-content/80 hover:bg-base-content/20 flex items-center gap-1 ${blockedCls(reasons.split)}`}
                             aria-disabled={!!reasons.split}
@@ -365,7 +365,7 @@ export default function SelectionToolbar({
                         >
                             <GoRepoForked size={16} /> split <kbd className="kbd rounded-sm kbd-xs">s</kbd>
                         </button>
-                    </div> */}
+                    </div>
 
                     <div
                         className="tooltip"
