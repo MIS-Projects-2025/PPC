@@ -1769,12 +1769,23 @@ class SchedulerService
 
         $windowStart = $targetDate->copy()->setTime(6, 0, 0);
         $windowEnd = $targetDate->copy()->addDay()->setTime(4, 0, 0);
+        $f3WindowStart = $targetDate->copy()->setTime(12, 0, 0);
+        $f3WindowEnd = $targetDate->copy()->addDay()->setTime(12, 59, 59);
 
         $committed = LoadingPlanEntry::query()
             ->whereIn('machine_id', $machineIds)
             ->where('entry_type', 'lot')
             ->where('loading_plan_entries.rework_seq', 0)
-            ->whereBetween('time_start', [$windowStart, $windowEnd])
+            ->where(function ($q) use ($windowStart, $windowEnd, $f3WindowStart, $f3WindowEnd) {
+                $q->where(function ($w) use ($windowStart, $windowEnd) {
+                    $w->where(fn($s) => $s->whereNull('loading_plan_entries.source')
+                        ->orWhere('loading_plan_entries.source', '!=', 'f3'))
+                        ->whereBetween('loading_plan_entries.time_start', [$windowStart, $windowEnd]);
+                })->orWhere(function ($w) use ($f3WindowStart, $f3WindowEnd) {
+                    $w->where('loading_plan_entries.source', 'f3')
+                        ->whereBetween('loading_plan_entries.time_start', [$f3WindowStart, $f3WindowEnd]);
+                });
+            })
             ->join('lot_quantities', function ($join) {
                 $join->on('lot_quantities.lot_id', '=', 'loading_plan_entries.lot_id')
                     ->on('lot_quantities.scheduled_date', '=', 'loading_plan_entries.scheduled_date')

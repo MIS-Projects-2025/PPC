@@ -62,7 +62,7 @@ abstract class BaseHistoryObserver
 
         $historyModel::create(array_merge([
             $this->parentKeyColumn() => $model->getKey(),
-            'changed_by'             => auth()->id(),
+            'changed_by'             => \App\Support\Actor::id(),
             'change_type'            => $type,
             'changed_columns'        => array_keys($new ?? $old ?? []),
             'old_values'             => $old,

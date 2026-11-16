@@ -1,13 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
-use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware, SessionMiddleware};
+use App\Http\Middleware\{ApiAuthMiddleware, ApiPermissionMiddleware};
 use App\Http\Controllers\{
-    LoadingPlanController,
-    LoadingPlanEntryHistoryController,
-    LoadingPlanEntryController,
     AutoImportController,
     BodySizeController,
     DashboardController,
@@ -16,25 +12,15 @@ use App\Http\Controllers\{
     F3RawPackageController,
     AnalogCalendarController,
     ImportTraceController,
-    BoschPartController,
     MachineController,
     PackageBodySizeCapacityController,
     PackageCapacityController,
     PackageController,
-    PickupPoolController,
     PackageGroupController,
-    LoadingPlanBucketController,
-    LoadingPlanSettingsController,
-    LoadingPlanPackageGroupController,
-    MachineCapacityController,
-    MachinePlatformCapacityBandController,
     PartNameController,
-    NonMachineController,
     PickupController,
     PlPackageMasterController,
-    LoadingPlanSplitController,
     RuleExplorerController,
-    LoadingPlanMergeController,
     PlRuleController,
     CapabilityMatrixController,
     TransitionGroupController,

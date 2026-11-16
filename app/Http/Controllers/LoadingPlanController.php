@@ -427,7 +427,7 @@ class LoadingPlanController extends Controller
         ] + $deferred;
 
         if ($withBaseTimes) {
-            $props['baseTimes'] = $this->getBaseTimes($activeMachines, $date);
+            $props['baseTimes'] = $this->getBaseTimes($activeMachines, $date, $isF3);
             $mark('baseTimes');
         }
 
@@ -465,7 +465,7 @@ class LoadingPlanController extends Controller
         });
     }
 
-    private function getBaseTimes($activeMachines, string $date): array
+    private function getBaseTimes($activeMachines, string $date, bool $isF3 = false): array
     {
         $targetDate = Carbon::parse($date)->toDateString();
         $prevDate   = Carbon::parse($targetDate)->subDay()->toDateString();
@@ -476,7 +476,9 @@ class LoadingPlanController extends Controller
             ->where('time_end', '>', $targetDate)
             ->whereNotNull('time_start')
             ->orderBy('sequence_order')
-            ->get()->groupBy('machine_id')->map->first();
+            ->get()
+            ->reject(fn($e) => $e->source === 'f3' && $e->time_end->lte(Carbon::parse($targetDate)->setTime(12, 0)))
+            ->groupBy('machine_id')->map->first();
 
         $dayStarts = MachineDayStart::whereIn('machine_id', $ids)
             ->where('scheduled_date', $targetDate)
@@ -488,7 +490,9 @@ class LoadingPlanController extends Controller
             ->get(['machine_id', 'sequence_order', 'time_start'])
             ->groupBy('machine_id')->map->first();
 
-        $default = \App\Services\LotScheduleCalculator::MACHINE_DEFAULT_START;
+        $default = $isF3
+            ? \App\Services\LotScheduleCalculator::F3_DEFAULT_START
+            : \App\Services\LotScheduleCalculator::MACHINE_DEFAULT_START;
 
         return $activeMachines->mapWithKeys(function ($m) use ($leaked, $dayStarts, $firstToday, $targetDate, $default) {
             if ($l = $leaked->get($m['id'])) {
@@ -634,8 +638,8 @@ class LoadingPlanController extends Controller
                     // 'location'   => $selectedLocation,
                     'location'   => "All", // never used because scheduler must run for all locations, but still validated to avoid unexpected input
                     'date'       => $date,
-                    // 'user_id'    => auth()->id(),
                     'user_id'    => null,
+                    'run_by' => \App\Support\Actor::id(),
                     'status'     => 'skipped',
                     'note'       => 'No unassigned pickup rows to schedule.',
                 ]);
@@ -658,6 +662,7 @@ class LoadingPlanController extends Controller
                 'location'         => 'All',
                 'date'             => $date,
                 'user_id'          => null,
+                'run_by' => \App\Support\Actor::id(),
                 'status'           => 'ok',
                 'pickup_count'     => count($pickup),
                 'assigned_count'   => $assigned,
@@ -677,8 +682,8 @@ class LoadingPlanController extends Controller
                 // 'location' => $selectedLocation,
                 'location'          => "All",
                 'date'     => $date,
-                // 'user_id'  => auth()->id(),
                 'user_id'           => null,
+                'run_by' => \App\Support\Actor::id(),
                 'status'   => 'error',
                 'note'     => $e->getMessage(),
             ]);

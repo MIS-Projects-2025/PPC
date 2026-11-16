@@ -57,7 +57,7 @@ export default function SchedulerModal({ date, location, history, beginWrite, ho
                             >
                                 <span className="flex items-center gap-1.5">
                                     <span className={clsx("w-1.5 h-1.5 rounded-full shrink-0", STATUS_DOT[r.status] ?? "bg-warning")} />
-                                    {r.user?.name ?? "System"}
+                                    {r.run_by ?? r.user?.name ?? "System"}
                                 </span>
                                 <span className="text-base-content/60">{runSummary(r)}</span>
                                 <span className="text-base-content/40 text-xs">

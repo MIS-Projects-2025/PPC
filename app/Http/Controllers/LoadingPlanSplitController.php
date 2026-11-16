@@ -33,7 +33,7 @@ class LoadingPlanSplitController extends Controller
                 $data['before_entry_id'] ?? null,
                 $data['after_entry_id'] ?? null,
                 $data['child_lot_id'] ?? null,
-                $request->user()?->name, // TODO, user id insertion not yet implemented, field unknown
+                \App\Support\Actor::id(),
             );
             // DD($result);
             return response()->json($result, 201);
@@ -64,7 +64,7 @@ class LoadingPlanSplitController extends Controller
     public function destroy(Request $request, int $splitId): JsonResponse
     {
         try {
-            $result = $this->service->revert($splitId, $request->user()?->name); // TODO, user id insertion not yet implemented, field unknown
+            $result = $this->service->revert($splitId, \App\Support\Actor::id());
 
             return response()->json($result);
         } catch (LoadingPlanDateFinalizedException $e) {
@@ -100,7 +100,7 @@ class LoadingPlanSplitController extends Controller
     public function unrevertSplit(int $split, Request $request): JsonResponse
     {
         try {
-            $result = app(LotSplitService::class)->unrevert($split, $request->user()?->id);
+            $result = app(LotSplitService::class)->unrevert($split, \App\Support\Actor::id());
 
             return response()->json($result);
         } catch (LoadingPlanDateFinalizedException $e) {

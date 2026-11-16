@@ -20,6 +20,36 @@ class LotScheduleCalculator
     private array $lotIds;
     public const NON_MACHINE_DEFAULT_START = '06:00:00';
     public const MACHINE_DEFAULT_START = '06:00:00';
+    public const F3_DEFAULT_START = '12:00:00';
+    public const F3_SOURCE = 'f3';
+
+    /** Lane start when its first lot has this source: 12:00 for F3 travelers, 06:00 for everything else. */
+    public static function defaultStartForSource(?string $source): string
+    {
+        return strtolower(trim((string) $source)) === self::F3_SOURCE
+            ? self::F3_DEFAULT_START
+            : self::MACHINE_DEFAULT_START;
+    }
+
+    /** First instant of "today" for that source: midnight (unchanged) or 12:00 for F3. */
+    public static function dayBoundaryForSource(string $date, ?string $source): Carbon
+    {
+        return Carbon::parse($date)->setTime(
+            strtolower(trim((string) $source)) === self::F3_SOURCE ? 12 : 0,
+            0,
+            0
+        );
+    }
+
+    /** Source of the first lot on a machine lane for $date. Blocks carry no real source, so they are skipped. */
+    private function machineLaneSource(int $machineId, string $date, ?string $fallback = null): ?string
+    {
+        return LoadingPlanEntry::where('machine_id', $machineId)
+            ->where('scheduled_date', $date)
+            ->where('entry_type', 'lot')
+            ->orderBy('sequence_order')
+            ->value('source') ?? $fallback;
+    }
 
     private ?Collection $travelerRecipes = null;
     private ?Collection $machinePlatforms = null;
@@ -28,12 +58,14 @@ class LotScheduleCalculator
 
     public function nonMachineLaneStart(int $nonMachineId, string $date): Carbon
     {
-        return LoadingPlanEntry::where('non_machine_id', $nonMachineId)
+        $first = LoadingPlanEntry::where('non_machine_id', $nonMachineId)
             ->where('scheduled_date', $date)
             ->orderBy('sequence_order')
             ->orderBy('id')
-            ->first()?->time_start?->copy()
-            ?? Carbon::parse("{$date} " . self::NON_MACHINE_DEFAULT_START);
+            ->first();
+
+        return $first?->time_start?->copy()
+            ?? Carbon::parse("{$date} " . self::defaultStartForSource($first?->source));
     }
 
     /**
@@ -61,7 +93,9 @@ class LotScheduleCalculator
 
         $cursor = ($anchor
             ?? $chain->first()->time_start
-            ?? Carbon::parse("{$date} " . self::NON_MACHINE_DEFAULT_START))->copy();
+            ?? Carbon::parse("{$date} " . self::defaultStartForSource(
+                $chain->firstWhere('entry_type', 'lot')?->source ?? $chain->first()->source
+            )))->copy();
 
         $changes = [];
 
@@ -255,12 +289,13 @@ class LotScheduleCalculator
 
         $date = $affectedEntry->scheduled_date->toDateString();
         $predecessor = $this->findPredecessor($affectedEntry);
-        $dayStart = Carbon::parse($date)->startOfDay();
+        $laneSource = $this->machineLaneSource($machineId, $date, $affectedEntry->source);
+        $dayStart = self::dayBoundaryForSource($date, $laneSource);
         $predecessorEnd = $predecessor?->time_end;
 
         $cursor = ($predecessorEnd !== null && $predecessorEnd->gte($dayStart))
             ? $predecessorEnd->copy()
-            : $this->resolveLaneStart($machineId, $date, $anchor);
+            : $this->resolveLaneStart($machineId, $date, $anchor, $laneSource);
 
         $changes = [];
         $currentDate = $date;
@@ -292,7 +327,7 @@ class LotScheduleCalculator
 
             // the next day's rows only depend on this day if it ran past midnight
             $nextDate = Carbon::parse($currentDate)->addDay();
-            if ($cursor->lt($nextDate->copy()->startOfDay())) break;
+            if ($cursor->lt(self::dayBoundaryForSource($nextDate->toDateString(), $laneSource))) break;
 
             $currentDate = $nextDate->toDateString();
             $fromSeq = null;
@@ -333,7 +368,7 @@ class LotScheduleCalculator
      *   3. 06:00
      * The result is persisted so machine_day_starts stays in sync.
      */
-    private function resolveLaneStart(int $machineId, string $date, ?Carbon $anchor): Carbon
+    private function resolveLaneStart(int $machineId, string $date, ?Carbon $anchor, ?string $source = null): Carbon
     {
         $stored = DB::table('machine_day_starts')
             ->where('machine_id', $machineId)
@@ -346,14 +381,14 @@ class LotScheduleCalculator
             $storedStart = null; // e.g. stored value was a full datetime from another day
         }
 
-        $dayStart = Carbon::parse($date)->startOfDay();
+        $dayStart = self::dayBoundaryForSource($date, $source);
         if ($anchor !== null && $anchor->lt($dayStart)) {
             $anchor = null; // captured from an outdated row
         }
 
         $start = $anchor?->copy()
             ?? $storedStart
-            ?? Carbon::parse("{$date} " . self::MACHINE_DEFAULT_START);
+            ?? Carbon::parse("{$date} " . self::defaultStartForSource($source));
 
         $formatted = $start->format('H:i:s');
         if ($stored === null || substr((string) $stored, 0, 8) !== $formatted) {

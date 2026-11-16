@@ -25,7 +25,7 @@ class LoadingPlanMergeController extends Controller
             $result = $this->mergeService->merge(
                 (int) $data['entry_id_a'],
                 (int) $data['entry_id_b'],
-                $request->user()?->emp_name ?? null, // TODO, user id insertion not yet implemented, field unknown
+                \App\Support\Actor::id(),
             );
 
             return response()->json($result, 201);
@@ -55,7 +55,7 @@ class LoadingPlanMergeController extends Controller
         ]);
 
         try {
-            $result = $this->mergeService->revert($merge, $data['reverted_by'] ?? null);
+            $result = $this->mergeService->revert($merge, \App\Support\Actor::id());
 
             return response()->json([
                 'merge'  => $result['merge'],
@@ -83,7 +83,7 @@ class LoadingPlanMergeController extends Controller
     public function unrevertMerge(int $merge, Request $request): JsonResponse
     {
         try {
-            $result = app(LotMergeService::class)->unrevert($merge, $request->user()?->id);
+            $result = app(LotMergeService::class)->unrevert($merge, \App\Support\Actor::id());
 
             return response()->json($result);
         } catch (InvalidMergeException $e) {

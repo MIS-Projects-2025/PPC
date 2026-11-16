@@ -17,6 +17,7 @@ class SchedulerRun extends Model
         'unassigned_count',
         'unmatched_parts',
         'note',
+        'run_by'
     ];
 
     protected $casts = ['unmatched_parts' => 'array', 'date' => 'date'];

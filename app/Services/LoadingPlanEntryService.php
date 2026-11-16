@@ -135,7 +135,7 @@ class LoadingPlanEntryService
 
         $now = now();
         // $by = auth()->id(); // auth() is not available on this whole app.
-        $by = null;
+        $by = \App\Support\Actor::id();
         $ignored = ['updated_at', 'lock_version']; // matches LoadingPlanEntryObserver
 
         $history = $entries->map(function ($e) use ($now, $by, $ignored) {
@@ -245,10 +245,13 @@ class LoadingPlanEntryService
     }
 
     /** Current start of a non-machine lane: first row's time_start, else 06:00. Call BEFORE mutating the lane. */
-    private function laneAnchor(Collection $laneRows, string $date): Carbon
+    private function laneAnchor(Collection $laneRows, string $date, ?string $incomingSource = null): Carbon
     {
-        return $laneRows->sortBy('sequence_order')->first()?->time_start?->copy()
-            ?? Carbon::parse("{$date} " . LotScheduleCalculator::NON_MACHINE_DEFAULT_START);
+        $sorted = $laneRows->sortBy('sequence_order');
+        $source = $sorted->firstWhere('entry_type', 'lot')?->source ?? $incomingSource;
+
+        return $sorted->first()?->time_start?->copy()
+            ?? Carbon::parse("{$date} " . LotScheduleCalculator::defaultStartForSource($source));
     }
 
     public function setNonMachineStart(int $id, string $start, string $date): array
@@ -420,7 +423,7 @@ class LoadingPlanEntryService
                 : $lockedRows->where('machine_id', $targetMachineId);
 
             // lane starts, captured before any row moves
-            $targetAnchor = $targetNonMachineId !== null ? $this->laneAnchor($targetRows, $date) : null;
+            $targetAnchor = $targetNonMachineId !== null ? $this->laneAnchor($targetRows, $date, $movers->firstWhere('entry_type', 'lot')?->source) : null;
             $sourceAnchors = collect($sourceNonMachineIds)
                 ->mapWithKeys(fn($id) => [$id => $this->laneAnchor($lockedRows->where('non_machine_id', $id), $date)])
                 ->all();
@@ -909,7 +912,7 @@ class LoadingPlanEntryService
                 : $rows->where('machine_id', $targetMachineId);
 
             // lane starts, captured before the row moves
-            $targetAnchor = $targetNonMachineId !== null ? $this->laneAnchor($targetRows, $resolvedDate) : null;
+            $targetAnchor = $targetNonMachineId !== null ? $this->laneAnchor($targetRows, $resolvedDate, $entry->source) : null;
             $sourceAnchor = ($sourceNonMachineId !== null && $sourceNonMachineId !== $targetNonMachineId)
                 ? $this->laneAnchor($rows->where('non_machine_id', $sourceNonMachineId), $resolvedDate)
                 : null;
@@ -1199,7 +1202,7 @@ class LoadingPlanEntryService
             $nextSeq = ($targetLane->max('sequence_order') ?? 0) + self::GAP_SEED;
 
             // lane starts, captured before any row moves
-            $targetAnchor = $targetNonMachineId !== null ? $this->laneAnchor($targetLane, $date) : null;
+            $targetAnchor = $targetNonMachineId !== null ? $this->laneAnchor($targetLane, $date, $movers->firstWhere('entry_type', 'lot')?->source ?? ($unplannedLotIds ? $this->sources()->find($unplannedLotIds, $date)->first()?->source : null)) : null;
             $sourceAnchors = collect($sourceNonMachineIds)
                 ->mapWithKeys(fn($id) => [$id => $this->laneAnchor($lockedRows->where('non_machine_id', $id), $date)])
                 ->all();
@@ -1515,7 +1518,7 @@ class LoadingPlanEntryService
     {
         $date         = Carbon::parse($date)->toDateString();
         $previousDate = Carbon::parse($date)->subDay()->toDateString();
-        $dayStart     = Carbon::parse($date)->startOfDay();
+        $dayStart     = Carbon::parse($date)->setTime(12, 0); // F3 shift day starts at 12:00
         $cutoff       = Carbon::parse($date)->subDays(self::F3_CARRY_MAX_AGE_DAYS)->toDateString();
         $result       = ['carried' => 0, 'to_unassigned' => 0, 'skipped' => 0, 'skipped_leaked' => 0];
 
@@ -1645,7 +1648,7 @@ class LoadingPlanEntryService
 
                         // lane starts, captured before anything is inserted
                         $machineAnchor = $machineId !== null ? $this->machineAnchor($lane) : null;
-                        $laneAnchor    = $nonMachineId !== null ? $this->laneAnchor($lane, $date) : null;
+                        $laneAnchor    = $nonMachineId !== null ? $this->laneAnchor($lane, $date, 'f3') : null;
 
                         // carried rows go ahead of whatever already sits on the lane today
                         $minSeq = $lane->min('sequence_order');
@@ -2506,7 +2509,7 @@ class LoadingPlanEntryService
         $write();
 
         $now = now();
-        $by = null;
+        $by = \App\Support\Actor::id();
         $rows = [];
 
         foreach (LoadingPlanEntry::whereKey($ids)->get() as $after) {
@@ -3380,7 +3383,10 @@ class LoadingPlanEntryService
             ->where('scheduled_date', $previousDate)
             ->whereNotNull('machine_id')
             ->where('time_end', '>', $cutoff)
-            ->get();
+            ->get()
+            // F3 rows only leak into the next shift day once they run past 12:00
+            ->reject(fn($e) => $e->source === 'f3' && $e->time_end->lte($cutoff->copy()->setTime(12, 0)))
+            ->values();
     }
 
     public function setCommitOverride(int $entryId, ?int $commit, ?int $expectedLockVersion): array
@@ -3453,7 +3459,7 @@ class LoadingPlanEntryService
         $recipes   = app(RecipeService::class);
         $rootLotId = $source === 'f3' ? $recipes->rootOf((string) $lotId, $date) : null;
 
-        $recipes->update($source, $partName, $rootLotId, $recipe, $updatedBy);
+        $recipes->update($source, $partName, $rootLotId, $recipe, $updatedBy ?? \App\Support\Actor::id());
 
         return $this->recalculateFor([['source' => $source, 'part_name' => $partName, 'lot_id' => $rootLotId]], $date);
     }
@@ -3566,7 +3572,7 @@ class LoadingPlanEntryService
         $calc->loadPackageList();
         $now = now();
         // $changedBy = auth()->id();
-        $changedBy = null;
+        $changedBy = \App\Support\Actor::id();
 
         $floor = Carbon::parse("{$date} 06:00:00");
         $clamp = fn(Carbon $t) => $t->lt($floor) ? $floor->copy() : $t;
