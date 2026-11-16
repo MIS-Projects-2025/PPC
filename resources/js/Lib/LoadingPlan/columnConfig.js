@@ -82,6 +82,7 @@ export const DATA_COLUMNS = defineColumns(
         ["package_name", "Package Name"],
         ["lot_id", "Lot ID", 160],
         ["status", "Status"],
+        ["machine_status", "Machine Status", 150],
         ["station", "Station"],
         ["qty", "Qty"],
         ["doable", "Doable"],

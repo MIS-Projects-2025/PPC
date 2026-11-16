@@ -107,6 +107,8 @@ function cellTextForFit(row, key, getMachineLabel) {
 
 let measureCtx = null;
 
+const COLUMN_MIN_FIT = { machine_status: 150 };
+
 /** { [columnKey]: widthPx } based on the widest content in `rows`. */
 export function computeAutoWidths(rows, columns, getMachineLabel) {
     if (typeof document === "undefined") return {};
@@ -138,7 +140,7 @@ export function computeAutoWidths(rows, columns, getMachineLabel) {
         if (body) body += COLUMN_EXTRA_PX[col.key] ?? 0;
         const header = widthOf(col.name ?? col.key, headFont) + HEADER_EXTRA_X;
         const fit = Math.ceil(Math.max(body, header) + CELL_PADDING_X);
-        out[col.key] = Math.min(AUTO_MAX_WIDTH, Math.max(AUTO_MIN_WIDTH, fit));
+        out[col.key] = Math.min(AUTO_MAX_WIDTH, Math.max(AUTO_MIN_WIDTH, fit, COLUMN_MIN_FIT[col.key] ?? 0));
     });
     return out;
 }

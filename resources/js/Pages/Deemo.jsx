@@ -26,7 +26,6 @@ import { SearchBar } from "@/Components/LoadingPlan/SearchBar";
 import SelectionToolbar from "@/Components/LoadingPlan/SelectionToolbar";
 import SplitHistoryModal from "@/Components/LoadingPlan/SplitHistoryModal";
 import StatusMenu from "@/Components/LoadingPlan/StatusMenu";
-import { useRowFlip } from "@/Hooks/LoadingPlan/useRowFlip";
 import { StickyMachineHeader, StickyOvenHeader } from "@/Components/LoadingPlan/StickyHeaderOverlay";
 import { HEADER_ROW_HEIGHT, ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
 import {
@@ -43,15 +42,16 @@ import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
 import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
 import { useColumnWidths } from "@/Hooks/LoadingPlan/useColumnWidths";
 import { useDoableOperations } from "@/Hooks/LoadingPlan/useDoableOperations";
+import { useDragPreview } from "@/Hooks/LoadingPlan/useDragPreview";
 import { useDragReorder } from "@/Hooks/LoadingPlan/useDragReorder";
 import { useEntryOperations } from "@/Hooks/LoadingPlan/useEntryOperations";
 import { useLoadingPlanShortcuts } from "@/Hooks/LoadingPlan/useLoadingPlanShortcuts";
 import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
 import { isNonMachineKey, useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
 import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
+import { useRowFlip } from "@/Hooks/LoadingPlan/useRowFlip";
 import { useRowHoverRefs } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useHiddenRowCounts, useRowIndex } from "@/Hooks/LoadingPlan/useRowIndex";
-import { formatF3Machine } from "@/Lib/LoadingPlan/f3";
 import { useSplitMergeOperations } from "@/Hooks/LoadingPlan/useSplitMergeOperations";
 import { useStickyGroupHeader } from "@/Hooks/LoadingPlan/useStickyGroupHeader";
 import { useTableSearch } from "@/Hooks/LoadingPlan/useTableSearch";
@@ -61,6 +61,7 @@ import { useToast } from "@/Hooks/useToast";
 import AuthenticatedLayout from "@/Layouts/AuthenticatedLayout";
 import { buildBakeDisplayRows, buildDisplayRows } from "@/Lib/LoadingPlan/buildDisplayRows";
 import { DATA_COLUMNS } from "@/Lib/LoadingPlan/columnConfig";
+import { formatF3Machine } from "@/Lib/LoadingPlan/f3";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
 import { showModal } from "@/Lib/LoadingPlan/modal";
@@ -68,7 +69,6 @@ import { compareUnassigned, createRowMatchers, getMachineLabel } from "@/Lib/Loa
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
-import { useDragPreview } from "@/Hooks/LoadingPlan/useDragPreview";
 import { router } from "@inertiajs/react";
 import clsx from "clsx";
 import dayjs from "dayjs";
@@ -139,6 +139,7 @@ export default function Deemo({
     schedulerHistory,
     readOnly = false,
     lockedMachine = null,
+    machineStatus: serverMachineStatus,
 }) {
     const toast = useToast();
     const isF3 = selectedLocation === F3_FLAG;
@@ -756,6 +757,16 @@ export default function Deemo({
         );
     }, [serverBakingLots]);
 
+    const machineStatus = useMemo(() => {
+        if (serverMachineStatus === undefined) return undefined; // still loading
+        return {
+            available: !!serverMachineStatus?.available,
+            byLot: new Map(
+                Object.entries(serverMachineStatus?.byLot ?? {}).map(([id, s]) => [normalizeLotId(id), s]),
+            ),
+        };
+    }, [serverMachineStatus]);
+
     const tableActionsValue = useMemo(
         () => ({
             handleStatusClick: openStatusMenu,
@@ -765,8 +776,9 @@ export default function Deemo({
             isUpdating: writesLocked,
             nonMachineNameByKey,
             bakingLots,
+            machineStatus,
         }),
-        [openStatusMenu, handleShowSplitHistory, handleShowMergeHistory, nonMachineNameByKey, writesLocked, bakingLots],
+        [openStatusMenu, handleShowSplitHistory, handleShowMergeHistory, nonMachineNameByKey, writesLocked, bakingLots, machineStatus],
     );
 
     // ── pickups / export ─────────────────────────────────────────────────

@@ -2,14 +2,14 @@ import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 import {
-    PLAN_DATE_KEY,
-    fmtPlanDate,
     BAKE_COLUMNS,
     EDITABLE_COLUMNS,
     NUM_BAKE_COLUMNS,
     PARTNAME_TO_BAKE_KEYS,
     PARTNAME_TO_QTY_KEYS,
+    PLAN_DATE_KEY,
     fmtHours,
+    fmtPlanDate,
     getDataColumns,
 } from "@/Lib/LoadingPlan/columnConfig";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
@@ -20,10 +20,12 @@ import { BucketHeaderCell } from "./BucketHeaderBar";
 import { AccuTimeEditor, CellEditor, TimeStartEditor } from "./CellEditor";
 import { DoableCell } from "./DoableCell";
 import { MachineHeaderCell } from "./MachineHeaderCell";
+import { MachineStatusCell } from "./MachineStatusCell";
 import { OvenHeaderCell } from "./OvenHeaderCell";
 import { PartNameCell } from "./PartNameCell";
 import { RowDropTargetCell } from "./RowDropTargetCell";
 import { TableActionsContext } from "./TableActionsContext";
+
 import TimeCell from "./TimeCell";
 // Re-exports so existing `import { ... } from ".../columns"` keep working.
 export {
@@ -217,6 +219,8 @@ function createCellRenderers({ onStatusClick, selectedLocation, onEditDoable, pl
                     onEdit={onEditDoable ? () => onEditDoable(row) : undefined}
                 />
             ),
+
+        machine_status: (row) => (isBlock(row) ? null : <MachineStatusCell row={row} />),
     };
 }
 
@@ -227,7 +231,7 @@ function cellClassFor(key, highlightedMatch) {
 
         const classes = [];
 
-        if (key === "status") classes.push("p-0!");
+        if (key === "status" || key === "machine_status") classes.push("p-0!");
 
         if (highlightedMatch?.rowId === row.id && highlightedMatch?.columnKey === key) {
             classes.push("ring-5 ring-primary ring-inset");

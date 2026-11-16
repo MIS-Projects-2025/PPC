@@ -11,9 +11,9 @@ import {
 } from "@/Components/LoadingPlan/CapacityOverviewModal.jsx";
 import { STATUS_TONE } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { PARTNAME_TO_BAKE_KEYS, PARTNAME_TO_QTY_KEYS } from "@/Components/LoadingPlan/columns";
+import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 import ExcelJS from "exceljs";
 import { isBlockRow as defaultIsBlockRow, isForBake } from "./helpers";
-import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
 
 import { formatF3Machine } from "./f3";
 export { formatF3Machine };
@@ -654,7 +654,7 @@ export async function exportLoadingPlanToExcel({
     getMachineLabel = (m) => (m === null || m === undefined ? "Unassigned" : String(m)),
     sortUnassigned = null,
     capacityOverview = null, // { serverMachines, nonMachines, machineCapacity }
-    excludeKeys = ["machine", "id", "entry_id", "sequence_order", "doable_status", "plan_date", "scheduled_date"],
+    excludeKeys = ["machine", "id", "entry_id", "sequence_order", "doable_status", "plan_date", "scheduled_date", "machine_status"],
 }) {
     if (!Array.isArray(dataRows)) throw new Error("exportLoadingPlanToExcel: `dataRows` must be an array");
     if (!Array.isArray(machines)) throw new Error("exportLoadingPlanToExcel: `machines` must be an array");

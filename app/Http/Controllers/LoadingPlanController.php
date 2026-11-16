@@ -32,6 +32,8 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use App\Models\BoschPart;
 use App\Exceptions\LoadingPlanDateFinalizedException;
+use App\Models\LotSplit;
+use App\Services\MachineStatusService;
 
 class LoadingPlanController extends Controller
 {
@@ -190,6 +192,21 @@ class LoadingPlanController extends Controller
         });
     }
 
+    /** Lot ids to look up, plus the root lot of any split child (the machine knows the physical lot, not "X.2"). */
+    private function monitoringLotIds($ids, string $date, string $previousDate)
+    {
+        $ids = collect($ids)->filter()->unique()->values();
+        $set = $ids->flip();
+
+        $roots = LotSplit::active()
+            ->whereIn('scheduled_date', [$date, $previousDate])
+            ->get(['child_lot_id', 'root_lot_id'])
+            ->filter(fn($s) => $set->has($s->child_lot_id))
+            ->pluck('root_lot_id');
+
+        return $ids->concat($roots)->unique()->values();
+    }
+
     /**
      * Shared read path for both index() and readOnly(): resolves date /
      * location, builds the package list, active machines, bake lots, and
@@ -282,6 +299,23 @@ class LoadingPlanController extends Controller
                         'capacity'       => $item->capacity,
                         'effective_from' => $item->effective_from,
                     ])
+            ),
+            'machineStatus' => Inertia::defer(
+                fn() => app(MachineStatusService::class)->forLots(
+                    $this->monitoringLotIds(
+                        $machine
+                            ? $this->machineLotIds($machine['id'], $date, $previousDate)
+                            : $wipRows->pluck('Lot_Id')
+                            ->concat($svc->todayF3Rows->keys())
+                            ->concat(
+                                LoadingPlanEntry::whereIn('scheduled_date', [$date, $previousDate])
+                                    ->where('entry_type', 'lot')->pluck('lot_id')
+                            ),
+                        $date,
+                        $previousDate,
+                    )
+                ),
+                'monitoring', // own group: never delays Capacity / Data Integrity
             ),
         ];
 
