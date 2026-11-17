@@ -55,7 +55,7 @@ class RecipeService
             ->unique('lot_number')
             ->mapWithKeys(fn($t) => [$t->lot_number => new RecipeInfo(
                 $t->process_rqmt > 0 ? (int) $t->process_rqmt : null,   // 0 = no recipe
-                $t->input_type,
+                $t->carrier_type ? strtoupper($t->carrier_type) : null,   // reel/tray/tube decides the 95% rule, not input_type
                 RecipeInfo::PROCESS_TRAVELER,
                 $t->id,
             )]);
@@ -137,7 +137,7 @@ class RecipeService
         if ($rootLotId === '' || !$q->exists()) {
             throw new \InvalidArgumentException("Traveler [{$rootLotId}] not found.");
         }
-        if (self::isFixedRate((clone $q)->value('input_type'))) {
+        if (self::isFixedRate((clone $q)->value('carrier_type'))) {
             throw new \InvalidArgumentException('Doable for TUBE/TRAY lots uses a fixed 95% rule, not a recipe.');
         }
 

@@ -122,6 +122,10 @@ class CustomerDataWip extends Model
     {
         return (bool) ($this->attributes['traveler_deleted'] ?? false);
     }
+    public function getCarrierTypeAttribute(): ?string
+    {
+        return $this->attributes['carrier_type'] ?? null;
+    }
     public function getTravelerRemarksAttribute(): ?string
     {
         return $this->attributes['traveler_remarks'] ?? null;

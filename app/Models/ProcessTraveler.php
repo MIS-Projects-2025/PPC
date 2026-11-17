@@ -26,6 +26,30 @@ class ProcessTraveler extends Model
         'qty'          => 'decimal:3',
     ];
 
+    /** carrier_type -> what the Station column shows (F3 only). Reel runs through TNR. */
+    public const CARRIER_STATION_LABELS = [
+        'reel' => 'TNR',
+        'tray' => 'TRAY',
+        'tube' => 'TUBE',
+    ];
+
+    /** carrier_type is stored as reel/tray/tube. The model always exposes it trimmed and lower-cased, or null. */
+    protected function carrierType(): Attribute
+    {
+        return Attribute::make(
+            get: fn($v) => ($s = strtolower(trim((string) $v))) === '' ? null : $s,
+            set: fn($v) => ($s = strtolower(trim((string) $v))) === '' ? null : $s,
+        );
+    }
+
+    /** "TNR" for reel, "TRAY" / "TUBE" as is, null when the carrier is empty or unknown. */
+    public function carrierStationLabel(): ?string
+    {
+        $carrier = $this->carrier_type;
+
+        return $carrier === null ? null : (self::CARRIER_STATION_LABELS[$carrier] ?? null);
+    }
+
     /** DB stores 'yes'/'no' (varchar(3)); the model exposes a boolean. */
     protected function forBake(): Attribute
     {
@@ -68,6 +92,7 @@ class ProcessTraveler extends Model
             'Date_Loaded'  => $this->date_created?->toDateTimeString(), // might use this to retain time?
             'BE_Starttime' => $this->date_created?->toDateTimeString(),
             'Ramp_Time'    => $this->input_type,
+            'Station'      => $this->carrierStationLabel(),   // F3: TNR (reel) / TRAY / TUBE
             'Bake'         => $this->for_bake ? 'For Bake' : null,
             'Qty'          => (int) round((float) $this->qty),
             'import_date'  => $this->date_created?->toDateString(),
@@ -75,6 +100,7 @@ class ProcessTraveler extends Model
 
         // In-memory only; read through accessors on CustomerDataWip
         $w->setAttribute('source', 'f3');
+        $w->setAttribute('carrier_type', $this->carrier_type);
         $w->setAttribute('traveler_id', $this->id);
         $w->setAttribute('traveler_deleted', $this->trashed());
         $w->setAttribute('traveler_remarks', $this->remarks);

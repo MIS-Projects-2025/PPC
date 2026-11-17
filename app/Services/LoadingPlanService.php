@@ -554,7 +554,7 @@ class LoadingPlanService
                 'devicename'  => $quantity->part_name,
                 'recipe'      => $quantity->recipe_used,
                 'packageType' => $wipRow?->Package_Name,
-                'allocation'  => $wipRow?->Ramp_Time,
+                'allocation'  => $wipRow?->carrier_type ? strtoupper($wipRow->carrier_type) : null,
                 'source'      => 'process_traveler',
             ],
             (bool) ($quantity?->recipe_source_id) => [
