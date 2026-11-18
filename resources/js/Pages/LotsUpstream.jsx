@@ -24,7 +24,7 @@ import Pagination from "@/Components/Pagination";
 import SearchInput from "@/Components/SearchInput";
 import { useDownloadFile } from "@/Hooks/useDownload";
 import { parseLotScanInput } from "@/Lib/parseLotScanInput";
-import { router } from "@inertiajs/react";
+import { Head, router } from "@inertiajs/react";
 import JsBarcode from "jsbarcode";
 import { GrAscend, GrDescend } from "react-icons/gr";
 import { TiArrowDownThick } from "react-icons/ti";
@@ -1207,6 +1207,7 @@ export default function LotsUpstream({
 
     return (
         <div className="bg-base-200 font-mono w-full">
+            <Head title={`${productionLine ?? ""} WIPCON`}/>
             <Toaster position="top-left" />
 
             <dialog

@@ -1,13 +1,18 @@
 /**
  * Loading Plan Excel exporter (ExcelJS)
- * Sheets: Unassigned, RES, one per package group, Other.
+ * Sheets: Unassigned, RES, one per package group, Other, then "PTP 95%" (capacity overview).
  * Each sheet is split into per-machine sections; grouped ("parked") lots are
  * written under their group label. Rules mirror Deemo's displayRows/makeColumns.
+ *
+ * The PTP sheets are live: hidden data sheets link back to each lot's own row on the
+ * main sheets, and every PTP number is a formula over those data sheets.
  */
 import {
+    PACKAGE_SUMMARY_GROUPS,
     aggregateByMachine,
     buildOverviewSections,
     buildStatusCols,
+    resolveSummaryGroup,
 } from "@/Components/LoadingPlan/CapacityOverviewModal.jsx";
 import { STATUS_TONE } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { PARTNAME_TO_BAKE_KEYS, PARTNAME_TO_QTY_KEYS } from "@/Components/LoadingPlan/columns";
@@ -128,7 +133,7 @@ const COLORS = {
     sectionTitleFont: "FF1F4E78",
     headerFill: "C6E0B4",
     groupFill: "FFDDEBF7",
-    
+
     // for F3 CT coloring
     ctMid:  "FF00B0F0",
     ctHigh: "FFDE83D0",
@@ -195,6 +200,35 @@ const planDateToExcel = (ymd) => {
     const [y, m, d] = ymd.split("-").map(Number);
     return new Date(Date.UTC(y, m - 1, d));
 };
+
+// ---- formula helpers (live PTP sheets) ---------------------------------------
+
+const quoteSheet = (name) => `'${String(name).replace(/'/g, "''")}'`;
+
+/** Reference to a lot's own cell on the main sheets, or null when it wasn't written / column not exported. */
+const srcRef = (r, k, sourceCols) =>
+    r.ref && sourceCols?.[k] ? `${quoteSheet(r.ref.sheet)}!${sourceCols[k]}${r.ref.rowNumber}` : null;
+
+/** Trimmed text of a cell, `blank` when empty or on error; optional wrapper fn such as UPPER. */
+const cleanText = (ref, blank, fn = "") =>
+    `IFERROR(IF(TRIM(${ref}&"")="","${blank}",${fn}(TRIM(${ref}&""))),"${blank}")`;
+
+/** Number, or text that looks like one, else 0 (avoids VALUE() locale problems on real numbers). */
+const numOf = (ref) => `IFERROR(IF(ISNUMBER(${ref}),${ref},VALUE(${ref}&"")),0)`;
+
+const xlText = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+
+/** "=" + text so COUNTIFS/SUMIFS match exactly; ~ escapes wildcards. */
+const critText = (s) => `"=${String(s).replace(/[~*?]/g, "~$&").replace(/"/g, '""')}"`;
+
+/** SUM() takes at most 255 arguments. */
+const sumRefs = (refs) => {
+    const parts = [];
+    for (let i = 0; i < refs.length; i += 200) parts.push(`SUM(${refs.slice(i, i + 200).join(",")})`);
+    return parts.join("+") || "0";
+};
+
+// ---- main-sheet rows ----------------------------------------------------------
 
 function resolveCellValue(col, row, ctx) {
     if (col.key === DATE_COLUMN_KEY) {
@@ -270,6 +304,11 @@ function writeRows(sheet, rows, ctx) {
         );
         const dataRow = sheet.addRow(values);
 
+        // Remember where each lot's own (non-dimmed) copy lives, so the PTP sheets can link to it.
+        if (ctx.cellRefs && !ctx.isBlock(row) && (!ctx.isOwn || ctx.isOwn(row)) && !ctx.cellRefs.has(row)) {
+            ctx.cellRefs.set(row, { sheet: sheet.name, rowNumber: dataRow.number });
+        }
+
         const dim = !!ctx.isOwn && !ctx.isBlock(row) && !ctx.isOwn(row);
 
         ctx.exportColumns.forEach((col, i) => {
@@ -341,10 +380,14 @@ function renderSection({ sheet, title, rows, groups = [], ctx }) {
     sheet.addRow([]);
 }
 
+// ---- PTP sheets ----------------------------------------------------------------
+
 const OVERVIEW_SHEET_NAME = "PTP 95%";
 
 const PTP_DATA_SHEET = "PTP Data";
-const SUMMARY_START_COL = 11; // 0-based, = column L
+const MACHINE_DATA_SHEET = "PTP Machine Data";
+const GROUP_MAP_SHEET = "PTP Groups";
+const GROUP_MAP_LAST_ROW = 300; // range reaches past the written rows, so rows the user adds are picked up
 
 // Counted towards "TNR % Completion". Aliases are harmless: each lot has one status.
 const TNR_DONE_STATUSES = ["DONE", "FVI", "VISUAL (FVI)", "OQA", "BOXING", "BUY OFF", "BUY-OFF"];
@@ -362,18 +405,33 @@ function styleHeaderCell(cell) {
 
 /**
  * Package totals at `startCol` (0-based) and the status table 5 columns to its right.
- * Everything is a formula over a hidden flat data sheet.
+ * Everything is a formula over a hidden flat data sheet, whose cells link to each lot's own row
+ * on the main sheets (lots without a link keep their exported value).
  */
-function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }) {
+function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol, sourceCols }) {
     // ---- hidden source data ----
     const data = workbook.addWorksheet(PTP_DATA_SHEET);
     data.state = "hidden";
     data.addRow(["Package", "Status", "Qty", "Doable", "Lot_Id"]);
-    summaryRows.forEach((r) => data.addRow([r.pkg, r.status, r.qty, r.doable, r.lotId]));
+
+    summaryRows.forEach((r) => {
+        const [p, s, q, d, l] = ["pkg", "status", "qty", "doable", "lotId"].map((k) => srcRef(r, k, sourceCols));
+        data.addRow([
+            p ? { formula: cleanText(p, "(blank)"), result: r.pkg } : r.pkg,
+            s ? { formula: cleanText(s, "(blank)", "UPPER"), result: r.status } : r.status,
+            q ? { formula: numOf(q), result: r.qty } : r.qty,
+            d ? { formula: numOf(d), result: r.doable } : r.doable,
+            l ? { formula: `IFERROR(${l}&"","")`, result: r.lotId } : r.lotId,
+        ]);
+    });
 
     const last = Math.max(summaryRows.length + 1, 2);
     const rng = (c) => `'${PTP_DATA_SHEET}'!$${c}$2:$${c}$${last}`;
     const [PKG, STATUS, QTY, DOABLE, LOT] = ["A", "B", "C", "D", "E"].map(rng);
+
+    const HEADER_ROW = 2; // same row as the main table's header
+    const FIRST = HEADER_ROW + 1;
+    const NUM = "#,##0";
 
     const cellAt = (row, col) => sheet.getRow(row).getCell(col);
     const put = (row, col, value, { numFmt, bold, fill } = {}) => {
@@ -391,10 +449,6 @@ function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }
         styleHeaderCell(cell);
     };
     const sum = (list, k) => list.reduce((s, r) => s + r[k], 0);
-
-    const HEADER_ROW = 2; // same row as the main table's header
-    const FIRST = HEADER_ROW + 1;
-    const NUM = "#,##0";
 
     // ---- 1) PACKAGE | Sum of QTY | Sum of Doable | Count of Lot_Id ----
     const pc = startCol + 1; // 1-based column number
@@ -414,28 +468,22 @@ function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }
         put(r, pc, pkg);
         put(r, pc + 1, { formula: `SUMIFS(${QTY},${PKG},${ref})`, result: sum(mine, "qty") }, { numFmt: NUM });
         put(r, pc + 2, { formula: `SUMIFS(${DOABLE},${PKG},${ref})`, result: sum(mine, "doable") }, { numFmt: NUM });
+        // SUMPRODUCT, not COUNTIFS "<>": linked cells return "" which COUNTIFS "<>" would count
         put(r, pc + 3, {
-            formula: `COUNTIFS(${PKG},${ref},${LOT},"<>")`,
+            formula: `SUMPRODUCT((${PKG}=${ref})*(LEN(${LOT})>0))`,
             result: mine.filter((x) => x.lotId !== "").length,
         }, { numFmt: NUM });
     });
 
+    // Grand totals cover the whole data range, so a package typed in later is still counted.
     const pkgTotalRow = FIRST + packages.length;
     const totalOpts = { bold: true, fill: COLORS.groupFill, numFmt: NUM };
     put(pkgTotalRow, pc, "Grand Total", { bold: true, fill: COLORS.groupFill });
     [
-        ["qty", sum(summaryRows, "qty")],
-        ["doable", sum(summaryRows, "doable")],
-        ["lots", summaryRows.filter((x) => x.lotId !== "").length],
-    ].forEach(([, result], i) => {
-        const col = L(i + 1);
-        put(
-            pkgTotalRow,
-            pc + 1 + i,
-            packages.length ? { formula: `SUM(${col}${FIRST}:${col}${pkgTotalRow - 1})`, result } : 0,
-            totalOpts,
-        );
-    });
+        [`SUM(${QTY})`, sum(summaryRows, "qty")],
+        [`SUM(${DOABLE})`, sum(summaryRows, "doable")],
+        [`SUMPRODUCT(--(LEN(${LOT})>0))`, summaryRows.filter((x) => x.lotId !== "").length],
+    ].forEach(([formula, result], i) => put(pkgTotalRow, pc + 1 + i, { formula, result }, totalOpts));
 
     // ---- 2) <location> | Number of Lots | Percentage ----
     const sc = pc + 5; // 1-based, like pc: column Q when the package table starts at L
@@ -457,7 +505,8 @@ function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }
     const REMARKS_ROW = FIRST + 1;
     const STATUS_FIRST = FIRST + 2;
     const STATUS_LAST = STATUS_FIRST + statuses.length - 1;
-    const TOTAL_ROW = STATUS_LAST + 1;
+    const OTHER_ROW = STATUS_LAST + 1;
+    const TOTAL_ROW = OTHER_ROW + 1;
     const total = summaryRows.length;
     const totalRef = `$${S1}$${TOTAL_ROW}`;
     const pct = (ref) => `IF(${totalRef}=0,0,${ref}/${totalRef})`;
@@ -487,19 +536,20 @@ function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }
         put(r, sc + 2, { formula: pct(`${S1}${r}`), result: total ? n / total : 0 }, { numFmt: "0%" });
     });
 
+    // Catches any status the user types in later that has no row above.
+    put(OTHER_ROW, sc, "Other (not listed)");
+    put(OTHER_ROW, sc + 1, {
+        formula: statuses.length ? `${totalRef}-SUM(${S1}${STATUS_FIRST}:${S1}${STATUS_LAST})` : totalRef,
+        result: statuses.length ? 0 : total,
+    }, { numFmt: NUM });
+    put(OTHER_ROW, sc + 2, { formula: pct(`${S1}${OTHER_ROW}`), result: statuses.length ? 0 : total ? 1 : 0 }, { numFmt: "0%" });
+
+    // TOTAL counts every lot; the percentage sums through the Other row.
     put(TOTAL_ROW, sc, "TOTAL", { bold: true, fill: COLORS.groupFill });
-    put(
-        TOTAL_ROW,
-        sc + 1,
-        statuses.length ? { formula: `SUM(${S1}${STATUS_FIRST}:${S1}${STATUS_LAST})`, result: total } : 0,
-        { bold: true, fill: COLORS.groupFill, numFmt: NUM },
-    );
-    put(
-        TOTAL_ROW,
-        sc + 2,
-        statuses.length ? { formula: `SUM(${L(7)}${STATUS_FIRST}:${L(7)}${STATUS_LAST})`, result: total ? 1 : 0 } : 0,
-        { bold: true, fill: COLORS.groupFill, numFmt: "0%" },
-    );
+    put(TOTAL_ROW, sc + 1, { formula: `SUMPRODUCT(--(LEN(${STATUS})>0))`, result: total },
+        { bold: true, fill: COLORS.groupFill, numFmt: NUM });
+    put(TOTAL_ROW, sc + 2, { formula: `SUM(${L(7)}${STATUS_FIRST}:${L(7)}${OTHER_ROW})`, result: total ? 1 : 0 },
+        { bold: true, fill: COLORS.groupFill, numFmt: "0%" });
 
     // widths: package table, gap, status table
     [[0, 22], [1, 14], [2, 14], [3, 14], [4, 3], [5, 22], [6, 16], [7, 12]].forEach(([off, w]) => {
@@ -507,20 +557,96 @@ function renderPtpSummaries(workbook, sheet, { summaryRows, location, startCol }
     });
 }
 
+// ---- package group lookup (visible, editable) ----------------------------------
+
+function renderGroupMap(workbook) {
+    const sheet = workbook.addWorksheet(GROUP_MAP_SHEET);
+    sheet.columns = [{ width: 28 }, { width: 28 }, { width: 3 }, { width: 70 }];
+
+    const head = sheet.addRow(["Package", "Group"]);
+    head.eachCell((cell) => styleHeaderCell(cell));
+    sheet.getCell("D1").value = "Add a row for any package that should roll up into a group. Lookup is not case-sensitive.";
+    sheet.getCell("D1").font = { italic: true, color: { argb: COLORS.dimFont } };
+
+    // same keys as LOOKUP in CapacityOverviewModal: every label and every member -> its label
+    const seen = new Set();
+    PACKAGE_SUMMARY_GROUPS.forEach((g) =>
+        [g.label, ...g.members].forEach((m) => {
+            const text = String(m).trim();
+            const key = text.toUpperCase();
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            sheet.addRow([text, g.label]);
+        }),
+    );
+
+    return `'${GROUP_MAP_SHEET}'!$A$2:$B$${GROUP_MAP_LAST_ROW}`;
+}
+
+// Mirrors resolveSummaryGroup(package_group, package_name):
+// first name found in the map, else the first non-empty name, else "Other".
+const groupFormula = (pg, pn, map) => {
+    const hit = (x) => `IF(TRIM(${x}&"")="",NA(),VLOOKUP(TRIM(${x}&""),${map},2,FALSE))`;
+    return (
+        `IFERROR(${hit(pg)},IFERROR(${hit(pn)},` +
+        `IF(TRIM(${pg}&"")<>"",TRIM(${pg}&""),IF(TRIM(${pn}&"")<>"",TRIM(${pn}&""),"Other"))))`
+    );
+};
+
+// ---- hidden per-lot data for the machine table ---------------------------------
+
+function renderMachineData(workbook, machineRows, { sourceCols, machineLabel }) {
+    const data = workbook.addWorksheet(MACHINE_DATA_SHEET);
+    data.state = "hidden";
+    data.addRow(["Machine", "Group", "Status", "Qty", "Doable"]);
+
+    const groupMap = renderGroupMap(workbook);
+
+    machineRows.forEach((r) => {
+        const [m, s, q, d] = ["machine", "status", "qty", "doable"].map((k) => srcRef(r, k, sourceCols));
+        // linked to the main sheet when that column is exported, otherwise the current value is baked in
+        const pg = srcRef(r, "pkgGroup", sourceCols) ?? xlText(r.pkgGroup);
+        const pn = srcRef(r, "pkgName", sourceCols) ?? xlText(r.pkgName);
+        const label = machineLabel(r.machine);
+
+        data.addRow([
+            m ? { formula: cleanText(m, "(blank)"), result: label } : label,
+            r.ref ? { formula: groupFormula(pg, pn, groupMap), result: r.group } : r.group,
+            s ? { formula: cleanText(s, "NONE", "UPPER"), result: r.status } : r.status,
+            q ? { formula: numOf(q), result: r.qty } : r.qty,
+            d ? { formula: numOf(d), result: r.doable } : r.doable,
+        ]);
+    });
+
+    const last = Math.max(machineRows.length + 1, 2);
+    const rng = (c) => `'${MACHINE_DATA_SHEET}'!$${c}$2:$${c}$${last}`;
+    return { machine: rng("A"), group: rng("B"), status: rng("C"), qty: rng("D"), doable: rng("E") };
+}
+
+// ---- capacity overview ("PTP 95%") ---------------------------------------------
+
 function renderCapacityOverviewSheet(
     workbook,
-    { serverMachines, nonMachines, machineCapacity, dataRows, summaryRows, location, machineLabel = (m) => m },
+    {
+        serverMachines, nonMachines, machineCapacity, dataRows, summaryRows,
+        machineRows, sourceCols, location, machineLabel = (m) => m,
+    },
 ) {
     const { byMachine, extraStatuses, orphanMachines } = aggregateByMachine({ dataRows, serverMachines, nonMachines });
     const { groupedSections, grand } = buildOverviewSections({ byMachine, serverMachines, nonMachines, machineCapacity, orphanMachines });
     const statusCols = buildStatusCols({ extraStatuses, grand, hideEmpty: true }); // always hide empty
 
+    // Overview first so it comes before the data sheets in the tab order.
     const sheet = workbook.addWorksheet(sanitizeSheetName(OVERVIEW_SHEET_NAME));
+    const M = renderMachineData(workbook, machineRows, { sourceCols, machineLabel });
 
+    const HEADER_ROW = 2;
     const FIRST_STATUS = 4; // 0-based index after Machine, Capacity, Quantity, Planned
     const PCT = FIRST_STATUS + statusCols.length;
     const COMMIT = PCT + 1;
     const n = COMMIT + 1;
+    const statusLetter = (i) => colLetter(FIRST_STATUS + i);
+    const doneIdx = statusCols.findIndex((c) => c.status === "DONE");
 
     sheet.columns = [
         { width: 24 }, { width: 12 }, { width: 12 }, { width: 10 },
@@ -534,7 +660,7 @@ function renderCapacityOverviewSheet(
     for (let i = 1; i <= n; i++) titleRow.getCell(i).fill = solid(COLORS.headerFill);
     titleRow.getCell(1).font = { bold: true, size: 16, color: { argb: COLORS.sectionTitleFont } };
 
-    // header
+    // header (status criteria below read these cells, so keep them as the plain status text)
     const headerRow = sheet.addRow([
         "Machine", "Capacity", "Quantity", "Planned",
         ...statusCols.map((c) => c.status),
@@ -549,7 +675,41 @@ function renderCapacityOverviewSheet(
     }
     sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 2 }];
 
-    const addAggRow = ({ label, capacity, agg }, { fill = null, bold = false } = {}) => {
+    // ---- live formulas -------------------------------------------------------
+    // live = { kind: "match", key, group } | { kind: "sum", from, to } | { kind: "all" }
+    const liveFormulas = (live) => {
+        const statusCrit = (i) => `"="&${statusLetter(i)}$${HEADER_ROW}`;
+
+        if (live.kind === "match") {
+            const c = `${M.machine},${critText(machineLabel(live.key))}` +
+                (live.group ? `,${M.group},${critText(live.group)}` : "");
+            return {
+                qty: `SUMIFS(${M.qty},${c})`,
+                planned: `COUNTIFS(${c})`,
+                status: (i) => `COUNTIFS(${c},${M.status},${statusCrit(i)})`,
+                commit: `SUMIFS(${M.doable},${c})`,
+            };
+        }
+        if (live.kind === "sum") {
+            const col = (L) => `SUM(${L}${live.from}:${L}${live.to})`;
+            return {
+                capacity: col("B"),
+                qty: col("C"),
+                planned: col("D"),
+                status: (i) => col(statusLetter(i)),
+                commit: col(colLetter(COMMIT)),
+            };
+        }
+        // "all": every lot in the data sheet, even ones on machines that have no row here
+        return {
+            qty: `SUM(${M.qty})`,
+            planned: `SUMPRODUCT(--(LEN(${M.machine})>0))`,
+            status: (i) => `COUNTIFS(${M.status},${statusCrit(i)})`,
+            commit: `SUM(${M.doable})`,
+        };
+    };
+
+    const addAggRow = ({ label, capacity, agg, live }, { fill = null, bold = false } = {}) => {
         const done = agg.counts.DONE ?? 0;
         const row = sheet.addRow([
             label,
@@ -557,9 +717,20 @@ function renderCapacityOverviewSheet(
             agg.qty,
             agg.planned,
             ...statusCols.map(({ status }) => agg.counts[status] ?? 0),
-            agg.planned > 0 ? done / agg.planned : null,
+            null,
             agg.commit,
         ]);
+
+        const f = liveFormulas(live);
+        const setF = (i, formula, result) => { row.getCell(i + 1).value = { formula, result }; };
+        const r = row.number;
+        if (f.capacity) setF(1, f.capacity, capacity || 0);
+        setF(2, f.qty, agg.qty);
+        setF(3, f.planned, agg.planned);
+        statusCols.forEach(({ status }, i) => setF(FIRST_STATUS + i, f.status(i), agg.counts[status] ?? 0));
+        setF(COMMIT, f.commit, agg.commit);
+        const doneRef = doneIdx === -1 ? "0" : `${statusLetter(doneIdx)}${r}`;
+        setF(PCT, `IF(D${r}=0,"",${doneRef}/D${r})`, agg.planned > 0 ? done / agg.planned : "");
 
         for (let i = 0; i < n; i++) {
             const cell = row.getCell(i + 1);
@@ -570,7 +741,6 @@ function renderCapacityOverviewSheet(
             const isStatus = i >= FIRST_STATUS && i < PCT;
             if (isStatus) {
                 cell.alignment = { horizontal: "center" };
-                if (cell.value === 0) cell.font = { ...(cell.font || {}), color: { argb: COLORS.dimFont } };
                 if (statusCols[i - FIRST_STATUS].borderLeft) {
                     cell.border = { ...cell.border, left: { style: "medium", color: { argb: "FF7F7F7F" } } };
                 }
@@ -579,18 +749,23 @@ function renderCapacityOverviewSheet(
             }
         }
         row.getCell(PCT + 1).numFmt = "0%";
-        for (const i of [1, 2, COMMIT]) row.getCell(i + 1).numFmt = "#,##0";
+        row.getCell(2).numFmt = '#,##0;-#,##0;"—"';
+        for (const i of [2, COMMIT]) row.getCell(i + 1).numFmt = "#,##0";
         return row;
     };
+
+    const capRefs = []; // first row of each machine, so the grand capacity counts it once
+    const seenMachines = new Set();
 
     for (const section of groupedSections) {
         const labelRow = sheet.addRow([section.label]);
         for (let i = 1; i <= n; i++) labelRow.getCell(i).fill = solid(COLORS.groupFill);
         labelRow.getCell(1).font = { bold: true };
 
+        const added = [];
         for (const r of section.rows) {
             const missingCap = machineCapacity !== undefined && r.kind === "machine" && r.capacity == null;
-            addAggRow(
+            const row = addAggRow(
                 {
                     label:
                         r.kind === "non-machine" ? `${r.label} (non-machine)`
@@ -599,17 +774,43 @@ function renderCapacityOverviewSheet(
                         : r.label,
                     capacity: r.capacity,
                     agg: r.agg,
+                    live: { kind: "match", key: r.key, group: section.label },
                 },
                 { fill: missingCap ? COLORS.lightYellow : null },
             );
+            added.push(row);
+            if (!seenMachines.has(r.key)) {
+                seenMachines.add(r.key);
+                capRefs.push(`B${row.number}`);
+            }
         }
         addAggRow(
-            { label: "Total", capacity: section.total.capacity, agg: section.total },
+            {
+                label: "Total",
+                capacity: section.total.capacity,
+                agg: section.total,
+                live: { kind: "sum", from: added[0].number, to: added[added.length - 1].number },
+            },
             { fill: COLORS.groupFill, bold: true },
         );
     }
 
-    addAggRow({ label: "Grand total", capacity: grand.capacity, agg: grand }, { fill: COLORS.headerFill, bold: true });
+    const grandRow = addAggRow(
+        { label: "Grand total", capacity: grand.capacity, agg: grand, live: { kind: "all" } },
+        { fill: COLORS.headerFill, bold: true },
+    );
+    grandRow.getCell(2).value = { formula: sumRefs(capRefs), result: grand.capacity };
+
+    // grey out zero counts live
+    if (statusCols.length) {
+        sheet.addConditionalFormatting({
+            ref: `${colLetter(FIRST_STATUS)}3:${colLetter(PCT - 1)}${grandRow.number}`,
+            rules: [{
+                type: "cellIs", operator: "equal", formulae: [0], priority: 1,
+                style: { font: { color: { argb: COLORS.dimFont } } },
+            }],
+        });
+    }
 
     sheet.addRow([]);
     const note = sheet.addRow([
@@ -617,13 +818,13 @@ function renderCapacityOverviewSheet(
             ? "Capacity was not loaded when this file was exported."
             : "A machine running several package groups appears under each one (lot counts are split per group; capacity is the full machine capacity). The grand total counts each machine once.",
     ]);
-    
     note.getCell(1).font = { italic: true, color: { argb: COLORS.dimFont } };
 
     renderPtpSummaries(workbook, sheet, {
         summaryRows,
         location,
         startCol: n + 1,
+        sourceCols,
     });
 
     sheet.getColumn(n + 1).width = 3; // spacer column (1-based = n + 1)
@@ -692,6 +893,7 @@ export async function exportLoadingPlanToExcel({
         dateCol: colLetter(exportColumns.findIndex((c) => c.key === DATE_COLUMN_KEY)),
         beCol: colLetter(exportColumns.findIndex((c) => c.key === "be_starttime")),
         ctCol: ctIdx === -1 ? null : colLetter(ctIdx),
+        cellRefs: new Map(), // row object -> { sheet, rowNumber } of its own (non-dimmed) copy
     };
 
     const isRes = (r) => r.station === RES_STATION;
@@ -741,6 +943,8 @@ export async function exportLoadingPlanToExcel({
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "PPC";
     workbook.created = new Date();
+    // Recompute every formula on open, so cached results can never show stale numbers.
+    workbook.calcProperties = { fullCalcOnLoad: true };
 
     for (const def of sheetDefs) {
         const sheet = workbook.addWorksheet(sanitizeSheetName(def.name));
@@ -758,7 +962,7 @@ export async function exportLoadingPlanToExcel({
         // "own" = what the table shows on this tab by default. Decides which machines get a section
         // and which rows are dimmed; it never hides a row.
         const own = (r) => def.include(r) && !isOtherLoc(r);
-        const sheetCtx = { ...ctx, isOwn: own };
+        const sheetCtx = { ...ctx, isOwn: own }; // shares ctx.cellRefs
         let rendered = false;
 
         for (const m of def.machines) {
@@ -822,6 +1026,22 @@ export async function exportLoadingPlanToExcel({
         const isPlanned = (r) =>
             r.machine != null || (isParked(r) && bucketMachine.get(r.bucket_id) != null);
 
+        // Column letters on the main sheets, so the PTP data sheets can link to a lot's cells.
+        const colOf = (key) => {
+            const i = exportColumns.findIndex((c) => c.key === key);
+            return i === -1 ? null : colLetter(i);
+        };
+        const sourceCols = {
+            machine: colOf(MACHINE_COLUMN_KEY),
+            pkg: colOf(isF3 ? "package_type" : "package_name"),
+            pkgName: colOf("package_name"),
+            pkgGroup: colOf("package_group"), // null if that column isn't exported
+            status: colOf("status"),
+            qty: colOf("qty"),
+            doable: colOf("doable"),
+            lotId: colOf("lot_id"),
+        };
+
         const summaryRows = rows
             .filter((r) => !isBlock(r) && !isOtherLoc(r) && isPlanned(r))
             .map((r) => ({
@@ -830,12 +1050,29 @@ export async function exportLoadingPlanToExcel({
                 qty: toNum(r.qty),
                 doable: toNum(r.doable),
                 lotId: r.lot_id ?? "",
+                ref: ctx.cellRefs.get(r) ?? null,
+            }));
+
+        // Every lot that has a machine, same filter as aggregateByMachine.
+        const machineRows = dataRows
+            .filter((r) => r.machine != null && !isBlock(r) && !r.is_block)
+            .map((r) => ({
+                machine: r.machine,
+                group: resolveSummaryGroup(r.package_group, r.package_name),
+                pkgGroup: r.package_group ?? "",
+                pkgName: r.package_name ?? "",
+                status: String(r.status ?? "").trim().toUpperCase() || "NONE",
+                qty: toNum(r.qty),
+                doable: toNum(r.doable),
+                ref: ctx.cellRefs.get(r) ?? null,
             }));
 
         renderCapacityOverviewSheet(workbook, {
             ...capacityOverview,
             dataRows,
             summaryRows,
+            machineRows,
+            sourceCols,
             location: selectedLocation,
             machineLabel,
         });

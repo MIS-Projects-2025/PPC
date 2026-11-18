@@ -69,7 +69,7 @@ import { compareUnassigned, createRowMatchers, getMachineLabel } from "@/Lib/Loa
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
 import { DndContext, DragOverlay, MeasuringStrategy } from "@dnd-kit/core";
-import { router } from "@inertiajs/react";
+import { Head, router } from "@inertiajs/react";
 import clsx from "clsx";
 import dayjs from "dayjs";
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -855,6 +855,8 @@ export default function Deemo({
     // ─────────────────────────────────────────────────────────────────────
     return (
         <div className="bg-base-100" style={{ paddingLeft: 8, paddingRight: 8, minHeight: "93vh" }}>
+            <Head title="Loading Plan"/>
+
             <SavingCursorBadge active={isUpdating} />
 
             <EntryHistoryModal ref={historyModalRef} entryId={historyEntryId} onClose={() => historyModalRef.current?.close()} />
