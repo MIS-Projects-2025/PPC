@@ -3,7 +3,7 @@ import AddEntryModal from "@/Components/LoadingPlan/AddEntriesModal";
 import AutoSortModal from "@/Components/LoadingPlan/AutoSortModal";
 import { BakeSelectionToolbar } from "@/Components/LoadingPlan/BakeSelectionToolbar";
 import { normalizeLotId } from "@/Components/LoadingPlan/BakingBadge";
-import CapacityOverviewModal from "@/Components/LoadingPlan/CapacityOverviewModal";
+import PtpOverview from "@/Components/LoadingPlan/PtpOverview";
 import { TableActionsContext, makeBakeColumns, makeColumns, toReadOnlyColumns } from "@/Components/LoadingPlan/columns";
 import ColumnVisibilityModal from "@/Components/LoadingPlan/ColumnVisibilityModal";
 import DataIntegrityModal from "@/Components/LoadingPlan/DataIntegrityModal";
@@ -34,6 +34,7 @@ import {
     FOR_BAKE_TAB,
     ORPHAN_TAB,
     PICKUP_POOL_TABS,
+    PTP_TAB,
     UNASSIGNED_TAB,
     buildTabItems,
 } from "@/Constants/LoadingPlan/tabs";
@@ -182,6 +183,7 @@ export default function Deemo({
     const activePackage = useDeferredValue(activeTab);
     const isTabSwitching = activeTab !== activePackage;
     const onBake = activePackage === FOR_BAKE_TAB;
+    const onPtp = activePackage === PTP_TAB;
 
     const [selectedRows, setSelectedRows] = useState(() => new Set());
     const [selectedBakeRows, setSelectedBakeRows] = useState(() => new Set());
@@ -529,13 +531,29 @@ export default function Deemo({
     }, [displayRows, machines, nonMachineKeys]);
 
     const gridKey = `${activeTab}-${activePackage}`;
-    const stickyMachine = useStickyGroupHeader(onBake ? EMPTY_ROWS : displayRows, gridRef, gridKey);
+    const stickyMachine = useStickyGroupHeader(onBake || onPtp ? EMPTY_ROWS : displayRows, gridRef, gridKey);
     const stickyOven = useStickyGroupHeader(onBake ? bakeDisplayRows : EMPTY_ROWS, gridRef, gridKey);
 
     const { jumpToMachine, jumpedMachine } = useMachineJump({
         displayRows, gridRef, activeTab, isTabSwitching, goToTab,
         setCollapsedMachines, showAllMachines, setShowAllMachines, toast,
     });
+
+    // PTP tab -> machine: switch to the machine tab first, then jump once its rows have rendered
+    const [pendingJump, setPendingJump] = useState(null);
+    const jumpToMachineAnywhere = useCallback(
+        (key) => {
+            if (!onPtp) return jumpToMachine(key);
+            setPendingJump(key);
+            goToTab(ALL_PACKAGES_TAB);
+        },
+        [onPtp, jumpToMachine, goToTab],
+    );
+    useEffect(() => {
+        if (pendingJump == null || onPtp || isTabSwitching) return;
+        setPendingJump(null);
+        jumpToMachine(pendingJump);
+    }, [pendingJump, onPtp, isTabSwitching, jumpToMachine]);
 
     // ── search + shortcuts ───────────────────────────────────────────────
     const search = useTableSearch({
@@ -632,7 +650,7 @@ export default function Deemo({
 
     // ── hover tools / grid renderers / contexts ──────────────────────────
     const { containerRef, rowIdxByElement } = useRowHoverRefs();
-    const { armFlip } = useRowFlip({ containerRef, displayRows, enabled: !onBake });
+    const { armFlip } = useRowFlip({ containerRef, displayRows, enabled: !onBake && !onPtp });
 
     // ids (display order) that move together: the dragged row, or the whole selection
     const getDragGroupIds = useCallback(
@@ -850,7 +868,7 @@ export default function Deemo({
     partnameMismatches !== undefined && unknownPackages !== undefined && recipeMismatches !== undefined
     ? partnameMismatches.length + unknownPackages.length + recipeMismatches.length
     : undefined;
-    const showIdleToggle = !lockedMachine && idleMachines.length > 0 && activePackage !== UNASSIGNED_TAB && activePackage !== ORPHAN_TAB;
+    const showIdleToggle = !lockedMachine && idleMachines.length > 0 && activePackage !== UNASSIGNED_TAB && activePackage !== ORPHAN_TAB && !onPtp;
 
     // ─────────────────────────────────────────────────────────────────────
     return (
@@ -893,7 +911,7 @@ export default function Deemo({
                             onExport={machineCapacity === undefined ? undefined : handleExport}
                             hasHiddenColumns={hasHiddenColumns}
                             allMachinesCollapsed={allMachinesCollapsed}
-                            canToggleMachines={collapsibleMachineKeys.length > 0}
+                            canToggleMachines={!onPtp && collapsibleMachineKeys.length > 0}
                             onToggleMachines={toggleAllMachines}
                             schedulerFailed={schedulerHistory?.[0]?.status === "error"}
                             showDataIntegrity={showDataIntegrity}
@@ -950,7 +968,21 @@ export default function Deemo({
                             </div>
                         )}
 
-                        {onBake ? (
+                        {onPtp ? (
+                            <PtpOverview
+                                serverMachines={serverMachines}
+                                nonMachines={nonMachineList}
+                                machineCapacity={machineCapacity}
+                                dataRows={dataRows}
+                                buckets={bucketList}
+                                location={selectedLocation}
+                                isF3={isF3}
+                                isOtherLoc={isOtherLoc}
+                                isParked={isParked}
+                                labelOf={labelOfMachine}
+                                onJumpToMachine={jumpToMachineAnywhere}
+                            />
+                        ) : onBake ? (
                             <div className="border-none" style={{ position: "relative" }}>
                                 <DataGrid
                                     ref={gridRef}
@@ -1172,14 +1204,7 @@ export default function Deemo({
             />
             {!lockedMachine && (
                 <>
-                        <JumpToMachineModal entries={jumpEntries} currentLocation={selectedLocation} onJump={jumpToMachine} />
-                        <CapacityOverviewModal
-                            serverMachines={serverMachines}
-                            nonMachines={nonMachineList}
-                            machineCapacity={machineCapacity}
-                            dataRows={dataRows}
-                            onJumpToMachine={jumpToMachine}
-                        />
+                        <JumpToMachineModal entries={jumpEntries} currentLocation={selectedLocation} onJump={jumpToMachineAnywhere} />
                 </>
             )}
         </div>

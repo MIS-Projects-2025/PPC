@@ -7,7 +7,7 @@ import { Link } from "@inertiajs/react";
 import clsx from "clsx";
 import { BsGear, BsSearch } from "react-icons/bs";
 import { GoAlert } from "react-icons/go";
-import { CAPACITY_OVERVIEW_MODAL_ID } from "./CapacityOverviewModal";
+
 import { COLUMN_VISIBILITY_MODAL_ID } from "./ColumnVisibilityModal";
 import { JUMP_TO_MACHINE_MODAL_ID } from "./JumpToMachineModal";
 import { SCHEDULER_MODAL_ID } from "./SchedulerModal";
@@ -127,9 +127,7 @@ export function PlanActionsBar({
                             {allMachinesCollapsed ? "▼ Expand all" : "► Collapse all"}
                         </button>
 
-                        <button className="btn btn-sm" onClick={() => showModal(CAPACITY_OVERVIEW_MODAL_ID)} title="Commit vs capacity for all machines">
-                            Capacity
-                        </button>
+                        
 
                         <button className="btn btn-sm" onClick={() => showModal(JUMP_TO_MACHINE_MODAL_ID)} title="Jump to a machine">
                             Jump to…

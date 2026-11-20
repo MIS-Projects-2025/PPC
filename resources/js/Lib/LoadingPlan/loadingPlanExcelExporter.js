@@ -13,7 +13,8 @@ import {
     buildOverviewSections,
     buildStatusCols,
     resolveSummaryGroup,
-} from "@/Components/LoadingPlan/CapacityOverviewModal.jsx";
+} from "@/Lib/LoadingPlan/capacityOverview";
+import { PRE_TNR_STATUSES, STATUS_ORDER } from "@/Lib/LoadingPlan/ptpOverview";
 import { STATUS_TONE } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { PARTNAME_TO_BAKE_KEYS, PARTNAME_TO_QTY_KEYS } from "@/Components/LoadingPlan/columns";
 import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
@@ -391,10 +392,7 @@ const GROUP_MAP_LAST_ROW = 300; // range reaches past the written rows, so rows 
 
 // Counted towards "TNR % Completion". Aliases are harmless: each lot has one status.
 const TNR_DONE_STATUSES = ["DONE", "FVI", "VISUAL (FVI)", "OQA", "BOXING", "BUY OFF", "BUY-OFF"];
-// Lots still before TNR. Every other status counts towards "TNR % Completion".
-const PRE_TNR_STATUSES = ["RUNNING", "FOR PROCESS", "HOLD", "(blank)"];
-// Display order for the status table. Anything else follows alphabetically.
-const STATUS_ORDER = ["DONE", "FVI", "VISUAL (FVI)", "OQA", "BOXING", "BUY OFF", "BUY-OFF", ...PRE_TNR_STATUSES];
+// PRE_TNR_STATUSES / STATUS_ORDER live in Lib/LoadingPlan/ptpOverview (shared with the PTP 95% tab).
 
 function styleHeaderCell(cell) {
     cell.font = { bold: true, color: { argb: COLORS.headerFont } };

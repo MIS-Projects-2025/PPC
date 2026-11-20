@@ -1,3 +1,4 @@
+export const PTP_TAB = "PTP 95%";
 export const ALL_PACKAGES_TAB = "ALL PACKAGE";
 export const UNASSIGNED_TAB = "Unassigned";
 export const RES_TAB = "RES";
@@ -13,6 +14,7 @@ export const PICKUP_POOL_TABS = [UNASSIGNED_TAB, PICKUP_TAB];
 
 /** Tabs that don't map to a single package group. */
 export const NON_PACKAGE_TABS = [
+    PTP_TAB,
     ALL_PACKAGES_TAB,
     RES_TAB,
     FOR_BAKE_TAB,
@@ -23,6 +25,7 @@ export const NON_PACKAGE_TABS = [
 
 export function buildTabItems({ readOnly, isF3, hasOrphans, packageGroupNames }) {
     return [
+        PTP_TAB,
         ...(readOnly ? [] : [UNASSIGNED_TAB]),
         ALL_PACKAGES_TAB,
         ...(isF3 ? [] : [RES_TAB]),
