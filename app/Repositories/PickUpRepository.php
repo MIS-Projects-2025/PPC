@@ -15,6 +15,7 @@ use App\Models\PickUp;
 use App\Models\PartName;
 use App\Models\F3Pickup;
 use App\Services\BulkUpserter;
+use Illuminate\Support\Facades\Validator;
 
 class PickUpRepository
 {
@@ -284,6 +285,63 @@ class PickUpRepository
       'status'     => 'success',
       'message'    => 'Data retrieved successfully',
     ]);
+  }
+
+  private const PASTE_RULES = [
+    'LC'           => 'nullable|integer',
+    'QTY'          => 'required|integer',
+    'PARTNAME'     => 'required',
+    'PACKAGE'      => 'required',
+    'LOTID'        => 'required',
+    'no_of_box'    => 'nullable|integer|min:1',
+    'box_group_id' => 'nullable|integer',
+  ];
+
+  private const PASTE_ATTRIBUTE_NAMES = [
+    'no_of_box'    => 'NO OF BOX',
+    'box_group_id' => 'BOX GROUP ID',
+  ];
+
+  /**
+   * Plain insert. Every row becomes a new record, nothing is matched or updated.
+   * Returns the number of rows inserted.
+   */
+  public function insertNew(array $records, int $chunkSize = 500): int
+  {
+    if (empty($records)) {
+      return 0;
+    }
+
+    // Validate everything first so row numbers match the pasted grid.
+    $errors = [];
+    foreach ($records as $i => $record) {
+      $v = Validator::make($record, self::PASTE_RULES, [], self::PASTE_ATTRIBUTE_NAMES);
+      if ($v->fails()) {
+        $errors[] = 'Row ' . ($i + 1) . ': ' . implode(', ', $v->errors()->all());
+      }
+    }
+    if ($errors) {
+      throw new \Exception('Some rows failed validation: ' . implode('; ', $errors));
+    }
+
+    $model = new PickUp();
+
+    // insert() skips Eloquent, so timestamps must be added by hand.
+    if ($model->usesTimestamps()) {
+      $now = now();
+      $records = array_map(fn($r) => $r + [
+        $model->getCreatedAtColumn() => $now,
+        $model->getUpdatedAtColumn() => $now,
+      ], $records);
+    }
+
+    $inserted = 0;
+    foreach (array_chunk($records, $chunkSize) as $chunk) {
+      PickUp::insert($chunk);
+      $inserted += count($chunk);
+    }
+
+    return $inserted;
   }
 
   private function upsertPickup($data = null)

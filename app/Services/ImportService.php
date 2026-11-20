@@ -816,6 +816,28 @@ class ImportService
     }
   }
 
+  /**
+   * BOX-ymdHis codes, +1 second per group, skipping any that already exist
+   * (e.g. another paste a second ago that ran ahead of the clock).
+   */
+  private function generateBoxCodes(int $count): array
+  {
+    $start = now();
+    $candidates = [];
+    for ($i = 0; $i < $count + 50; $i++) {
+      $candidates[] = 'BOX-' . $start->copy()->addSeconds($i)->format('ymdHis');
+    }
+
+    $taken = DB::table('pickup_box_groups')
+      ->whereIn('code', $candidates)
+      ->pluck('code')
+      ->all();
+
+    $free = array_values(array_diff($candidates, $taken));
+
+    return array_slice($free, 0, $count);
+  }
+
   public function importPastedPickUp($importedBy, array $rows)
   {
     // Every row in a box group must agree on the box count.
@@ -832,25 +854,38 @@ class ImportService
       }
     }
 
-    try {
-      return DB::transaction(function () use ($importedBy, $rows) {
-        // Lock so two people pasting at once can't be handed the same ids.
-        $lastGroupId = (int) (PickUp::query()->lockForUpdate()->max('box_group_id') ?? 0);
+    $createdByName = $importedBy;
 
-        $groupMap = [];          // client-local group label -> real box_group_id
+    try {
+      return DB::transaction(function () use ($importedBy, $createdByName, $rows) {
+        // 1. One entry per box group, in order of appearance.
+        $groupBoxCounts = [];   // client label => no_of_box
+        foreach ($rows as $r) {
+          $groupBoxCounts[$r['boxGroup']] ??= (int) $r['noOfBox'];
+        }
+
+        // 2. Create the parent rows and keep the real ids.
+        $codes = $this->generateBoxCodes(count($groupBoxCounts));
+        $now = now();
+        $groupMap = [];
+        foreach (array_keys($groupBoxCounts) as $i => $local) {
+          $groupMap[$local] = DB::table('pickup_box_groups')->insertGetId([
+            'code'        => $codes[$i],
+            'module'      => 'F1F2',
+            'no_of_box'   => $groupBoxCounts[$local],
+            'box_details' => 'N/A',
+            'created_by'  => $createdByName,
+            'created_at'  => $now,
+            'updated_at'  => $now,
+          ]);
+        }
+
+        // 3. Build the pickup rows with those ids.
         $records = [];
-        $unknownPartnames = [];  // keyed by partname so each shows once
+        $unknownPartnames = [];
 
         foreach ($rows as $r) {
           $partname = trim($r['partname']);
-
-          // The client only says which rows belong together; the ids
-          // themselves are always generated here, contiguous from the
-          // latest one in the table.
-          $local = $r['boxGroup'];
-          if (!isset($groupMap[$local])) {
-            $groupMap[$local] = $lastGroupId + count($groupMap) + 1;
-          }
 
           if (!$this->partnameRepository->getIDByPartname($partname)) {
             $unknownPartnames[$partname] = [
@@ -866,17 +901,14 @@ class ImportService
             'QTY'          => (int) $r['qty'],
             'PACKAGE'      => trim($r['package']),
             'LC'           => $r['lc'] ?? null,
-            'no_of_box'    => (int) $r['noOfBox'],   // same value on every row of the group
-            'box_group_id' => $groupMap[$local],
+            'no_of_box'    => (int) $r['noOfBox'],
+            'box_group_id' => $groupMap[$r['boxGroup']],
+            'box_details'  => 'N/A',
             'ADDED_BY'     => $importedBy,
           ];
         }
 
-        $inserted = 0;
-        foreach (array_chunk($records, self::CHUNK_SIZE) as $chunk) {
-          $res = $this->pickUpRepository->insertMany($chunk);
-          $inserted += $res['inserted'];
-        }
+        $inserted = $this->pickUpRepository->insertNew($records, self::CHUNK_SIZE);
 
         $this->importTraceRepository->upsertImport('pickup', $importedBy, $inserted);
 
