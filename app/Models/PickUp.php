@@ -19,8 +19,11 @@ class PickUp extends Model
         "QTY",
         "PACKAGE",
         "LC",
-        "ADDED_BY"
+        "no_of_box",
+        "box_group_id",
+        "ADDED_BY",
     ];
+
     protected $casts = [
         'DATE_CREATED' => 'datetime',
     ];

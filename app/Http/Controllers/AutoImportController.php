@@ -241,4 +241,32 @@ class AutoImportController extends Controller
             'message' => 'Import failed: ' . $e->getMessage(),
         ], 500);
     }
+
+    public function storePastedPickUp(Request $request)
+    {
+        $empId = $request->get('emp_id');
+
+        $validated = $request->validate([
+            'rows'               => 'required|array|min:1|max:500',
+            'rows.*.partname'    => 'required|string|max:45',
+            'rows.*.lotId'       => 'required|string|max:45',
+            'rows.*.qty'         => 'required|integer|min:1',
+            'rows.*.package'     => 'required|string|max:45',
+            'rows.*.lc'          => 'nullable|integer|min:0',
+            'rows.*.noOfBox'     => 'required|integer|min:1',
+            'rows.*.boxGroup'    => 'required|integer|min:1',
+        ]);
+
+        try {
+            $result = $this->importService->importPastedPickUp($empId, $validated['rows']);
+
+            return response()->json([
+                'status'  => $result['status'] ?? 'success',
+                'message' => $result['message'] ?? 'Pickups added',
+                'data'    => $result['data'] ?? [],
+            ], ($result['status'] ?? 'success') === 'success' ? 200 : 422);
+        } catch (Throwable $e) {
+            return $this->importFailed('Pasted pick-up insert failed', $empId, $e);
+        }
+    }
 }

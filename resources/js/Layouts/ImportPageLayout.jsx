@@ -1,8 +1,8 @@
+import Collapse from "@/Components/Collapse";
+import Tabs from "@/Components/Tabs";
 import { router } from "@inertiajs/react";
 import React, { useState } from "react";
 import { TbAlertCircle } from "react-icons/tb";
-import Collapse from "@/Components/Collapse";
-import Tabs from "@/Components/Tabs";
 
 const excelInstructions = [
 	"Exactly one sheet",
@@ -13,7 +13,7 @@ const excelInstructions = [
 	"Keep all rows consistent in format and structure.",
 ];
 
-const ImportPageLayout = ({ pageName = "F1/F2", children }) => {
+const ImportPageLayout = ({ pageName = "F1/F2 Wip & Outs", showExcelInstructions = true, children }) => {
 	const [selectedFactory, setSelectedFactory] = useState(pageName);
 
 	const handleFactoryChange = (selectedFactory) => {
@@ -50,7 +50,7 @@ const ImportPageLayout = ({ pageName = "F1/F2", children }) => {
 				handleFactoryChange={handleFactoryChange}
 				tabClassName={"mb-2"}
 			/>
-			<Collapse
+			{showExcelInstructions && (<Collapse
 				title={
 					<div className="flex items-center gap-2">
 						<TbAlertCircle />
@@ -66,7 +66,7 @@ const ImportPageLayout = ({ pageName = "F1/F2", children }) => {
 						</li>
 					))}
 				</ul>
-			</Collapse>
+			</Collapse>)}
 			<div className="flex-1">{React.cloneElement(children, { pageName })}</div>
 		</>
 	);

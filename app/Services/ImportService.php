@@ -25,6 +25,8 @@ use PhpOffice\PhpSpreadsheet\Worksheet\CellIterator;
 use Box\Spout\Reader\Common\Creator\ReaderEntityFactory;
 use App\Services\ProductionLineResolver;
 use Carbon\Carbon;
+use Throwable;
+use App\Models\PickUp;
 
 class ImportService
 {
@@ -811,6 +813,86 @@ class ImportService
         'message' => 'Import failed.' . ' Error: ' . $e->getMessage(),
         'error' => $e->getMessage()
       ];
+    }
+  }
+
+  public function importPastedPickUp($importedBy, array $rows)
+  {
+    // Every row in a box group must agree on the box count.
+    $countsByGroup = [];
+    foreach ($rows as $r) {
+      $countsByGroup[$r['boxGroup']][(int) $r['noOfBox']] = true;
+    }
+    foreach ($countsByGroup as $group => $counts) {
+      if (count($counts) > 1) {
+        return [
+          'status'  => 'error',
+          'message' => "Rows in box group {$group} disagree on the number of boxes.",
+        ];
+      }
+    }
+
+    try {
+      return DB::transaction(function () use ($importedBy, $rows) {
+        // Lock so two people pasting at once can't be handed the same ids.
+        $lastGroupId = (int) (PickUp::query()->lockForUpdate()->max('box_group_id') ?? 0);
+
+        $groupMap = [];          // client-local group label -> real box_group_id
+        $records = [];
+        $unknownPartnames = [];  // keyed by partname so each shows once
+
+        foreach ($rows as $r) {
+          $partname = trim($r['partname']);
+
+          // The client only says which rows belong together; the ids
+          // themselves are always generated here, contiguous from the
+          // latest one in the table.
+          $local = $r['boxGroup'];
+          if (!isset($groupMap[$local])) {
+            $groupMap[$local] = $lastGroupId + count($groupMap) + 1;
+          }
+
+          if (!$this->partnameRepository->getIDByPartname($partname)) {
+            $unknownPartnames[$partname] = [
+              'devicename'   => $partname,
+              'package_type' => $r['package'],
+              'lead_count'   => $r['lc'] ?? null,
+            ];
+          }
+
+          $records[] = [
+            'PARTNAME'     => $partname,
+            'LOTID'        => trim($r['lotId']),
+            'QTY'          => (int) $r['qty'],
+            'PACKAGE'      => trim($r['package']),
+            'LC'           => $r['lc'] ?? null,
+            'no_of_box'    => (int) $r['noOfBox'],   // same value on every row of the group
+            'box_group_id' => $groupMap[$local],
+            'ADDED_BY'     => $importedBy,
+          ];
+        }
+
+        $inserted = 0;
+        foreach (array_chunk($records, self::CHUNK_SIZE) as $chunk) {
+          $res = $this->pickUpRepository->insertMany($chunk);
+          $inserted += $res['inserted'];
+        }
+
+        $this->importTraceRepository->upsertImport('pickup', $importedBy, $inserted);
+
+        return [
+          'status'  => 'success',
+          'message' => $inserted === 0 ? 'No new records found.' : 'Pickups added successfully.',
+          'data'    => [
+            'total'                          => $inserted,
+            'box_groups'                     => count($groupMap),
+            'ignored_unknown_partname'       => array_values($unknownPartnames),
+            'ignored_unknown_partname_count' => count($unknownPartnames),
+          ],
+        ];
+      });
+    } catch (Throwable $e) {
+      return ['status' => 'error', 'message' => $e->getMessage()];
     }
   }
 }

@@ -296,6 +296,8 @@ class PickUpRepository
         'PARTNAME' => 'required',
         'PACKAGE' => 'required',
         'LOTID' => 'required',
+        'no_of_box' => 'nullable|integer|min:1',
+        'box_group_id' => 'nullable|integer',
       ],
       attributeNames: [
         'LC' => 'LC',
@@ -303,6 +305,8 @@ class PickUpRepository
         'PARTNAME' => 'PARTNAME',
         'PACKAGE' => 'PACKAGE',
         'LOTID' => 'LOTID',
+        'no_of_box' => 'NO OF BOX',
+        'box_group_id' => 'BOX GROUP ID',
       ]
     );
 
@@ -320,7 +324,12 @@ class PickUpRepository
   public function insertMany(array $data)
   {
     $result = $this->upsertPickup($data);
-    return ['status' => 'success', 'inserted' => $result['inserted'], 'updated' => $result['updated']];
+
+    return [
+      'status'   => 'success',
+      'inserted' => count($result['inserted']),
+      'updated'  => count($result['updated']),
+    ];
   }
 
   public function insertF3Many(array $data)

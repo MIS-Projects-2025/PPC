@@ -192,6 +192,7 @@ Route::middleware(ApiAuthMiddleware::class)->group(function () {
     // Pickup
     Route::prefix('pickup')->name('api.pickup.')->group(function () {
         Route::get('/pickup',                 [PickupController::class, 'getOverallPickUp'])->name('overall');
+        Route::post('/',                      [AutoImportController::class, 'storePastedPickUp'])->name('paste');
         Route::get('/pickup-summary-trend',   [PickupController::class, 'getPackagePickUpTrend'])->name('pickupSummaryTrend');
         Route::get('/package-pickup-summary', [PickupController::class, 'getPackagePickUpSummary'])->name('packagePickupSummary');
         Route::middleware(ApiPermissionMiddleware::class . ':pickup_mutate')->group(function () {
