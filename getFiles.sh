@@ -70,6 +70,10 @@
     #"2026_11_12_000001_add_source_box_fields"
 
     ##################### ---- PHP (matched in your output) ----
+    "PickUp"
+    "PickupPoolService"
+    "PickupPoolController"
+
     "ValidatesLoadingPlanEntries"
     #
     "LotSourceService"
@@ -99,30 +103,30 @@
     #
     "LoadingPlanEntryHistory"
     #
-    "LoadingPlanBucket"
-    "LoadingPlanBucketController"
-    "LotBucketItem"
+    #"LoadingPlanBucket"
+    #"LoadingPlanBucketController"
+    #"LotBucketItem"
     #
     "SchedulerService"
 ##
-    "BakeLotService"
-    "MachinePlatformCapacityBand"
-    "MachinePlatformCapacityBandController"
+    #"BakeLotService"
+    #"MachinePlatformCapacityBand"
+    #"MachinePlatformCapacityBandController"
     ##
-    "LoadingPlanEntryObserver"
-    "LotQuantityObserver"
-    "BaseHistoryObserver"
+    #"LoadingPlanEntryObserver"
+    #"LotQuantityObserver"
+    #"BaseHistoryObserver"
     ##
 ###
     ####################### Models
-    "BoschPart"
-    "BoschPartSettings"
+    #"BoschPart"
+    #"BoschPartSettings"
     "CapacityBand"
 ##
     ####################### web
-    "routes\loading-plan.php"
-    "routes\auth.php"
-    "routes\web.php"
+    # "routes\loading-plan.php"
+    # "routes\auth.php"
+    # "routes\web.php"
     ##
     ####################### ---- Non-PHP (JS/JSX, classified by naming; none matched) ----
     "Deemo"
@@ -142,11 +146,11 @@
     "columnConfig"
     "columnSizing"
     "rowPredicates"
-    "splitMergeApi"
+    #"splitMergeApi"
     "CellEditor"
     "loadingPlanSchedule"
     "TableActionsContext"
-    "undoStore"
+    #"undoStore"
     "sync"
     "helpers"
 
@@ -162,30 +166,30 @@
     "useDoableOperations"
     "useEntryOperations"
     "useLoadingPlanShortcuts"
-    "useRowIndex"
-    "useWriteLock"
+    #"useRowIndex"
+    #"useWriteLock"
     "useNonMachineOperations"
     "useSplitMergeOperations"
     "useStickyGroupHeader"
     "useDragReorder"
     "useBulkOperations"
-    "useMutation"
+    #"useMutation"
     "useRowHoverInsert"
-    "useUndoRedoSync"
-    "useDialogOpen"
-    "useBucketOperations"
-    "usePersistedSet"
-    "useMachineJump"
-    "useCellEditPersistence"
+    #"useUndoRedoSync"
+    #"useDialogOpen"
+    #"useBucketOperations"
+    #"usePersistedSet"
+    #"useMachineJump"
+    #"useCellEditPersistence"
 ##
     ######################## MODAL
     "CapacityOverviewModal"
-    "AutoSortModal"
-    "ColumnVisibilityModal"
-    "MissingPartsModal"
-    "QuickAddModals"
-    "SchedulerModal"
-    "modal"
+    #"AutoSortModal"
+    #"ColumnVisibilityModal"
+    #"MissingPartsModal"
+    #"QuickAddModals"
+    #"SchedulerModal"
+    #"modal"
     "TransferModal"
     "SplitHistoryModal"
     "MergeHistoryModal"

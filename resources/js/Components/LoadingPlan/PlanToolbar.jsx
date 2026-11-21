@@ -163,7 +163,6 @@ export function PlanActionsBar({
 export function PlanTabsBar({
     tabs,
     activeTab,
-    onOpenPickupPool,
     onTabChange,
     location,
     locationDisabled,
@@ -203,18 +202,6 @@ export function PlanTabsBar({
                             ))}
                         </div>
                     </fieldset>
-                )}
-
-                {onOpenPickupPool && (
-                    <button
-                        type="button"
-                        className={clsx("btn btn-sm btn-outline", interactiveCursorClasses(locationDisabled))}
-                        disabled={locationDisabled}
-                        onClick={onOpenPickupPool}
-                        title="Bring older F1/F2 pickups into this date's Unassigned"
-                    >
-                        Earlier pickups
-                    </button>
                 )}
 
                 <button className="btn btn-sm z-50" onClick={onOpenSearch}>

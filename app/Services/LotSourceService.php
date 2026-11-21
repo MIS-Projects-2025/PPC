@@ -10,6 +10,7 @@ use App\Models\ProcessTraveler;
 use Illuminate\Support\Collection;
 use App\Models\PartName;
 use App\Models\PickUp;
+use App\Helpers\ShiftDay;
 
 /**
  * One place to ask "what is the source row for this lot?".
@@ -90,6 +91,42 @@ class LotSourceService
             return collect();
         }
 
+        return $this->pickupsToWip($pickups);
+    }
+
+    /**
+     * F1/F2 pickups created on $date's business day (06:00 -> 06:00), keyed by Lot_Id.
+     * Nothing older: the next WIP import carries the lot, so there is nothing to query for.
+     * Only for the given location (null = every F1/F2 location). F3 never has pickups.
+     * Unsaved CustomerDataWip rows with Date_Loaded = ppc_pickupdb.DATE_CREATED.
+     */
+    public function pickupPoolFor(string $date, ?string $location): Collection
+    {
+        $location = $location === null ? null : strtoupper(trim($location));
+        if ($location === 'F3') {
+            return collect();
+        }
+
+        [$from, $to] = ShiftDay::window($date);
+
+        $pickups = PickUp::query()
+            ->whereNotNull('LOTID')->where('LOTID', '!=', '')
+            ->where('DATE_CREATED', '>=', $from)->where('DATE_CREATED', '<', $to)
+            ->orderByDesc('DATE_CREATED')->orderByDesc('id_pickup')
+            ->get()
+            ->toBase()
+            ->unique('LOTID');          // picked up twice: newest row wins
+
+        return $this->pickupsToWip($pickups)->filter(function ($w) use ($location) {
+            $loc = PackageLocation::resolve($w->Package_Name, $w->Focus_Group, $w->Lead_Count);
+
+            return $location === null ? $loc !== null : $loc === $location;
+        });
+    }
+
+    /** ppc_pickupdb rows -> unsaved CustomerDataWip rows, keyed by Lot_Id. */
+    private function pickupsToWip(Collection $pickups): Collection
+    {
         $parts = PartName::whereIn('devicename', $pickups->pluck('PARTNAME')->filter()->unique())
             ->get(['devicename', 'focus_grp', 'dimensions', 'allocation'])
             ->keyBy(fn($p) => mb_strtolower($p->devicename));

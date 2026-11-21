@@ -17,7 +17,6 @@ import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import MissingPartsModal from "@/Components/LoadingPlan/MissingPartsModal";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import { PlanActionsBar, PlanStatusAlert, PlanTabsBar } from "@/Components/LoadingPlan/PlanToolbar";
-import PullPickupsModal, { PULL_PICKUPS_MODAL_ID } from "@/Components/LoadingPlan/PullPickupsModal";
 import { AddBlockModal, AddBucketModal, AddLotModal } from "@/Components/LoadingPlan/QuickAddModals";
 import RowHoverTools from "@/Components/LoadingPlan/RowHoverTools";
 import { SavingCursorBadge } from "@/Components/LoadingPlan/SavingCursorBadge";
@@ -33,7 +32,6 @@ import {
     F3_FLAG,
     FOR_BAKE_TAB,
     ORPHAN_TAB,
-    PICKUP_POOL_TABS,
     PTP_TAB,
     UNASSIGNED_TAB,
     buildTabItems,
@@ -49,7 +47,6 @@ import { useEntryOperations } from "@/Hooks/LoadingPlan/useEntryOperations";
 import { useLoadingPlanShortcuts } from "@/Hooks/LoadingPlan/useLoadingPlanShortcuts";
 import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
 import { isNonMachineKey, useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
-import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
 import { useRowFlip } from "@/Hooks/LoadingPlan/useRowFlip";
 import { useRowHoverRefs } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useHiddenRowCounts, useRowIndex } from "@/Hooks/LoadingPlan/useRowIndex";
@@ -65,7 +62,6 @@ import { DATA_COLUMNS } from "@/Lib/LoadingPlan/columnConfig";
 import { formatF3Machine } from "@/Lib/LoadingPlan/f3";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
-import { showModal } from "@/Lib/LoadingPlan/modal";
 import { compareUnassigned, createRowMatchers, getMachineLabel } from "@/Lib/LoadingPlan/rowPredicates";
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
@@ -370,11 +366,6 @@ export default function Deemo({
         update, syncServerFields, setIsDirty, toast,
     });
 
-    const pickupPool = usePickupPool({
-        store: useLoadingPlanStore, date, selectedLocation, readOnly, isF3,
-        beginWrite, withUpdating, mutate, setIsDirty, toast,
-    });
-
     const handleShowSplitHistory = useCallback(
         (rootLotId, isParent, isChild, lotId) =>
             loadSplitHistory(rootLotId, isParent, isChild, {
@@ -394,11 +385,6 @@ export default function Deemo({
             }),
         [loadMergeHistory],
     );
-
-    const handleOpenPickupPool = useCallback(() => {
-        pickupPool.load();
-        showModal(PULL_PICKUPS_MODAL_ID);
-    }, [pickupPool.load]);
 
     const handleSplitRevert = useCallback(
         (args) => revertSplit(args, { onDone: () => splitHistoryModalRef.current?.close() }),
@@ -925,9 +911,6 @@ export default function Deemo({
                     <PlanTabsBar
                         tabs={lockedMachine ? undefined : tabItems}
                         activeTab={activeTab}
-                        onOpenPickupPool={
-                            pickupPool.enabled && PICKUP_POOL_TABS.includes(activeTab) ? handleOpenPickupPool : undefined
-                        }
                         onTabChange={goToTab}
                         location={selectedLocation}
                         locationDisabled={writesLocked}
@@ -1191,8 +1174,6 @@ export default function Deemo({
                         beginWrite={beginWrite}
                         holdLock={holdLock}
                     />
-
-                    <PullPickupsModal pool={pickupPool} date={date} location={selectedLocation} disabled={writesLocked} />
                 </>
             )}
 
