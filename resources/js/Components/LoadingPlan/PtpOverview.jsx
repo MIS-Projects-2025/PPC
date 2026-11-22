@@ -2,6 +2,7 @@ import {
     aggregateByMachine,
     buildOverviewSections,
     buildStatusCols,
+    completedCount,
     fmtPct,
 } from "@/Lib/LoadingPlan/capacityOverview";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
@@ -57,7 +58,8 @@ function StatusCells({ counts, statusCols }) {
 
 const SummaryRow = memo(function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, onJump, jumpKey, variant = "row" }) {
     const isTotal = variant !== "row";
-    const done = agg.counts.DONE ?? 0;
+    // Percentage = (DONE + post-TNR) / Planned
+    const done = completedCount(agg.counts);
     const firstCell = clsx(
         "sticky left-0 whitespace-nowrap",
         isTotal ? "bg-base-200 font-semibold" : "bg-base-300 font-medium",

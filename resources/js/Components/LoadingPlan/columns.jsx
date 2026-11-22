@@ -1,6 +1,7 @@
 import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
 import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
 import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
+import { FILL_COLUMNS, isFillableRow } from "@/Hooks/LoadingPlan/useCellFillPersistence";
 import {
     BAKE_COLUMNS,
     EDITABLE_COLUMNS,
@@ -13,7 +14,7 @@ import {
     getDataColumns,
 } from "@/Lib/LoadingPlan/columnConfig";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
-import { useContext } from "react";
+import { useContext, useLayoutEffect } from "react";
 import { SelectColumn } from "react-data-grid";
 import { WithBakeIndicator } from "./BakingBadge";
 import { BucketHeaderCell } from "./BucketHeaderBar";
@@ -42,6 +43,18 @@ export { AccuTimeEditor, TimeStartEditor } from "./CellEditor";
 export { TableActionsContext } from "./TableActionsContext";
 
 const CUSTOM_EDITORS = { accu_time: AccuTimeEditor, time_start: TimeStartEditor };
+
+/**
+ * Status / Doable aren't typed into (the status dropdown and the Doable modal do that), but the grid
+ * only shows the fill handle on cells that have an editor. This one closes itself right away.
+ */
+function FillOnlyEditor({ onClose }) {
+    useLayoutEffect(() => {
+        onClose(false, true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return null;
+}
 
 /** Only the grid's built-in checkbox column is dropped in read-only mode (the drag-handle column also renders the machine headers). */
 const READONLY_STRIP_KEYS = new Set(["select-row"]);
@@ -265,6 +278,11 @@ function canEditCell(row, key, isLocked) {
     return true;
 }
 
+/** Fill handle on Status / Doable: placed or unassigned lots, never headers, blocks or grouped rows. */
+function canFillCell(row, isLocked) {
+    return !isLocked() && isFillableRow(row);
+}
+
 function dragHandleColumn({ onToggleCollapse, readOnly, numColumns }) {
     return {
         key: "dragHandle",
@@ -317,6 +335,14 @@ export function makeColumns(
                     return (renderers[col.key] ?? renderDefaultCell)(row, col.key);
                 },
             };
+
+            if (FILL_COLUMNS.has(col.key)) {
+                return {
+                    ...column,
+                    renderEditCell: FillOnlyEditor,
+                    editable: (row) => canFillCell(row, isLocked),
+                };
+            }
 
             if (!EDITABLE_COLUMNS[col.key]) return column;
 

@@ -54,6 +54,12 @@ const KNOWN_SET = new Set(STATUS_GROUPS.flatMap((g) => g.statuses));
 const IDLE_RANK = 1e9;
 const UNMAPPED_RANK = 1e6;
 
+/** Always shown as status columns, even when every count is zero (frontend + Excel). */
+export const POST_TNR_STATUSES = ["FVI", "OQA", "BOXING", "BUY-OFF"];
+/** The Percentage column counts these: DONE + post-TNR. */
+export const COMPLETED_STATUSES = ["DONE", ...POST_TNR_STATUSES];
+export const completedCount = (counts) => COMPLETED_STATUSES.reduce((s, k) => s + (counts[k] ?? 0), 0);
+
 const statusOf = (row) => String(row.status ?? "").trim().toUpperCase() || "NONE";
 
 export const fmtPct = (n, d, digits = 0) => (d > 0 ? ((n / d) * 100).toFixed(digits) + "%" : "—");
@@ -150,10 +156,13 @@ export function buildOverviewSections({ byMachine, serverMachines, nonMachines, 
 
 export function buildStatusCols({ extraStatuses, grand, hideEmpty = true }) {
     const groups = STATUS_GROUPS.map((g) => g.statuses);
-    if (extraStatuses.length) groups.push(extraStatuses);
+    const known = new Set(groups.flat());
+    // forced columns that the status menu doesn't list still need a home
+    const extras = [...new Set([...extraStatuses, ...POST_TNR_STATUSES.filter((s) => !known.has(s))])];
+    if (extras.length) groups.push(extras);
     return groups.flatMap((list) =>
         list
-            .filter((s) => !hideEmpty || (grand.counts[s] ?? 0) > 0)
+            .filter((s) => !hideEmpty || POST_TNR_STATUSES.includes(s) || (grand.counts[s] ?? 0) > 0)
             .map((status, i) => ({ status, borderLeft: i === 0 })),
     );
 }

@@ -39,6 +39,7 @@ import {
 import { useBucketOperations } from "@/Hooks/LoadingPlan/useBucketOperations";
 import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
 import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
+import { FILL_COLUMNS, useCellFillPersistence } from "@/Hooks/LoadingPlan/useCellFillPersistence";
 import { useColumnWidths } from "@/Hooks/LoadingPlan/useColumnWidths";
 import { useDoableOperations } from "@/Hooks/LoadingPlan/useDoableOperations";
 import { useDragPreview } from "@/Hooks/LoadingPlan/useDragPreview";
@@ -562,9 +563,19 @@ export default function Deemo({
     });
 
     // ── cell edits, bulk delete, groups, drag & drop ─────────────────────
-    const handleRowsChange = useCellEditPersistence({
+    const handleCellEdit = useCellEditPersistence({
         dataRows, displayRows, baseTimes, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields,
     });
+
+    const { onFill, handleFillChange } = useCellFillPersistence({
+        dataRows, date, store: useLoadingPlanStore, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields,
+    });
+
+    // a Status / Doable change can only come from the fill handle (their editors never commit)
+    const handleRowsChange = useCallback(
+        (rows, meta) => (FILL_COLUMNS.has(meta.column.key) ? handleFillChange(rows, meta) : handleCellEdit(rows, meta)),
+        [handleFillChange, handleCellEdit],
+    );
 
     const handleBulkDeleteNotice = useCallback(() => {
         const selected = dataRows.filter((r) => selectedRows.has(r.id));
@@ -1047,6 +1058,7 @@ export default function Deemo({
                                         onColumnWidthsChange={onColumnWidthsChange}
                                         renderers={renderers}
                                         onRowsChange={readOnly ? undefined : handleRowsChange}
+                                        onFill={readOnly ? undefined : onFill}
                                         // onScroll={handleGridScroll}
                                         rowKeyGetter={getRowKey}
                                         selectedRows={readOnly ? undefined : selectedRows}

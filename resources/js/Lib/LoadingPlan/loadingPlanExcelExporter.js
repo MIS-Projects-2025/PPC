@@ -12,6 +12,8 @@ import {
     aggregateByMachine,
     buildOverviewSections,
     buildStatusCols,
+    COMPLETED_STATUSES,
+    completedCount,
     resolveSummaryGroup,
 } from "@/Lib/LoadingPlan/capacityOverview";
 import { PRE_TNR_STATUSES, STATUS_ORDER } from "@/Lib/LoadingPlan/ptpOverview";
@@ -247,7 +249,7 @@ function resolveCellValue(col, row, ctx) {
         if (col.key === "accu_time") return hoursOf(row.accu_time);
         if (col.key === "doable") {
             if (row.doable_status === "no_recipe" && !row.doable_overridden) return "No Recipe";
-            return row.doable > 0 ? Number(row.doable) : "—";
+            return row.doable > 0 ? Number(row.doable) : null;
         }
         if (col.key === "time_start" || col.key === "time_end") return toExcelTime(row, col.key);
         return null;
@@ -257,6 +259,8 @@ function resolveCellValue(col, row, ctx) {
     if (col.key === MACHINE_COLUMN_KEY) return ctx.getMachineLabel(row.machine);
     if (col.key === "accu_time") return hoursOf(row.accu_time);
     if (col.key === "time_start" || col.key === "time_end") return toExcelTime(row, col.key);
+    // a 0 doable is left blank
+    if (col.key === "doable") return Number(row.doable) === 0 ? null : (row.doable ?? null);
     return row[col.key] ?? null;
 }
 
@@ -299,6 +303,7 @@ function styleDataCell(cell, col, row, ctx) {
 }
 
 function writeRows(sheet, rows, ctx) {
+    const written = [];
     rows.forEach((row, idx) => {
         const values = ctx.exportColumns.map((col) =>
             col.key === ITEM_COLUMN_KEY ? idx + 1 : resolveCellValue(col, row, ctx),
@@ -311,6 +316,7 @@ function writeRows(sheet, rows, ctx) {
         }
 
         const dim = !!ctx.isOwn && !ctx.isBlock(row) && !ctx.isOwn(row);
+        written.push({ row, number: dataRow.number, dim });
 
         ctx.exportColumns.forEach((col, i) => {
             const cell = dataRow.getCell(i + 1);
@@ -335,9 +341,67 @@ function writeRows(sheet, rows, ctx) {
             }
         });
     });
+    return written;
 }
 
-function renderSection({ sheet, title, rows, groups = [], ctx }) {
+/** [5, 6, 7, 9] + "N" -> ["N5:N7", "N9"] */
+function toRanges(nums, col) {
+    const out = [];
+    let start = nums[0];
+    let prev = nums[0];
+    for (let i = 1; i <= nums.length; i++) {
+        if (nums[i] === prev + 1) {
+            prev = nums[i];
+            continue;
+        }
+        out.push(start === prev ? `${col}${start}` : `${col}${start}:${col}${prev}`);
+        start = prev = nums[i];
+    }
+    return out;
+}
+
+/**
+ * Last row of a machine section: overall Qty and Doable as live SUM formulas, on the section's
+ * header colour. Only the machine's own rows count: rows drawn dimmed (another package / location)
+ * are left out. Doable skips rework rows, same as the machine header in the app.
+ */
+function addSectionTotals(sheet, written, ctx) {
+    const { qtyCol, doableCol, exportColumns, partNameIdx } = ctx;
+    if (!qtyCol || !doableCol) return;
+
+    const own = written.filter((w) => !w.dim);
+    if (own.length === 0) return;
+
+    const lots = own.filter((w) => !ctx.isBlock(w.row));
+    const lotsForDoable = lots.filter((w) => !w.row.is_rework);
+    const sumOf = (list, key) => list.reduce((s, w) => s + (Number(w.row[key]) || 0), 0);
+
+    const row = sheet.addRow([]);
+    for (let i = 1; i <= exportColumns.length; i++) {
+        const cell = row.getCell(i);
+        cell.fill = solid(COLORS.headerFill);
+        applyBorder(cell);
+    }
+
+    const label = row.getCell((partNameIdx === -1 ? 0 : partNameIdx) + 1);
+    label.value = "Total";
+    label.font = { bold: true };
+
+    const put = (col, nums, result) => {
+        const cell = sheet.getCell(`${col}${row.number}`);
+        cell.value = { formula: sumRefs(toRanges(nums, col)), result };
+        cell.numFmt = "#,##0";
+        cell.font = { bold: true };
+    };
+    put(qtyCol, own.map((w) => w.number), sumOf(lots, "qty"));
+    put(
+        doableCol,
+        own.filter((w) => !w.row.is_rework).map((w) => w.number),
+        sumOf(lotsForDoable, "doable"),
+    );
+}
+
+function renderSection({ sheet, title, rows, groups = [], totals = false, ctx }) {
     const { exportColumns, partNameIdx, timeStartIdx } = ctx;
     const n = exportColumns.length;
 
@@ -365,7 +429,7 @@ function renderSection({ sheet, title, rows, groups = [], ctx }) {
         applyBorder(cell);
     }
 
-    writeRows(sheet, rows, ctx);
+    const laneRows = writeRows(sheet, rows, ctx);
 
     groups.forEach((g) => {
         const labelRow = sheet.addRow([]);
@@ -377,6 +441,8 @@ function renderSection({ sheet, title, rows, groups = [], ctx }) {
         }
         writeRows(sheet, g.rows, ctx);
     });
+
+    if (totals) addSectionTotals(sheet, laneRows, ctx);
 
     sheet.addRow([]);
 }
@@ -640,16 +706,18 @@ function renderCapacityOverviewSheet(
 
     const HEADER_ROW = 2;
     const FIRST_STATUS = 4; // 0-based index after Machine, Capacity, Quantity, Planned
-    const PCT = FIRST_STATUS + statusCols.length;
+    const REMARKS = FIRST_STATUS + statusCols.length; // left blank for people to write in
+    const PCT = REMARKS + 1;
     const COMMIT = PCT + 1;
     const n = COMMIT + 1;
     const statusLetter = (i) => colLetter(FIRST_STATUS + i);
-    const doneIdx = statusCols.findIndex((c) => c.status === "DONE");
+    // Percentage = (DONE + post-TNR) / Planned
+    const doneIdxs = statusCols.flatMap((c, i) => (COMPLETED_STATUSES.includes(c.status) ? [i] : []));
 
     sheet.columns = [
         { width: 24 }, { width: 12 }, { width: 12 }, { width: 10 },
         ...statusCols.map(() => ({ width: 11 })),
-        { width: 12 }, { width: 12 },
+        { width: 18 }, { width: 12 }, { width: 12 },
     ];
 
     // title
@@ -662,7 +730,7 @@ function renderCapacityOverviewSheet(
     const headerRow = sheet.addRow([
         "Machine", "Capacity", "Quantity", "Planned",
         ...statusCols.map((c) => c.status),
-        "Percentage", "Commit",
+        "Remarks", "Percentage", "Commit",
     ]);
     for (let i = 1; i <= n; i++) {
         const cell = headerRow.getCell(i);
@@ -708,14 +776,15 @@ function renderCapacityOverviewSheet(
     };
 
     const addAggRow = ({ label, capacity, agg, live }, { fill = null, bold = false } = {}) => {
-        const done = agg.counts.DONE ?? 0;
+        const done = completedCount(agg.counts);
         const row = sheet.addRow([
             label,
             capacity || "—",
             agg.qty,
             agg.planned,
             ...statusCols.map(({ status }) => agg.counts[status] ?? 0),
-            null,
+            null, // Remarks
+            null, // Percentage (formula below)
             agg.commit,
         ]);
 
@@ -727,8 +796,8 @@ function renderCapacityOverviewSheet(
         setF(3, f.planned, agg.planned);
         statusCols.forEach(({ status }, i) => setF(FIRST_STATUS + i, f.status(i), agg.counts[status] ?? 0));
         setF(COMMIT, f.commit, agg.commit);
-        const doneRef = doneIdx === -1 ? "0" : `${statusLetter(doneIdx)}${r}`;
-        setF(PCT, `IF(D${r}=0,"",${doneRef}/D${r})`, agg.planned > 0 ? done / agg.planned : "");
+        const doneRef = doneIdxs.length ? doneIdxs.map((i) => `${statusLetter(i)}${r}`).join("+") : "0";
+        setF(PCT, `IF(D${r}=0,"",(${doneRef})/D${r})`, agg.planned > 0 ? done / agg.planned : "");
 
         for (let i = 0; i < n; i++) {
             const cell = row.getCell(i + 1);
@@ -736,13 +805,13 @@ function renderCapacityOverviewSheet(
             if (fill) cell.fill = solid(fill);
             if (bold) cell.font = { bold: true };
 
-            const isStatus = i >= FIRST_STATUS && i < PCT;
+            const isStatus = i >= FIRST_STATUS && i < REMARKS;
             if (isStatus) {
                 cell.alignment = { horizontal: "center" };
                 if (statusCols[i - FIRST_STATUS].borderLeft) {
                     cell.border = { ...cell.border, left: { style: "medium", color: { argb: "FF7F7F7F" } } };
                 }
-            } else if (i > 0) {
+            } else if (i > 0 && i !== REMARKS) {
                 cell.alignment = { horizontal: "right" };
             }
         }
@@ -802,7 +871,7 @@ function renderCapacityOverviewSheet(
     // grey out zero counts live
     if (statusCols.length) {
         sheet.addConditionalFormatting({
-            ref: `${colLetter(FIRST_STATUS)}3:${colLetter(PCT - 1)}${grandRow.number}`,
+            ref: `${colLetter(FIRST_STATUS)}3:${colLetter(REMARKS - 1)}${grandRow.number}`,
             rules: [{
                 type: "cellIs", operator: "equal", formulae: [0], priority: 1,
                 style: { font: { color: { argb: COLORS.dimFont } } },
@@ -891,6 +960,8 @@ export async function exportLoadingPlanToExcel({
         dateCol: colLetter(exportColumns.findIndex((c) => c.key === DATE_COLUMN_KEY)),
         beCol: colLetter(exportColumns.findIndex((c) => c.key === "be_starttime")),
         ctCol: ctIdx === -1 ? null : colLetter(ctIdx),
+        qtyCol: colLetter(exportColumns.findIndex((c) => c.key === "qty")) || null,
+        doableCol: colLetter(exportColumns.findIndex((c) => c.key === "doable")) || null,
         cellRefs: new Map(), // row object -> { sheet, rowNumber } of its own (non-dimmed) copy
     };
 
@@ -987,7 +1058,7 @@ export async function exportLoadingPlanToExcel({
             const hasOwnParked = groups.some((g) => g.rows.some(own));
             if (!hasOwnLots && !hasOwnParked) continue; // same rule as the table: nothing for this tab, no section
 
-            renderSection({ sheet, title: machineLabel(m), rows: mine, groups, ctx: sheetCtx });
+            renderSection({ sheet, title: machineLabel(m), rows: mine, groups, totals: m !== null, ctx: sheetCtx });
             rendered = true;
         }
 
