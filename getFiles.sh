@@ -103,28 +103,28 @@
     #
     "LoadingPlanEntryHistory"
     #
-    #"LoadingPlanBucket"
-    #"LoadingPlanBucketController"
-    #"LotBucketItem"
+    "LoadingPlanBucket"
+    "LoadingPlanBucketController"
+    "LotBucketItem"
     #
     "SchedulerService"
 ##
-    #"BakeLotService"
-    #"MachinePlatformCapacityBand"
-    #"MachinePlatformCapacityBandController"
+    "BakeLotService"
+    "MachinePlatformCapacityBand"
+    "MachinePlatformCapacityBandController"
     ##
-    #"LoadingPlanEntryObserver"
-    #"LotQuantityObserver"
-    #"BaseHistoryObserver"
+    "LoadingPlanEntryObserver"
+    "LotQuantityObserver"
+    "BaseHistoryObserver"
     ##
 ###
     ####################### Models
-    #"BoschPart"
-    #"BoschPartSettings"
+    "BoschPart"
+    "BoschPartSettings"
     "CapacityBand"
 ##
     ####################### web
-    # "routes\loading-plan.php"
+    "routes\loading-plan.php"
     # "routes\auth.php"
     # "routes\web.php"
     ##
@@ -186,11 +186,12 @@
 ##
     ######################## MODAL
     "CapacityOverviewModal"
-    #"AutoSortModal"
-    #"ColumnVisibilityModal"
-    #"MissingPartsModal"
+    "AutoSortModal"
+    "ColumnVisibilityModal"
+    "MissingPartsModal"
     "QuickAddModals"
-    #"SchedulerModal"
+    "DoableEditModal"
+    "SchedulerModal"
     "modal"
     "TransferModal"
     "SplitHistoryModal"
