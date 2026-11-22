@@ -37,128 +37,108 @@
         const theme = localStorage.getItem("theme") || "lofi";
         document.documentElement.setAttribute("data-theme", theme);
 
-        // Animated Semiconductor IC Favicon
+        // Animated Reel Favicon
         (() => {
             const favicon = document.getElementById('app-favicon');
-
             if (!favicon) return;
 
-            const canvas = document.createElement('canvas');
+            const COLOR = '#ff6a83';
+            const MARKER = '#ffd6dd'; // lighter tint so the rotation is visible
             const size = 64;
+            const c = size / 2;
 
+            const canvas = document.createElement('canvas');
             canvas.width = size;
             canvas.height = size;
 
             const ctx = canvas.getContext('2d');
-
             if (!ctx) return;
 
+            const HOLES = 6;
             let frame = 0;
 
-            // IC pins arranged clockwise
-            const pins = [];
-
-            // Top
-            for (let i = 0; i < 4; i++) {
-                const x = 22 + i * 7;
-                pins.push([x, 6, x, 16]);
-            }
-
-            // Right
-            for (let i = 0; i < 4; i++) {
-                const y = 22 + i * 7;
-                pins.push([48, y, 58, y]);
-            }
-
-            // Bottom
-            for (let i = 3; i >= 0; i--) {
-                const x = 22 + i * 7;
-                pins.push([x, 48, x, 58]);
-            }
-
-            // Left
-            for (let i = 3; i >= 0; i--) {
-                const y = 22 + i * 7;
-                pins.push([6, y, 16, y]);
-            }
+            // Tape: from the top-left corner, tangent to a core circle of radius R
+            const TAPE_R = 12;
+            const dx = c, dy = c;                      // corner (0,0) -> center
+            const dist = Math.hypot(dx, dy);
+            const tapeAngle = Math.atan2(dy, dx) - Math.asin(TAPE_R / dist);
+            const tapeLen = Math.sqrt(dist * dist - TAPE_R * TAPE_R);
+            const tx = Math.cos(tapeAngle), ty = Math.sin(tapeAngle);
+            const tapeStart = [-4 * tx, -4 * ty];      // start slightly off-canvas so the corner is fully covered
+            const tapeEnd = [tapeLen * tx, tapeLen * ty];
 
             function drawFavicon() {
                 ctx.clearRect(0, 0, size, size);
 
-                const activePin = Math.floor(frame / 2) % pins.length;
+                const angle = frame * (Math.PI / 18); // 10° per frame
 
-                // Draw IC pins
-                pins.forEach(([x1, y1, x2, y2], index) => {
+                // Reel flange
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.beginPath();
+                ctx.arc(c, c, 28, 0, Math.PI * 2);
+                ctx.fillStyle = COLOR;
+                ctx.fill();
+
+                ctx.save();
+                ctx.translate(c, c);
+                ctx.rotate(angle);
+
+                // Cut the spokes' holes out of the flange
+                ctx.globalCompositeOperation = 'destination-out';
+                for (let i = 0; i < HOLES; i++) {
+                    const a = (i / HOLES) * Math.PI * 2;
                     ctx.beginPath();
-                    ctx.moveTo(x1, y1);
-                    ctx.lineTo(x2, y2);
+                    ctx.arc(Math.cos(a) * 15, Math.sin(a) * 15, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                }
 
-                    ctx.lineWidth = 3;
-                    ctx.lineCap = 'round';
-
-                    if (index === activePin) {
-                        ctx.strokeStyle = '#22d3ee';
-                        ctx.shadowColor = '#06b6d4';
-                        ctx.shadowBlur = 9;
-                    } else {
-                        ctx.strokeStyle = '#94a3b8';
-                        ctx.shadowBlur = 0;
-                    }
-
-                    ctx.stroke();
-                });
-
-                ctx.shadowBlur = 0;
-
-                // Main IC package
+                // Hub hole
                 ctx.beginPath();
-                ctx.roundRect(15, 15, 34, 34, 6);
-                ctx.fillStyle = '#102a43';
+                ctx.arc(0, 0, 5, 0, Math.PI * 2);
                 ctx.fill();
 
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = '#7dd3fc';
+                ctx.globalCompositeOperation = 'source-over';
+
+                // Spindle
+                ctx.beginPath();
+                ctx.arc(0, 0, 2, 0, Math.PI * 2);
+                ctx.fillStyle = COLOR;
+                ctx.fill();
+
+                // Rotation marker (the holes are symmetric, so without
+                // this the spin looks like it's jittering)
+                ctx.beginPath();
+                ctx.arc(22.5, 0, 2, 0, Math.PI * 2);
+                ctx.fillStyle = MARKER;
+                ctx.fill();
+
+                ctx.restore();
+
+                // Tape (stationary, drawn on top of the spinning reel)
+                ctx.lineCap = 'butt';
+
+                // Cut a thin transparent channel so the tape stays visible over the flange
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.lineWidth = 8;
+                ctx.beginPath();
+                ctx.moveTo(...tapeStart);
+                ctx.lineTo(...tapeEnd);
                 ctx.stroke();
 
-                // Inner silicon die
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.strokeStyle = COLOR;
+                ctx.lineWidth = 4;
                 ctx.beginPath();
-                ctx.roundRect(22, 22, 20, 20, 4);
-                ctx.fillStyle = '#0c3a54';
-                ctx.fill();
-
-                ctx.lineWidth = 1.5;
-                ctx.strokeStyle = '#22d3ee';
+                ctx.moveTo(...tapeStart);
+                ctx.lineTo(...tapeEnd);
                 ctx.stroke();
 
-                // IC label
-                ctx.fillStyle = '#e0f2fe';
-                ctx.font = 'bold 11px Arial';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('IC', 32, 33);
-
-                // Animated signal indicator
-                const pulse = 1.5 + Math.sin(frame * 0.3) * 0.7;
-
-                ctx.beginPath();
-                ctx.arc(40, 24, pulse, 0, Math.PI * 2);
-                ctx.fillStyle = '#67e8f9';
-                ctx.shadowColor = '#22d3ee';
-                ctx.shadowBlur = 8;
-                ctx.fill();
-
-                ctx.shadowBlur = 0;
-
-                // Update browser tab icon
                 favicon.href = canvas.toDataURL('image/png');
-
                 frame++;
             }
 
-            // Initial render
             drawFavicon();
 
-            // Animate every 120ms
             if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
                 setInterval(drawFavicon, 120);
             }
