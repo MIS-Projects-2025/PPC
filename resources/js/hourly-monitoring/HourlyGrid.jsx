@@ -1,10 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { DataGrid } from 'react-data-grid';
 import { ApiError, api } from './api';
-import { FIELD_KINDS, buildCodeIndex, buildDisplayRows, reconcile, suggestCodes, toGridRow } from './cellUtils';
+import { FIELD_KINDS, buildCodeIndex, buildDisplayRows, parseClipboard, reconcile, suggestCodes, toGridRow } from './cellUtils';
 import { buildColumns } from './columns';
-import { TextEditor, createSuggestEditor } from './SuggestEditor';
-
+import { CellNavContext, TextEditor, createSuggestEditor } from './SuggestEditor';
 /**
  * Props: { sheet, rows, setRows, codes, config, employeesUrl, packageTypes?, shift?, title?, collapsed?, onToggleShift? }
  *
@@ -21,6 +20,9 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
     const clipboard = useRef('');
     const packageTypesRef = useRef(packageTypes);
     packageTypesRef.current = packageTypes;
+    const gridRef = useRef(null);
+    const selected = useRef(null); // { idx, rowIdx } of the selected cell
+    const pasteRef = useRef(null); // latest pasteBlock, used by the deferred paste (PASTE-PATCH)
 
     const displayRows = useMemo(
         () => (sheet.type === 'tnr' ? buildDisplayRows(rows, codeIdx, config) : rows),
@@ -184,6 +186,81 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
         [sheet.type, codeIdx, config, editors, deleteRow, shift, collapsed],
     );
 
+    const leafColumns = useMemo(() => columns.flatMap((c) => c.children ?? [c]), [columns]);
+
+    // Used by the editors' arrow keys (see useCellNavigation).
+    const nav = useMemo(
+        () => ({
+            target: ([dRow, dCol]) => {
+                const cur = selected.current;
+                if (!cur) return null;
+                const idx = cur.idx + dCol;
+                const rowIdx = cur.rowIdx + dRow;
+                const inside = idx >= 0 && idx < leafColumns.length && rowIdx >= 0 && rowIdx < displayRef.current.length;
+                return inside ? { idx, rowIdx } : null;
+            },
+            // After the editor has closed and committed.
+            select: (position) => setTimeout(() => gridRef.current?.selectCell(position), 0),
+            // A multi-cell paste made inside an open editor: the editor has closed itself, spread the block from the selected cell.
+            paste: (text) =>
+                setTimeout(() => {
+                    if (selected.current) pasteRef.current?.(text, selected.current);
+                }, 0),
+        }),
+        [leafColumns],
+    );
+
+    // PASTE-PATCH
+    // Paste a block from Excel / Sheets: the top-left value lands in the selected cell, the rest follows right and down.
+    // Read-only cells (calculated columns, names, subtotal rows) are skipped but keep their place in the block,
+    // so a row copied from a sheet with the same layout lines up column for column.
+    const positionOf = (row, column) => {
+        const rowIdx = displayRef.current.findIndex((r) => r.id === row?.id);
+        const idx = leafColumns.findIndex((c) => c.key === column?.key);
+        return rowIdx < 0 || idx < 0 ? null : { idx, rowIdx };
+    };
+
+    const pasteBlock = (text, start) => {
+        const lines = parseClipboard(text);
+        if (!lines.length || !start || start.rowIdx < 0) return;
+
+        const next = [...displayRef.current];
+        const indexes = [];
+        let line = 0;
+
+        for (let r = start.rowIdx; r < next.length && line < lines.length; r++) {
+            if (next[r].__kind) continue; // subtotal / grand total rows are skipped, not pasted over
+            let row = next[r];
+            lines[line].forEach((value, j) => {
+                const col = leafColumns[start.idx + j];
+                const canEdit = col?.renderEditCell && col.editable !== false && (typeof col.editable !== 'function' || col.editable(row));
+                if (canEdit) row = { ...row, [col.key]: value };
+            });
+            if (row !== next[r]) {
+                next[r] = row;
+                indexes.push(r);
+            }
+            line++;
+        }
+
+        if (indexes.length) onRowsChange(next, { indexes });
+    };
+    pasteRef.current = pasteBlock;
+
+    // Capture phase, so the grid's own single-cell paste never runs for it.
+    // An open editor handles its own paste (useCellNavigation in SuggestEditor.jsx): plain text stays in the editor,
+    // a block of several cells closes it and comes back through nav.paste.
+    const onPaste = (e) => {
+        if (e.target instanceof HTMLInputElement) return;
+        const text = e.clipboardData?.getData('text/plain');
+        const start = selected.current;
+        if (!text || !start || start.rowIdx < 0) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        pasteBlock(text, start);
+    };
+
     // The DAY / NIGHT SHIFT group headers are plain header cells: one delegated click handler toggles the shift.
     const onHeaderClick = (e) => {
         const group = e.target.closest?.('.hm-group-day, .hm-group-night');
@@ -191,7 +268,7 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
     };
 
     return (
-        <div className="hm-gridwrap" onClick={onHeaderClick}>
+        <div className="hm-gridwrap" onClick={onHeaderClick} onPasteCapture={onPaste}>
             {title && <h2 className="hm-shift-title">{title}</h2>}
             <div className="hm-toolbar">
                 <button type="button" className="hm-btn" onClick={addRow}>
@@ -199,7 +276,7 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
                 </button>
                 {shift !== 'night' && (
                     <span className="hm-hint">
-                        Type a number or a downtime code · arrows to move · Enter picks the suggestion · drag the corner handle to fill
+                        Type a number or a downtime code · arrows to move · Enter picks the suggestion · drag the corner handle to fill · paste a block from Excel
                     </span>
                 )}
                 {error && (
@@ -208,35 +285,58 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
                     </span>
                 )}
             </div>
-            <DataGrid
-                className={`rdg-light hm-grid${shift ? ' is-half' : ''}`}
-                columns={columns}
-                rows={displayRows}
-                rowKeyGetter={(row) => row.id}
-                rowClass={(row) => (row.__kind ? `hm-total-row is-${row.__kind}` : undefined)}
-                onRowsChange={onRowsChange}
-                onFill={({ columnKey, sourceRow, targetRow }) =>
-                    sourceRow.__kind || targetRow.__kind
-                        ? targetRow
-                        : {
-                              ...targetRow,
-                              [columnKey]: sourceRow[columnKey],
-                              // keep the displayed name in step with a filled employee ID
-                              ...(columnKey.endsWith('_emp_id')
-                                  ? { [columnKey.replace('_id', '_name')]: sourceRow[columnKey.replace('_id', '_name')] }
-                                  : {}),
-                          }
-                }
-                onCellCopy={({ row, column }) => {
-                    clipboard.current = String(row[column.key] ?? '');
-                }}
-                onCellPaste={({ row, column }) =>
-                    column.renderEditCell && !row.__kind ? { ...row, [column.key]: clipboard.current } : row
-                }
-                rowHeight={30}
-                headerRowHeight={32}
-                renderers={{ noRowsFallback: <div className="hm-empty">No rows yet. Use “Add row” to start this table.</div> }}
-            />
+            <CellNavContext.Provider value={nav}>
+                <DataGrid
+                    ref={gridRef}
+                    onSelectedCellChange={(args) => {
+                        selected.current = args ? { idx: args.column.idx, rowIdx: args.rowIdx } : null;
+                    }}
+                    onCellClick={({ row, column }) => {
+                        // PASTE-PATCH: remember the clicked cell even if onSelectedCellChange did not report it
+                        const position = positionOf(row, column);
+                        if (position) selected.current = position;
+                    }}
+                    onCellCopy={({ row, column }, event) => {
+                        const text = String(row[column.key] ?? '');
+                        clipboard.current = text;
+                        // Also put it on the system clipboard, so a single cell can be pasted into Excel.
+                        if (event?.clipboardData) {
+                            event.clipboardData.setData('text/plain', text);
+                            event.preventDefault();
+                        }
+                    }}
+                    className={`rdg-light hm-grid${shift ? ' is-half' : ''}`}
+                    columns={columns}
+                    rows={displayRows}
+                    rowKeyGetter={(row) => row.id}
+                    rowClass={(row) => (row.__kind ? `hm-total-row is-${row.__kind}` : undefined)}
+                    onRowsChange={onRowsChange}
+                    onFill={({ columnKey, sourceRow, targetRow }) =>
+                        sourceRow.__kind || targetRow.__kind
+                            ? targetRow
+                            : {
+                                ...targetRow,
+                                [columnKey]: sourceRow[columnKey],
+                                // keep the displayed name in step with a filled employee ID
+                                ...(columnKey.endsWith('_emp_id')
+                                    ? { [columnKey.replace('_id', '_name')]: sourceRow[columnKey.replace('_id', '_name')] }
+                                    : {}),
+                            }
+                    }
+                    onCellPaste={({ row, column }, event) => {
+                        // PASTE-PATCH: only reached when the capture handler could not place the paste (no selected cell known).
+                        // Spread the clipboard block from the cell the grid reports; never while an editor input has the focus.
+                        if (event?.target instanceof HTMLInputElement) return row;
+                        const text = event?.clipboardData?.getData('text/plain') || clipboard.current;
+                        const position = positionOf(row, column);
+                        if (text && position) setTimeout(() => pasteRef.current?.(text, position), 0);
+                        return row;
+                    }}
+                    rowHeight={30}
+                    headerRowHeight={32}
+                    renderers={{ noRowsFallback: <div className="hm-empty">No rows yet. Use “Add row” to start this table.</div> }}
+                />
+            </CellNavContext.Provider>
         </div>
     );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -10,8 +10,59 @@ function focusAndSelect(input) {
     input?.select();
 }
 
+/** Provided by HourlyGrid: { target([dRow, dCol]) => position | null, select(position) } */
+export const CellNavContext = createContext(null);
+
+const STEP = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+
+/**
+ * Arrow keys in an open editor commit it and move to the neighbouring cell (Excel "enter mode").
+ * F2 or a click inside the text switches to caret mode: Left / Right move the caret again.
+ * `commit(focus)` closes the editor with what was typed; pass your own to accept a suggestion instead.
+ */
+function useCellNavigation(onClose) {
+    const nav = useContext(CellNavContext);
+    const caretMode = useRef(false);
+
+    // PASTE-PATCH: a block copied from Excel (several cells) is not text for this one editor.
+    // Discard the edit, close the editor and let the grid spread the block from the selected cell.
+    const onPaste = (e) => {
+        const text = e.clipboardData?.getData('text/plain') ?? '';
+        if (!nav?.paste || !/[\t\r\n]/.test(text.replace(/[\r\n]+$/, ''))) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onClose(false, true);
+        nav.paste(text);
+    };
+
+    return {
+        caretProps: { onMouseDown: () => (caretMode.current = true), onPaste },
+        onKeyDown(e, commit = (focus) => onClose(true, focus)) {
+            if (e.key === 'F2') {
+                caretMode.current = true;
+                e.preventDefault();
+                return;
+            }
+            const step = STEP[e.key];
+            if (!nav || !step || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+            if (step[0] === 0 && caretMode.current) return; // Left / Right belong to the caret now
+
+            e.preventDefault();
+            e.stopPropagation();
+            const target = nav.target(step);
+            if (target) {
+                commit(false);
+                nav.select(target);
+            } else {
+                commit(true); // edge of the table: just commit and stay
+            }
+        },
+    };
+}
+
 /** Plain text editor (own implementation so we don't depend on react-data-grid's editor export names). */
 export function TextEditor({ row, column, onRowChange, onClose }) {
+    const { onKeyDown, caretProps } = useCellNavigation(onClose);
     return (
         <input
             className="rdg-text-editor"
@@ -19,6 +70,8 @@ export function TextEditor({ row, column, onRowChange, onClose }) {
             value={String(row[column.key] ?? '')}
             onChange={(e) => onRowChange({ ...row, [column.key]: e.target.value })}
             onBlur={() => onClose(true, false)}
+            onKeyDown={onKeyDown}
+            {...caretProps}
         />
     );
 }
@@ -40,7 +93,8 @@ export function TextEditor({ row, column, onRowChange, onClose }) {
 export function createSuggestEditor({ suggest, pick, debounceMs = 0, autoSelect = true }) {
     const initial = autoSelect ? 0 : -1;
 
-    return function SuggestEditor({ row, column, onRowChange }) {
+    return function SuggestEditor({ row, column, onRowChange, onClose }) {
+        const { onKeyDown: navigate, caretProps } = useCellNavigation(onClose);
         const key = column.key;
         const [text, setText] = useState(String(row[key] ?? ''));
         const [items, setItems] = useState([]);
@@ -83,20 +137,24 @@ export function createSuggestEditor({ suggest, pick, debounceMs = 0, autoSelect 
         const accept = (s) => onRowChange(pick(row, key, s), true);
 
         const onKeyDown = (e) => {
-            if (!items.length) return; // nothing open: let the grid handle Enter/Esc/Tab
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const open = items.length > 0;
+            if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
                 e.stopPropagation();
                 setActive((i) => {
                     if (e.key === 'ArrowDown') return (i + 1) % items.length;
                     return i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
                 });
-            } else if ((e.key === 'Enter' || e.key === 'Tab') && active >= 0) {
+                return;
+            }
+            if (open && (e.key === 'Enter' || e.key === 'Tab') && active >= 0) {
                 e.preventDefault();
                 e.stopPropagation();
                 accept(items[active]);
+                return;
             }
-            // active < 0: nothing highlighted, the grid commits the typed text
+            // Arrows: with a highlighted suggestion, Left / Right accept it before moving on (like Enter).
+            navigate(e, open && active >= 0 ? () => accept(items[active]) : undefined);
         };
 
         const flipUp = rect ? rect.bottom + 260 > window.innerHeight : false;
@@ -113,6 +171,7 @@ export function createSuggestEditor({ suggest, pick, debounceMs = 0, autoSelect 
                         onRowChange({ ...row, [key]: e.target.value });
                     }}
                     onKeyDown={onKeyDown}
+                    {...caretProps}
                     autoComplete="off"
                 />
                 {items.length > 0 &&

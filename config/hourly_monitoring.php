@@ -19,7 +19,7 @@ return [
     ],
 
     // Order of the groups in the Summary tab (Pickup sits between Tape and Reel and FVI Outs).
-    'summary_order' => ['tnr', 'pickup', 'fvi', 'boxing'],
+    'summary_order' => ['pickup', 'tnr', 'fvi', 'boxing'],
 
     // Pale colors for the F1 / F2 / F3 tabs and summary headers (keyed by family).
     'line_colors' => [

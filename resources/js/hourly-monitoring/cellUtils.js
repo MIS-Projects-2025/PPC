@@ -23,6 +23,38 @@ export function rangeLabel(hour) {
     return startSuffix === endSuffix ? `${start}-${end} ${endSuffix}` : `${start} ${startSuffix}-${end} ${endSuffix}`;
 }
 
+/** Excel / Sheets clipboard text (tab-separated, "quoted" cells may hold tabs, newlines and "" quotes) => string[][] */
+export function parseClipboard(text) {
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let quoted = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (quoted) {
+            if (ch !== '"') cell += ch;
+            else if (text[i + 1] === '"') (cell += '"'), i++;
+            else quoted = false;
+        } else if (ch === '"' && cell === '') {
+            quoted = true;
+        } else if (ch === '\t') {
+            row.push(cell);
+            cell = '';
+        } else if (ch === '\n' || ch === '\r') {
+            if (ch === '\r' && text[i + 1] === '\n') i++;
+            row.push(cell);
+            rows.push(row);
+            row = [];
+            cell = '';
+        } else {
+            cell += ch;
+        }
+    }
+    if (cell !== '' || row.length) rows.push([...row, cell]);
+    return rows;
+}
+
 /** Map<string, DowntimeCode> keyed by upper-cased code. */
 export const buildCodeIndex = (codes) => new Map(codes.map((c) => [c.code.toUpperCase(), c]));
 

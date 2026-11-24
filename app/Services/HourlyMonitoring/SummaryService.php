@@ -32,9 +32,7 @@ class SummaryService
     /** Order of the per-line detail tables under each shift (Pickup goes below FVI OUTS). */
     private const DETAIL_ORDER = ['tnr', 'boxing', 'fvi', 'pickup'];
 
-    public function __construct(private PickupService $pickup)
-    {
-    }
+    public function __construct(private PickupService $pickup) {}
 
     public function forDate(string $date): array
     {
@@ -178,7 +176,7 @@ class SummaryService
         }
 
         return [
-            'hours'  => array_map(fn ($h) => $this->hourLabel($h), $hours),
+            'hours'  => array_map(fn($h) => $this->hourLabel($h), $hours),
             'rows'   => $rows,
             'total'  => $total,
             'detail' => $this->detail($hours, $matrix),
