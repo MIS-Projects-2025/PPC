@@ -1,0 +1,52 @@
+# diff --git a/resources/js/Pages/Deemo.jsx b/resources/js/Pages/Deemo.jsx
+# index d7f4c19..cb55322 100644
+# --- a/resources/js/Pages/Deemo.jsx
+# +++ b/resources/js/Pages/Deemo.jsx
+# @@ -479,7 +479,47 @@
+#      // ── hover tools / grid renderers / contexts ──────────────────────────
+#      const { containerRef, rowIdxByElement } = useRowHoverRefs();
+#      const { armFlip } = useRowFlip({ containerRef, displayRows, enabled: !onBake && !onPtp });
+ 
+# +    // Diagnostics for the "machine headers + rows vanished until refresh" report. Logs once per distinct
+# +    // state: tells apart rows missing from the data, rows filtered by the view, and rows not painted.
+# +    const lastMissingHeadersRef = useRef("");
+# +    useEffect(() => {
+# +        if (onBake || onPtp || lockedMachine || activePackage !== ALL_PACKAGES_TAB || showAllMachines) return;
+# +
+# +        const machinesWithRows = [...rowsByMachine.keys()].filter((m) => m !== null && rowsByMachine.get(m)?.length);
+# +        const headers = displayRows.filter(
+# +            (r) => r.__type === "header" && r.__headerKind !== "bucket" && r.machine !== null,
+# +        ).length;
+# +        if (machinesWithRows.length < 3 || headers > 1) {
+# +            lastMissingHeadersRef.current = "";
+# +            return;
+# +        }
+# +
+# +        const sig = `${machinesWithRows.length}|${headers}|${dataRows.length}|${displayRows.length}`;
+# +        if (sig === lastMissingHeadersRef.current) return;
+# +        lastMissingHeadersRef.current = sig;
+# +
+# +        const painted = [...(containerRef.current?.querySelectorAll("[data-flip-key]") ?? [])];
+# +        console.error("[loading-plan] machine headers missing", {
+# +            activeTab,
+# +            showAllMachines,
+# +            selectedLocation,
+# +            date,
+# +            dataRows: dataRows.length,
+# +            machinesWithRows: machinesWithRows.length,
+# +            rowsInActiveTab: dataRows.filter(rowInActiveTab).length,
+# +            rowsOtherLocation: dataRows.filter(isOtherLoc).length,
+# +            rowsParked: dataRows.filter(isParked).length,
+# +            collapsedMachines: collapsedMachines.size,
+# +            displayRows: displayRows.length,
+# +            paintedRows: painted.length,
+# +            paintedWithInlineStyle: painted.filter((el) => el.style.opacity || el.style.transform).length,
+# +        });
+# +    }, [
+# +        onBake, onPtp, lockedMachine, activePackage, activeTab, showAllMachines, rowsByMachine, displayRows, dataRows,
+# +        rowInActiveTab, isOtherLoc, isParked, collapsedMachines, containerRef, selectedLocation, date,
+# +    ]);
+# +
+#      // ids (display order) that move together: the dragged row, or the whole selection
+#      const getDragGroupIds = useCallback(
+#          (activeId) =>

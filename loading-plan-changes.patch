@@ -1,0 +1,560 @@
+diff --git a/resources/js/Lib/LoadingPlan/capacityOverview.js b/resources/js/Lib/LoadingPlan/capacityOverview.js
+--- a/resources/js/Lib/LoadingPlan/capacityOverview.js
++++ b/resources/js/Lib/LoadingPlan/capacityOverview.js
+@@ -52,6 +52,13 @@
+ const IDLE_RANK = 1e9;
+ const UNMAPPED_RANK = 1e6;
+ 
++/** Always shown as status columns, even when every count is zero (frontend + Excel). */
++export const POST_TNR_STATUSES = ["FVI", "OQA", "BOXING", "BUY-OFF", "HOLD"];
++/** The Percentage column counts these: DONE + post-TNR. */
++export const COMPLETED_STATUSES = ["DONE", ...POST_TNR_STATUSES];
++export const completedCount = (counts) => COMPLETED_STATUSES.reduce((s, k) => s + (counts[k] ?? 0), 0);
++
+ const statusOf = (row) => String(row.status ?? "").trim().toUpperCase() || "NONE";
+ 
+ export const fmtPct = (n, d, digits = 0) => (d > 0 ? ((n / d) * 100).toFixed(digits) + "%" : "—");
+@@ -141,12 +148,15 @@
+ 
+ export function buildStatusCols({ extraStatuses, grand, hideEmpty = true }) {
+     const groups = STATUS_GROUPS.map((g) => g.statuses);
+-    if (extraStatuses.length) groups.push(extraStatuses);
++    const known = new Set(groups.flat());
++    // forced columns that the status menu doesn't list still need a home
++    const extras = [...new Set([...extraStatuses, ...POST_TNR_STATUSES.filter((s) => !known.has(s))])];
++    if (extras.length) groups.push(extras);
+     return groups.flatMap((list) =>
+         list
+-            .filter((s) => !hideEmpty || (grand.counts[s] ?? 0) > 0)
++            .filter((s) => !hideEmpty || POST_TNR_STATUSES.includes(s) || (grand.counts[s] ?? 0) > 0)
+             .map((status, i) => ({ status, borderLeft: i === 0 })),
+     );
+ }
+diff --git a/resources/js/Components/LoadingPlan/PtpOverview.jsx b/resources/js/Components/LoadingPlan/PtpOverview.jsx
+--- a/resources/js/Components/LoadingPlan/PtpOverview.jsx
++++ b/resources/js/Components/LoadingPlan/PtpOverview.jsx
+@@ -1,6 +1,7 @@
+ import {
+     aggregateByMachine,
+     buildOverviewSections,
+     buildStatusCols,
++    completedCount,
+     fmtPct,
+ } from "@/Lib/LoadingPlan/capacityOverview";
+ import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
+@@ -58,7 +59,8 @@
+ const SummaryRow = memo(function SummaryRow({ label, badge, capacity, agg, loading, statusCols, showUtil, highlight, onJump, jumpKey, variant = "row" }) {
+     const isTotal = variant !== "row";
+-    const done = agg.counts.DONE ?? 0;
++    // Percentage = (DONE + post-TNR) / Planned
++    const done = completedCount(agg.counts);
+     const firstCell = clsx(
+         "sticky left-0 whitespace-nowrap",
+         isTotal ? "bg-base-200 font-semibold" : "bg-base-300 font-medium",
+diff --git a/resources/js/Lib/LoadingPlan/loadingPlanExcelExporter.js b/resources/js/Lib/LoadingPlan/loadingPlanExcelExporter.js
+--- a/resources/js/Lib/LoadingPlan/loadingPlanExcelExporter.js
++++ b/resources/js/Lib/LoadingPlan/loadingPlanExcelExporter.js
+@@ -8,8 +8,10 @@
+ import {
+     PACKAGE_SUMMARY_GROUPS,
+     aggregateByMachine,
+     buildOverviewSections,
+     buildStatusCols,
++    COMPLETED_STATUSES,
++    completedCount,
+     resolveSummaryGroup,
+ } from "@/Lib/LoadingPlan/capacityOverview";
+ import { PRE_TNR_STATUSES, STATUS_ORDER } from "@/Lib/LoadingPlan/ptpOverview";
+@@ -188,7 +190,7 @@
+         if (col.key === "doable") {
+             if (row.doable_status === "no_recipe" && !row.doable_overridden) return "No Recipe";
+-            return row.doable > 0 ? Number(row.doable) : "—";
++            return row.doable > 0 ? Number(row.doable) : null;
+         }
+         if (col.key === "time_start" || col.key === "time_end") return toExcelTime(row, col.key);
+         return null;
+@@ -199,6 +201,8 @@
+     if (col.key === MACHINE_COLUMN_KEY) return ctx.getMachineLabel(row.machine);
+     if (col.key === "accu_time") return hoursOf(row.accu_time);
+     if (col.key === "time_start" || col.key === "time_end") return toExcelTime(row, col.key);
++    // a 0 doable is left blank
++    if (col.key === "doable") return Number(row.doable) === 0 ? null : (row.doable ?? null);
+     return row[col.key] ?? null;
+ }
+ 
+@@ -245,6 +249,7 @@
+ function writeRows(sheet, rows, ctx) {
++    const written = [];
+     rows.forEach((row, idx) => {
+         const values = ctx.exportColumns.map((col) =>
+             col.key === ITEM_COLUMN_KEY ? idx + 1 : resolveCellValue(col, row, ctx),
+@@ -258,6 +263,7 @@
+         const dim = !!ctx.isOwn && !ctx.isBlock(row) && !ctx.isOwn(row);
++        written.push({ row, number: dataRow.number, dim });
+ 
+         ctx.exportColumns.forEach((col, i) => {
+             const cell = dataRow.getCell(i + 1);
+@@ -286,11 +292,64 @@
+                 cell.numFmt = "0.00";
+             }
+         });
+     });
++    return written;
+ }
+ 
+-function renderSection({ sheet, title, rows, groups = [], ctx }) {
++/** [5, 6, 7, 9] + "N" -> ["N5:N7", "N9"] */
++function toRanges(nums, col) {
++    const out = [];
++    let start = nums[0];
++    let prev = nums[0];
++    for (let i = 1; i <= nums.length; i++) {
++        if (nums[i] === prev + 1) {
++            prev = nums[i];
++            continue;
++        }
++        out.push(start === prev ? `${col}${start}` : `${col}${start}:${col}${prev}`);
++        start = prev = nums[i];
++    }
++    return out;
++}
++
++/**
++ * Last row of a machine section: overall Qty and Doable as live SUM formulas, on the section's
++ * header colour. Only the machine's own rows count: rows drawn dimmed (another package / location)
++ * are left out. Doable skips rework rows, same as the machine header in the app.
++ */
++function addSectionTotals(sheet, written, ctx) {
++    const { qtyCol, doableCol, exportColumns, partNameIdx } = ctx;
++    if (!qtyCol || !doableCol) return;
++
++    const own = written.filter((w) => !w.dim);
++    if (own.length === 0) return;
++
++    const lots = own.filter((w) => !ctx.isBlock(w.row));
++    const lotsForDoable = lots.filter((w) => !w.row.is_rework);
++    const sumOf = (list, key) => list.reduce((s, w) => s + (Number(w.row[key]) || 0), 0);
++
++    const row = sheet.addRow([]);
++    for (let i = 1; i <= exportColumns.length; i++) {
++        const cell = row.getCell(i);
++        cell.fill = solid(COLORS.headerFill);
++        applyBorder(cell);
++    }
++
++    const label = row.getCell((partNameIdx === -1 ? 0 : partNameIdx) + 1);
++    label.value = "Total";
++    label.font = { bold: true };
++
++    const put = (col, nums, result) => {
++        const cell = sheet.getCell(`${col}${row.number}`);
++        cell.value = { formula: sumRefs(toRanges(nums, col)), result };
++        cell.numFmt = "#,##0";
++        cell.font = { bold: true };
++    };
++    put(qtyCol, own.map((w) => w.number), sumOf(lots, "qty"));
++    put(
++        doableCol,
++        own.filter((w) => !w.row.is_rework).map((w) => w.number),
++        sumOf(lotsForDoable, "doable"),
++    );
++}
++
++function renderSection({ sheet, title, rows, groups = [], totals = false, ctx }) {
+     const { exportColumns, partNameIdx, timeStartIdx } = ctx;
+     const n = exportColumns.length;
+ 
+@@ -328,7 +387,7 @@
+         applyBorder(cell);
+     }
+ 
+-    writeRows(sheet, rows, ctx);
++    const laneRows = writeRows(sheet, rows, ctx);
+ 
+     groups.forEach((g) => {
+         const labelRow = sheet.addRow([]);
+@@ -341,6 +400,8 @@
+         writeRows(sheet, g.rows, ctx);
+     });
+ 
++    if (totals) addSectionTotals(sheet, laneRows, ctx);
++
+     sheet.addRow([]);
+ }
+ 
+@@ -586,19 +647,23 @@
+     const HEADER_ROW = 2;
+     const FIRST_STATUS = 4; // 0-based index after Machine, Capacity, Quantity, Planned
+-    const PCT = FIRST_STATUS + statusCols.length;
++    const REMARKS = FIRST_STATUS + statusCols.length; // left blank for people to write in
++    const PCT = REMARKS + 1;
+     const COMMIT = PCT + 1;
+     const n = COMMIT + 1;
+     const statusLetter = (i) => colLetter(FIRST_STATUS + i);
+-    const doneIdx = statusCols.findIndex((c) => c.status === "DONE");
++    // Percentage = (DONE + post-TNR) / Planned
++    const doneIdxs = statusCols.flatMap((c, i) => (COMPLETED_STATUSES.includes(c.status) ? [i] : []));
+ 
+     sheet.columns = [
+         { width: 24 }, { width: 12 }, { width: 12 }, { width: 10 },
+         ...statusCols.map(() => ({ width: 11 })),
+-        { width: 12 }, { width: 12 },
++        { width: 18 }, { width: 12 }, { width: 12 },
+     ];
+ 
+     // title
+@@ -612,7 +677,7 @@
+     const headerRow = sheet.addRow([
+         "Machine", "Capacity", "Quantity", "Planned",
+         ...statusCols.map((c) => c.status),
+-        "Percentage", "Commit",
++        "Remarks", "Percentage", "Commit",
+     ]);
+     for (let i = 1; i <= n; i++) {
+         const cell = headerRow.getCell(i);
+@@ -664,15 +729,16 @@
+     const addAggRow = ({ label, capacity, agg, live }, { fill = null, bold = false } = {}) => {
+-        const done = agg.counts.DONE ?? 0;
++        const done = completedCount(agg.counts);
+         const row = sheet.addRow([
+             label,
+             capacity || "—",
+             agg.qty,
+             agg.planned,
+             ...statusCols.map(({ status }) => agg.counts[status] ?? 0),
+-            null,
++            null, // Remarks
++            null, // Percentage (formula below)
+             agg.commit,
+         ]);
+ 
+@@ -685,8 +751,8 @@
+         setF(COMMIT, f.commit, agg.commit);
+-        const doneRef = doneIdx === -1 ? "0" : `${statusLetter(doneIdx)}${r}`;
+-        setF(PCT, `IF(D${r}=0,"",${doneRef}/D${r})`, agg.planned > 0 ? done / agg.planned : "");
++        const doneRef = doneIdxs.length ? doneIdxs.map((i) => `${statusLetter(i)}${r}`).join("+") : "0";
++        setF(PCT, `IF(D${r}=0,"",(${doneRef})/D${r})`, agg.planned > 0 ? done / agg.planned : "");
+ 
+         for (let i = 0; i < n; i++) {
+             const cell = row.getCell(i + 1);
+@@ -694,14 +760,14 @@
+             if (fill) cell.fill = solid(fill);
+             if (bold) cell.font = { bold: true };
+ 
+-            const isStatus = i >= FIRST_STATUS && i < PCT;
++            const isStatus = i >= FIRST_STATUS && i < REMARKS;
+             if (isStatus) {
+                 cell.alignment = { horizontal: "center" };
+                 if (statusCols[i - FIRST_STATUS].borderLeft) {
+                     cell.border = { ...cell.border, left: { style: "medium", color: { argb: "FF7F7F7F" } } };
+                 }
+-            } else if (i > 0) {
++            } else if (i > 0 && i !== REMARKS) {
+                 cell.alignment = { horizontal: "right" };
+             }
+         }
+@@ -770,7 +836,7 @@
+     if (statusCols.length) {
+         sheet.addConditionalFormatting({
+-            ref: `${colLetter(FIRST_STATUS)}3:${colLetter(PCT - 1)}${grandRow.number}`,
++            ref: `${colLetter(FIRST_STATUS)}3:${colLetter(REMARKS - 1)}${grandRow.number}`,
+             rules: [{
+                 type: "cellIs", operator: "equal", formulae: [0], priority: 1,
+                 style: { font: { color: { argb: COLORS.dimFont } } },
+@@ -940,6 +1006,8 @@
+         ctCol: ctIdx === -1 ? null : colLetter(ctIdx),
++        qtyCol: colLetter(exportColumns.findIndex((c) => c.key === "qty")) || null,
++        doableCol: colLetter(exportColumns.findIndex((c) => c.key === "doable")) || null,
+         cellRefs: new Map(), // row object -> { sheet, rowNumber } of its own (non-dimmed) copy
+     };
+ 
+@@ -1010,7 +1078,7 @@
+-            renderSection({ sheet, title: machineLabel(m), rows: mine, groups, ctx: sheetCtx });
++            renderSection({ sheet, title: machineLabel(m), rows: mine, groups, totals: m !== null, ctx: sheetCtx });
+             rendered = true;
+         }
+ 
+diff --git a/resources/js/Hooks/LoadingPlan/useCellFillPersistence.js b/resources/js/Hooks/LoadingPlan/useCellFillPersistence.js
+new file mode 100644
+--- /dev/null
++++ b/resources/js/Hooks/LoadingPlan/useCellFillPersistence.js
+@@ -0,0 +1,172 @@
++import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
++import { applyAffectedTimings } from "@/Lib/LoadingPlan/loadingPlanSchedule";
++import { useCallback } from "react";
++
++/**
++ * Fill handle (drag the small square of the selected cell) for the Status and Doable columns.
++ *
++ * react-data-grid calls `onFill` once per target row while dragging, then `onRowsChange` once with
++ * every changed row. Deemo routes those calls here when `column.key` is in FILL_COLUMNS.
++ *
++ *  - status: one bulk-update request (same endpoint as the toolbar's "Set status")
++ *  - doable: one doable-override request per row, run one after another under the write lock
++ *            (the value is capped to each row's own qty, the server rejects a doable above qty)
++ */
++export const FILL_COLUMNS = new Set(["status", "doable"]);
++
++// Same split as useDoableOperations: ids/lock_version/doable go to every history snapshot,
++// arrangement-dependent values only to the present one.
++const HISTORY_FIELDS = [
++    "entry_id", "lock_version",
++    "doable", "doable_status", "doable_overridden",
++    "doable_recipe_source", "part_missing_from_list",
++];
++const PRESENT_FIELDS = ["capacity_uph", "accu_time"];
++const pick = (o, keys) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
++
++/** Data rows only: no headers, collapsed runs, time blocks or grouped rows. */
++export const isFillableRow = (row) =>
++    row?.__type === "data" && !isBlockRow(row) && !(row.machine === null && row.bucket_id != null);
++
++const normStatus = (s) => (s == null || s === "NONE" ? null : s);
++
++const clampDoable = (value, qty) => {
++    const v = Math.max(0, Math.round(Number(value) || 0));
++    return Math.min(v, Math.max(0, Number(qty) || 0));
++};
++
++export function useCellFillPersistence({
++    dataRows,
++    date,
++    store,
++    update,
++    beginWrite,
++    withUpdating,
++    mutate,
++    toast,
++    setIsDirty,
++    syncServerFields,
++}) {
++    // Pure: returns the target row with the dragged value, or the same object when nothing changes.
++    const onFill = useCallback(({ columnKey, sourceRow, targetRow }) => {
++        if (!isFillableRow(sourceRow) || !isFillableRow(targetRow)) return targetRow;
++
++        if (columnKey === "status") {
++            const next = normStatus(sourceRow.status);
++            return normStatus(targetRow.status) === next ? targetRow : { ...targetRow, status: next };
++        }
++
++        if (columnKey === "doable") {
++            // nothing to copy from a lot that has no recipe and no override
++            if (sourceRow.doable_status === "no_recipe" && !sourceRow.doable_overridden) return targetRow;
++            const next = clampDoable(sourceRow.doable, targetRow.qty);
++            return Number(targetRow.doable) === next ? targetRow : { ...targetRow, doable: next };
++        }
++
++        return targetRow;
++    }, []);
++
++    const persistStatus = useCallback(
++        (targets) => {
++            const base = store.getState().present.rows;
++            const value = normStatus(targets[0].value);
++            const ids = new Set(targets.map((t) => t.prev.id));
++
++            update((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: value } : r)));
++
++            withUpdating(
++                mutate(route("loading-plan.bulk-update"), {
++                    body: {
++                        scheduled_date: date,
++                        updates: targets.map(({ prev }) =>
++                            prev.entry_id
++                                ? { entry_id: prev.entry_id, fields: { status: value }, lock_version: prev.lock_version ?? null }
++                                : { lot_id: prev.lot_id, fields: { status: value } },
++                        ),
++                    },
++                }),
++            )
++                .then(({ entries }) => {
++                    const patches = targets
++                        .map(({ prev }) => {
++                            const m = entries?.find((e) =>
++                                prev.entry_id ? e.id === prev.entry_id : e.lot_id === prev.lot_id && !e.rework_seq,
++                            );
++                            return m ? { dndId: prev._dndId, fields: { entry_id: m.id, lock_version: m.lock_version } } : null;
++                        })
++                        .filter(Boolean);
++                    syncServerFields?.(patches);
++                })
++                .catch((err) => {
++                    console.error("Fill status failed:", err);
++                    store.getState().rollback(base);
++                    toast?.error?.(
++                        err?.status === 409
++                            ? "Some rows were changed by someone else — the fill was cancelled."
++                            : (err?.data?.message ?? "Couldn't fill the status — reverted."),
++                    );
++                });
++        },
++        [store, update, withUpdating, mutate, date, syncServerFields, toast],
++    );
++
++    const persistDoable = useCallback(
++        (targets) => {
++            const wanted = new Map(targets.map((t) => [t.prev._dndId, t.value]));
++            // present only: a doable change is not an undo step (same as the Override modal)
++            update((prev) => prev.map((r) => (wanted.has(r._dndId) ? { ...r, doable: wanted.get(r._dndId) } : r)), true);
++
++            const run = async () => {
++                for (let i = 0; i < targets.length; i++) {
++                    const { prev, value } = targets[i];
++                    try {
++                        const entry = await mutate(route("loading-plan.entries.doable", { id: prev.entry_id ?? 0 }), {
++                            method: "PATCH",
++                            body: {
++                                doable: value,
++                                lock_version: prev.lock_version ?? null,
++                                ...(prev.entry_id ? {} : { lot_id: prev.lot_id, scheduled_date: date }),
++                            },
++                        });
++
++                        syncServerFields?.([{ dndId: prev._dndId, fields: pick(entry, HISTORY_FIELDS) }]);
++                        update(
++                            (rows) => rows.map((r) => (r._dndId === prev._dndId ? { ...r, ...pick(entry, PRESENT_FIELDS) } : r)),
++                            true,
++                        );
++                        applyAffectedTimings(update, entry.affected_timings, date);
++                    } catch (err) {
++                        console.error("Fill doable failed:", err);
++                        // stop here and put back every row that was not saved
++                        const unsaved = new Map(targets.slice(i).map((t) => [t.prev._dndId, t.prev.doable]));
++                        update(
++                            (rows) => rows.map((r) => (unsaved.has(r._dndId) ? { ...r, doable: unsaved.get(r._dndId) } : r)),
++                            true,
++                        );
++                        toast?.error?.(
++                            err?.status === 409
++                                ? "Someone else changed a lot — the fill stopped. Refresh and try again."
++                                : (err?.data?.message ?? "Couldn't fill the doable — the remaining rows were reverted."),
++                        );
++                        return;
++                    }
++                }
++            };
++
++            withUpdating(run());
++        },
++        [update, withUpdating, mutate, date, syncServerFields, toast],
++    );
++
++    // `onRowsChange` for a fill: updatedRows[i] already holds the dragged value for every i in `indexes`.
++    const handleFillChange = useCallback(
++        (updatedRows, { indexes, column }) => {
++            const byId = new Map(dataRows.map((r) => [r.id, r]));
++            const seen = new Set();
++
++            const targets = indexes
++                .map((i) => updatedRows[i])
++                .filter((next) => isFillableRow(next) && byId.has(next.id) && !seen.has(next.id) && seen.add(next.id))
++                .map((next) => ({ prev: byId.get(next.id), value: next[column.key] }));
++
++            if (targets.length === 0 || !beginWrite()) return;
++            setIsDirty(true);
++
++            return column.key === "status" ? persistStatus(targets) : persistDoable(targets);
++        },
++        [dataRows, beginWrite, setIsDirty, persistStatus, persistDoable],
++    );
++
++    return { onFill, handleFillChange };
++}
+diff --git a/resources/js/Components/LoadingPlan/columns.jsx b/resources/js/Components/LoadingPlan/columns.jsx
+--- a/resources/js/Components/LoadingPlan/columns.jsx
++++ b/resources/js/Components/LoadingPlan/columns.jsx
+@@ -1,6 +1,7 @@
+ import { LotIdCell } from "@/Components/LoadingPlan/LotIdCell";
+ import { StatusBadge } from "@/Components/LoadingPlan/StatusBadge.jsx";
+ import { F3_FLAG } from "@/Constants/LoadingPlan/tabs";
++import { FILL_COLUMNS, isFillableRow } from "@/Hooks/LoadingPlan/useCellFillPersistence";
+ import {
+     BAKE_COLUMNS,
+     EDITABLE_COLUMNS,
+@@ -14,7 +15,7 @@
+ import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
+-import { useContext } from "react";
++import { useContext, useLayoutEffect } from "react";
+ import { SelectColumn } from "react-data-grid";
+ import { WithBakeIndicator } from "./BakingBadge";
+ import { BucketHeaderCell } from "./BucketHeaderBar";
+@@ -46,6 +47,16 @@
+ const CUSTOM_EDITORS = { accu_time: AccuTimeEditor, time_start: TimeStartEditor };
+ 
++/**
++ * Status / Doable aren't typed into (the status dropdown and the Doable modal do that), but the grid
++ * only shows the fill handle on cells that have an editor. This one closes itself right away.
++ */
++function FillOnlyEditor({ onClose }) {
++    useLayoutEffect(() => {
++        onClose(false, true);
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, []);
++    return null;
++}
++
+ /** Only the grid's built-in checkbox column is dropped in read-only mode (the drag-handle column also renders the machine headers). */
+ const READONLY_STRIP_KEYS = new Set(["select-row"]);
+ 
+@@ -206,6 +217,11 @@
+     return true;
+ }
+ 
++/** Fill handle on Status / Doable: placed or unassigned lots, never headers, blocks or grouped rows. */
++function canFillCell(row, isLocked) {
++    return !isLocked() && isFillableRow(row);
++}
++
+ function dragHandleColumn({ onToggleCollapse, readOnly, numColumns }) {
+     return {
+         key: "dragHandle",
+@@ -263,6 +279,14 @@
+                 },
+             };
+ 
++            if (FILL_COLUMNS.has(col.key)) {
++                return {
++                    ...column,
++                    renderEditCell: FillOnlyEditor,
++                    editable: (row) => canFillCell(row, isLocked),
++                };
++            }
++
+             if (!EDITABLE_COLUMNS[col.key]) return column;
+ 
+             return {
+diff --git a/resources/js/Pages/Deemo.jsx b/resources/js/Pages/Deemo.jsx
+--- a/resources/js/Pages/Deemo.jsx
++++ b/resources/js/Pages/Deemo.jsx
+@@ -49,6 +49,7 @@
+ import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
+ import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
++import { FILL_COLUMNS, useCellFillPersistence } from "@/Hooks/LoadingPlan/useCellFillPersistence";
+ import { useColumnWidths } from "@/Hooks/LoadingPlan/useColumnWidths";
+ import { useDoableOperations } from "@/Hooks/LoadingPlan/useDoableOperations";
+ import { useDragPreview } from "@/Hooks/LoadingPlan/useDragPreview";
+@@ -433,9 +434,19 @@
+-    const handleRowsChange = useCellEditPersistence({
++    const handleCellEdit = useCellEditPersistence({
+         dataRows, displayRows, baseTimes, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields,
+     });
+ 
++    const { onFill, handleFillChange } = useCellFillPersistence({
++        dataRows, date, store: useLoadingPlanStore, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields,
++    });
++
++    // a Status / Doable change can only come from the fill handle (their editors never commit)
++    const handleRowsChange = useCallback(
++        (rows, meta) => (FILL_COLUMNS.has(meta.column.key) ? handleFillChange(rows, meta) : handleCellEdit(rows, meta)),
++        [handleFillChange, handleCellEdit],
++    );
++
+     const handleBulkDeleteNotice = useCallback(() => {
+         const selected = dataRows.filter((r) => selectedRows.has(r.id));
+         const parked = selected.filter(isParked);
+@@ -895,6 +906,7 @@
+                                         onRowsChange={readOnly ? undefined : handleRowsChange}
++                                        onFill={readOnly ? undefined : onFill}
+                                         // onScroll={handleGridScroll}
+                                         rowKeyGetter={getRowKey}
+                                         selectedRows={readOnly ? undefined : selectedRows}

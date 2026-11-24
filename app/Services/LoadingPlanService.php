@@ -34,6 +34,8 @@ class LoadingPlanService
     public readonly Collection $extraTodayWipRows;
     private ?PackageGroups $packageGroups = null;
     public readonly Collection $todayF3Rows;
+    /** F1/F2 pickups made on $date (ppc_pickupdb) that the WIP import does not have yet. */
+    public readonly Collection $todayPickupRows;
     private LotSourceService $sources;
     // at the top of the class
     private ?array $f3PackageTypes = null;
@@ -228,6 +230,11 @@ class LoadingPlanService
 
         $this->todayWipRows = $isF3 ? collect() : $this->getWipRowsForToday($this->selectedPackages);
         $this->todayF3Rows  = $this->sources->poolFor($this->date, $this->selectedLocation);
+        // today's pickups only; a lot that is already in today's import is the import's row, not a pickup
+        $this->todayPickupRows = $isF3
+            ? collect()
+            : $this->sources->pickupPoolFor($this->date, $this->selectedLocation)
+            ->except($this->todayWipRows->keys()->all());
 
         $this->todayLeakedPlannedLotEntries = LoadingPlanEntryService::getTodayLeaked($this->previousDate, $this->selectedPackages);
         $this->rootByLot = $this->todayLeakedPlannedLotEntries->whereNotNull('root_lot_id')->pluck('root_lot_id', 'lot_id')->all();
@@ -256,7 +263,7 @@ class LoadingPlanService
         );
 
         $lots = $this->todayPlannedLotEntries->where('entry_type', 'lot')->filter(fn($e) => $e->lot_id);
-        $known = fn($id) => $this->todayWipRows->has($id) || $this->todayF3Rows->has($id);
+        $known = fn($id) => $this->todayWipRows->has($id) || $this->todayF3Rows->has($id) || $this->todayPickupRows->has($id);
 
         $missing = fn($entries) => $entries->pluck('lot_id')
             ->map(fn($id) => $this->rootLotId($id))->unique()->reject($known)->values()->all();
@@ -289,7 +296,8 @@ class LoadingPlanService
         // var_dump("LOG ~ LoadingPlanService.php:143 ~ LoadingPlanService ~ initEntries ~ todayPlannedLotEntries:", $this->todayPlannedLotEntries);
         // var_dump("LOG ~ LoadingPlanService.php:146 ~ LoadingPlanService ~ initEntries ~ todayWipRows:", $this->todayWipRows);
 
-        $f3Pool = $this->todayF3Rows->toBase();
+        // F3 pool + today's F1/F2 pickups: the two sources that never come from the WIP import
+        $f3Pool = $this->todayF3Rows->toBase()->union($this->todayPickupRows);
 
         $todayPlannedLotIds = $this->todayPlannedLotEntries->pluck('lot_id')->all();
         $unassignedTodayWip = $this->todayWipRows->toBase()->union($f3Pool)->except($todayPlannedLotIds);
@@ -685,7 +693,8 @@ class LoadingPlanService
             'is_manual_expedite' => $entry?->is_manual_expedite,
             'is_scm'             => (bool) ($entry?->is_scm ?? false),
             'is_for_bake'        => $formulas->isBakeHighlight,
-            'is_pickup'          => $entry?->is_pickup,
+            // the entry flag, or the source row itself is a ppc_pickupdb row (not in the WIP import)
+            'is_pickup'          => (bool) ($entry?->is_pickup) || ($wipRow?->is_pickup_source ?? false),
             'is_replanned'       => $isF3Replanned, // for f3 only, might possible for PL1/PL6 in the future.
             'block_label'        => $entry?->block_label,
             'machine'            => $machine,
@@ -695,7 +704,8 @@ class LoadingPlanService
             // Lot & WIP identifiers
             'id' => $entryId !== null
                 ? 'entry-' . $entryId
-                : ($isF3 ? 'f3-' . $wipRow?->traveler_id : 'wip-' . $wipRow?->customer_data_id), // avoid id collisions
+                : ($isF3 ? 'f3-' . $wipRow?->traveler_id
+                    : ($wipRow?->pickup_id !== null ? 'pickup-' . $wipRow->pickup_id : 'wip-' . $wipRow?->customer_data_id)), // avoid id collisions
             'source'           => $source,
             'traveler_deleted' => (bool) $wipRow?->traveler_deleted,
             'part_name'        => $wipRow?->Part_Name ?? $quantity?->part_name ?? '',

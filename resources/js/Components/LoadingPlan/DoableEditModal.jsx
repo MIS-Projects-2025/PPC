@@ -29,7 +29,14 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
     const missing = !!row?.part_missing_from_list;
     const tubeTray = TUBE_TRAY.includes(String(row?.doable_recipe_source?.allocation ?? "").trim().toUpperCase());
     const close = () => document.getElementById(MODAL_ID)?.close();
-    const run = async (fn) => { try { await fn(); close(); } catch { /* handlers already toast */ } };
+    const [saving, setSaving] = useState(false);
+
+    const run = async (fn) => {
+        if (saving) return;
+        setSaving(true);
+        try { await fn(); close(); } catch { /* handlers already toast */ }
+        finally { setSaving(false); }
+    };
 
     const recipeNum = Number(recipe);
     const doableNum = doable === "" ? null : Number(doable);
@@ -38,7 +45,12 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
     const qtyZero = !(qty > 0);
     const overMax = doableNum !== null && doableNum > qty;
     const parked = !row?.entry_id && row?.bucket_id != null;
-    const canSaveOverride = !disabled && !parked && doableNum !== null && doableNum >= 0 && !overMax;
+
+
+    const canSaveOverride =
+        !disabled && !saving && !parked &&
+        doableNum !== null && Number.isInteger(doableNum) &&
+        doableNum >= 0 && !overMax;
 
     const saveOverride = () => { if (canSaveOverride) run(() => onSaveOverride(doableNum)); };
 
@@ -71,9 +83,13 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
                                     max={qty}
                                     className="grow"
                                     value={doable}
+                                    autoFocus
+                                    onFocus={(e) => e.target.select()}
                                     onChange={(e) => setDoable(e.target.value)}
                                     onKeyDown={(e) => {
-                                        if (e.key === "Enter") { e.preventDefault(); saveOverride(); }
+                                        if (e.key !== "Enter" || e.nativeEvent.isComposing || e.repeat) return;
+                                        e.preventDefault();
+                                        saveOverride();
                                     }}
                                 />
                                 <kbd className="kbd kbd-sm">Enter</kbd>
@@ -82,7 +98,7 @@ export default function DoableEditModal({ row, sameCount, disabled, onSaveOverri
                             <p className="text-xs opacity-60">Not saved to the package list. Clears itself if this lot's quantity changes.</p>
                             <div className="flex gap-2">
                                 <button className="btn btn-sm btn-primary" disabled={!canSaveOverride} onClick={saveOverride}>
-                                    Save override
+                                    Save override <kbd className="kbd kbd-xs ml-1">Enter</kbd>
                                 </button>
                                 {row?.doable_overridden && (
                                     <button className="btn btn-sm btn-ghost" disabled={disabled} onClick={() => run(() => onSaveOverride(null))}>

@@ -17,7 +17,6 @@ import MergeHistoryModal from "@/Components/LoadingPlan/MergeHistoryModal";
 import MissingPartsModal from "@/Components/LoadingPlan/MissingPartsModal";
 import PickupInsertModal from "@/Components/LoadingPlan/PickupInsertModal";
 import { PlanActionsBar, PlanStatusAlert, PlanTabsBar } from "@/Components/LoadingPlan/PlanToolbar";
-import PullPickupsModal, { PULL_PICKUPS_MODAL_ID } from "@/Components/LoadingPlan/PullPickupsModal";
 import { AddBlockModal, AddBucketModal, AddLotModal } from "@/Components/LoadingPlan/QuickAddModals";
 import RowHoverTools from "@/Components/LoadingPlan/RowHoverTools";
 import { SavingCursorBadge } from "@/Components/LoadingPlan/SavingCursorBadge";
@@ -33,7 +32,6 @@ import {
     F3_FLAG,
     FOR_BAKE_TAB,
     ORPHAN_TAB,
-    PICKUP_POOL_TABS,
     PTP_TAB,
     UNASSIGNED_TAB,
     buildTabItems,
@@ -41,6 +39,7 @@ import {
 import { useBucketOperations } from "@/Hooks/LoadingPlan/useBucketOperations";
 import { useBulkOperations } from "@/Hooks/LoadingPlan/useBulkOperations";
 import { useCellEditPersistence } from "@/Hooks/LoadingPlan/useCellEditPersistence";
+import { FILL_COLUMNS, useCellFillPersistence } from "@/Hooks/LoadingPlan/useCellFillPersistence";
 import { useColumnWidths } from "@/Hooks/LoadingPlan/useColumnWidths";
 import { useDoableOperations } from "@/Hooks/LoadingPlan/useDoableOperations";
 import { useDragPreview } from "@/Hooks/LoadingPlan/useDragPreview";
@@ -49,7 +48,6 @@ import { useEntryOperations } from "@/Hooks/LoadingPlan/useEntryOperations";
 import { useLoadingPlanShortcuts } from "@/Hooks/LoadingPlan/useLoadingPlanShortcuts";
 import { useMachineJump } from "@/Hooks/LoadingPlan/useMachineJump";
 import { isNonMachineKey, useNonMachineOperations } from "@/Hooks/LoadingPlan/useNonMachineOperations";
-import { usePickupPool } from "@/Hooks/LoadingPlan/usePickupPool";
 import { useRowFlip } from "@/Hooks/LoadingPlan/useRowFlip";
 import { useRowHoverRefs } from "@/Hooks/LoadingPlan/useRowHoverInsert";
 import { useHiddenRowCounts, useRowIndex } from "@/Hooks/LoadingPlan/useRowIndex";
@@ -65,7 +63,6 @@ import { DATA_COLUMNS } from "@/Lib/LoadingPlan/columnConfig";
 import { formatF3Machine } from "@/Lib/LoadingPlan/f3";
 import { isBlockRow } from "@/Lib/LoadingPlan/helpers";
 import { timeFieldsFromDatetimes } from "@/Lib/LoadingPlan/loadingPlanSchedule.js";
-import { showModal } from "@/Lib/LoadingPlan/modal";
 import { compareUnassigned, createRowMatchers, getMachineLabel } from "@/Lib/LoadingPlan/rowPredicates";
 import { createUndoStore } from "@/Store/undoStore";
 import { usePersistedSet } from "@/Store/usePersistedSet";
@@ -370,11 +367,6 @@ export default function Deemo({
         update, syncServerFields, setIsDirty, toast,
     });
 
-    const pickupPool = usePickupPool({
-        store: useLoadingPlanStore, date, selectedLocation, readOnly, isF3,
-        beginWrite, withUpdating, mutate, setIsDirty, toast,
-    });
-
     const handleShowSplitHistory = useCallback(
         (rootLotId, isParent, isChild, lotId) =>
             loadSplitHistory(rootLotId, isParent, isChild, {
@@ -394,11 +386,6 @@ export default function Deemo({
             }),
         [loadMergeHistory],
     );
-
-    const handleOpenPickupPool = useCallback(() => {
-        pickupPool.load();
-        showModal(PULL_PICKUPS_MODAL_ID);
-    }, [pickupPool.load]);
 
     const handleSplitRevert = useCallback(
         (args) => revertSplit(args, { onDone: () => splitHistoryModalRef.current?.close() }),
@@ -576,9 +563,19 @@ export default function Deemo({
     });
 
     // ── cell edits, bulk delete, groups, drag & drop ─────────────────────
-    const handleRowsChange = useCellEditPersistence({
+    const handleCellEdit = useCellEditPersistence({
         dataRows, displayRows, baseTimes, date, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields,
     });
+
+    const { onFill, handleFillChange } = useCellFillPersistence({
+        dataRows, date, store: useLoadingPlanStore, update, beginWrite, withUpdating, mutate, toast, setIsDirty, syncServerFields,
+    });
+
+    // a Status / Doable change can only come from the fill handle (their editors never commit)
+    const handleRowsChange = useCallback(
+        (rows, meta) => (FILL_COLUMNS.has(meta.column.key) ? handleFillChange(rows, meta) : handleCellEdit(rows, meta)),
+        [handleFillChange, handleCellEdit],
+    );
 
     const handleBulkDeleteNotice = useCallback(() => {
         const selected = dataRows.filter((r) => selectedRows.has(r.id));
@@ -651,6 +648,46 @@ export default function Deemo({
     // ── hover tools / grid renderers / contexts ──────────────────────────
     const { containerRef, rowIdxByElement } = useRowHoverRefs();
     const { armFlip } = useRowFlip({ containerRef, displayRows, enabled: !onBake && !onPtp });
+
+    // Diagnostics for the "machine headers + rows vanished until refresh" report. Logs once per distinct
+    // state: tells apart rows missing from the data, rows filtered by the view, and rows not painted.
+    const lastMissingHeadersRef = useRef("");
+    useEffect(() => {
+        if (onBake || onPtp || lockedMachine || activePackage !== ALL_PACKAGES_TAB || showAllMachines) return;
+
+        const machinesWithRows = [...rowsByMachine.keys()].filter((m) => m !== null && rowsByMachine.get(m)?.length);
+        const headers = displayRows.filter(
+            (r) => r.__type === "header" && r.__headerKind !== "bucket" && r.machine !== null,
+        ).length;
+        if (machinesWithRows.length < 3 || headers > 1) {
+            lastMissingHeadersRef.current = "";
+            return;
+        }
+
+        const sig = `${machinesWithRows.length}|${headers}|${dataRows.length}|${displayRows.length}`;
+        if (sig === lastMissingHeadersRef.current) return;
+        lastMissingHeadersRef.current = sig;
+
+        const painted = [...(containerRef.current?.querySelectorAll("[data-flip-key]") ?? [])];
+        console.error("[loading-plan] machine headers missing", {
+            activeTab,
+            showAllMachines,
+            selectedLocation,
+            date,
+            dataRows: dataRows.length,
+            machinesWithRows: machinesWithRows.length,
+            rowsInActiveTab: dataRows.filter(rowInActiveTab).length,
+            rowsOtherLocation: dataRows.filter(isOtherLoc).length,
+            rowsParked: dataRows.filter(isParked).length,
+            collapsedMachines: collapsedMachines.size,
+            displayRows: displayRows.length,
+            paintedRows: painted.length,
+            paintedWithInlineStyle: painted.filter((el) => el.style.opacity || el.style.transform).length,
+        });
+    }, [
+        onBake, onPtp, lockedMachine, activePackage, activeTab, showAllMachines, rowsByMachine, displayRows, dataRows,
+        rowInActiveTab, isOtherLoc, isParked, collapsedMachines, containerRef, selectedLocation, date,
+    ]);
 
     // ids (display order) that move together: the dragged row, or the whole selection
     const getDragGroupIds = useCallback(
@@ -925,9 +962,6 @@ export default function Deemo({
                     <PlanTabsBar
                         tabs={lockedMachine ? undefined : tabItems}
                         activeTab={activeTab}
-                        onOpenPickupPool={
-                            pickupPool.enabled && PICKUP_POOL_TABS.includes(activeTab) ? handleOpenPickupPool : undefined
-                        }
                         onTabChange={goToTab}
                         location={selectedLocation}
                         locationDisabled={writesLocked}
@@ -1024,6 +1058,7 @@ export default function Deemo({
                                         onColumnWidthsChange={onColumnWidthsChange}
                                         renderers={renderers}
                                         onRowsChange={readOnly ? undefined : handleRowsChange}
+                                        onFill={readOnly ? undefined : onFill}
                                         // onScroll={handleGridScroll}
                                         rowKeyGetter={getRowKey}
                                         selectedRows={readOnly ? undefined : selectedRows}
@@ -1191,8 +1226,6 @@ export default function Deemo({
                         beginWrite={beginWrite}
                         holdLock={holdLock}
                     />
-
-                    <PullPickupsModal pool={pickupPool} date={date} location={selectedLocation} disabled={writesLocked} />
                 </>
             )}
 

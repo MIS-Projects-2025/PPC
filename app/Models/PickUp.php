@@ -47,6 +47,9 @@ class PickUp extends Model
             'Focus_Group'  => $part?->focus_grp,
             'Body_Size'    => $part?->dimensions,
             'Ramp_Time'    => $part?->allocation,
+            // in-memory only: a pickup has no customer_data_id, so the grid keys / flags the row with these
+            'pickup_id'        => $this->id_pickup,
+            'is_pickup_source' => true,
         ]);
     }
 }

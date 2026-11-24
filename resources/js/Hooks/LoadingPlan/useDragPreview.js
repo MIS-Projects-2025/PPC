@@ -1,5 +1,5 @@
 import { HEADER_ROW_HEIGHT, ROW_HEIGHT } from "@/Constants/LoadingPlan/constants";
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 const EASING = "cubic-bezier(0.2, 0, 0, 1)";
 const TRANSITION = `transform 150ms ${EASING}`;
@@ -61,6 +61,9 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
     const observerRef = useRef(null);
     const timerRef = useRef(0);
     const finishedRef = useRef(false);
+    const activeRef = useRef(false); // a drag is in progress (start() .. release())
+    const bailRef = useRef(null); // pointerup fallback listener
+    const dragIdRef = useRef(0);
 
     const drawMarker = useCallback(() => {
         const grid = containerRef.current?.querySelector(".rdg");
@@ -76,6 +79,7 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
         if (!m || m.parentElement !== grid) {
             m?.remove();
             m = document.createElement("div");
+            m.setAttribute("data-drag-gap", ""); // lets the sweep find a stray marker
             Object.assign(m.style, MARKER_STYLE);
             m.style.top = `${HEADER_ROW_HEIGHT + gap.at * ROW_HEIGHT}px`; // set before append: no slide-in
             grid.appendChild(m);
@@ -84,6 +88,28 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
         m.style.top = `${HEADER_ROW_HEIGHT + gap.at * ROW_HEIGHT}px`;
         m.style.height = `${gap.count * ROW_HEIGHT}px`;
         m.style.width = `${grid.scrollWidth}px`;
+    }, [containerRef]);
+
+    // Safety net. Everything this hook writes (inline transform/opacity/transition, the gap marker)
+    // lives outside React, so a missed cleanup leaves rows invisible or offset until a full page
+    // reload. Clears anything stray; only called while no drag is running.
+    const sweepStray = useCallback(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        let cleared = 0;
+        container.querySelectorAll("[data-flip-key]").forEach((el) => {
+            if (!el.style.transform && !el.style.opacity && !el.style.transition) return;
+            el.style.transform = "";
+            el.style.opacity = "";
+            el.style.transition = "";
+            cleared += 1;
+        });
+        container.querySelectorAll("[data-drag-gap]").forEach((el) => {
+            if (el !== markerRef.current) el.remove();
+        });
+
+        if (cleared) console.warn(`[loading-plan] drag preview left inline styles on ${cleared} row(s); cleared.`);
     }, [containerRef]);
 
     // `instant`: called because the DOM changed (autoscroll mounted rows), not because `over` changed
@@ -131,6 +157,12 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
         (animate) => {
             clearTimeout(timerRef.current);
             finishedRef.current = false;
+            activeRef.current = false;
+            if (bailRef.current) {
+                window.removeEventListener("pointerup", bailRef.current, true);
+                window.removeEventListener("pointercancel", bailRef.current, true);
+                bailRef.current = null;
+            }
             observerRef.current?.disconnect();
             observerRef.current = null;
             planRef.current = null;
@@ -154,6 +186,17 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
         release(false);
         const container = containerRef.current;
         if (!container) return;
+        activeRef.current = true;
+        // dnd-kit calls finish()/cancel() right after pointerup. If it never does (lost event, an error
+        // in a handler), undo the preview ourselves so rows can't stay hidden or shifted.
+        const dragId = ++dragIdRef.current;
+        const bail = () =>
+            setTimeout(() => {
+                if (dragIdRef.current === dragId && activeRef.current && !finishedRef.current) release(true);
+            }, 400);
+        bailRef.current = bail;
+        window.addEventListener("pointerup", bail, true);
+        window.addEventListener("pointercancel", bail, true);
         // rows that scroll into view (virtualisation) mid-drag must get their shift too
         observerRef.current = new MutationObserver(() => apply(true));
         observerRef.current.observe(container, { childList: true, subtree: true });
@@ -161,7 +204,12 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
 
     const over = useCallback(
         ({ active, over: o }) => {
-            if (!o) return;
+            if (!o) {
+                // the pointer left every drop target: put the rows back instead of freezing the last preview
+                planRef.current = null;
+                restore();
+                return;
+            }
             const overId = String(o.id);
             const result = overId.startsWith("row-")
                 ? planShifts(
@@ -184,6 +232,7 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
         observerRef.current?.disconnect();
         observerRef.current = null;
         finishedRef.current = true;
+        clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => release(true), 150);
         return had;
     }, [release]);
@@ -192,7 +241,21 @@ export function useDragPreview({ containerRef, displayRows, getGroupIds }) {
 
     useLayoutEffect(() => {
         if (finishedRef.current) release(false);
-    }, [displayRows, release]);
+        else if (!activeRef.current) sweepStray();
+    }, [displayRows, release, sweepStray]);
+
+    useEffect(
+        () => () => {
+            clearTimeout(timerRef.current);
+            observerRef.current?.disconnect();
+            if (bailRef.current) {
+                window.removeEventListener("pointerup", bailRef.current, true);
+                window.removeEventListener("pointercancel", bailRef.current, true);
+            }
+            markerRef.current?.remove();
+        },
+        [],
+    );
 
     return { start, over, finish, cancel };
 }

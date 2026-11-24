@@ -52,9 +52,18 @@ class QdnMachine extends Model
         return $this->belongsTo(QdnMachine::class, 'machine_id');
     }
 
+    // NOTE: Temporary disable active filtration because the source table data is not reliable.
+    // Some status values are also unknown to me.
+    // what the heck are these even:
+    // Active
+    // Transferred Machine
+    // IN-ACTIVE
+    // Write-Off
+    // FOR QUALIFICATION
     public function scopeActive($query)
     {
-        return $query->whereRaw('LOWER(status) = ?', ['active']);
+        // return $query->whereRaw('LOWER(status) = ?', ['active']);
+        return $query; // no-op
     }
 
     /**

@@ -84,6 +84,7 @@ class LoadingPlanEntryService
                 'scheduled_date' => $date,
                 'machine_id'     => null,
                 'package_name'   => $wip->Package_Name,
+                'is_pickup'      => (bool) ($wip->is_pickup_source ?? false),
                 'sequence_order' => null,
                 'status'         => 'NONE',
                 'rework_seq'     => 0,
@@ -874,6 +875,7 @@ class LoadingPlanEntryService
                     ?? LoadingPlanEntry::create([
                         'lot_id'         => $lotId,
                         'source'         => $wipForNew->source ?? 'wip',
+                        'is_pickup'      => (bool) ($wipForNew->is_pickup_source ?? false),
                         'scheduled_date' => $scheduledDate,
                         'package_name'   => $wipForNew->Package_Name,
                         'machine_id'     => null,
@@ -1260,6 +1262,7 @@ class LoadingPlanEntryService
                     'machine_id'     => $targetMachineId,
                     'non_machine_id' => $targetNonMachineId,
                     'package_name'   => $wipItem?->Package_Name ?? null,
+                    'is_pickup'      => (bool) ($wipItem?->is_pickup_source ?? false),
                     'sequence_order' => $isUnassign ? null : $nextSeq,
                     'lock_version'   => 1,
                 ]);

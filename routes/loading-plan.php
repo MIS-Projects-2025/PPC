@@ -14,7 +14,6 @@ use App\Http\Controllers\{
     MachinePlatformCapacityBandController,
     NonMachineController,
     BoschPartController,
-    PickupPoolController,
     LoadingPlanSplitController,
     LoadingPlanMergeController,
     F3PackageCodeController,
@@ -24,10 +23,6 @@ use App\Http\Controllers\{
 Route::get('settings/{section?}', [LoadingPlanSettingsController::class, 'index'])
     ->whereIn('section', LoadingPlanSettingsController::SECTIONS)
     ->name('settings');
-
-// Pickups
-Route::get('/pickups/available', [PickupPoolController::class, 'available'])->name('pickups.available');
-Route::post('/pickups/pull', [PickupPoolController::class, 'pull'])->name('pickups.pull');
 
 // Package Groups
 Route::prefix('package-groups')->name('package-groups.')->group(function () {

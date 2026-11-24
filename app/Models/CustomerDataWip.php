@@ -130,6 +130,14 @@ class CustomerDataWip extends Model
     {
         return $this->attributes['traveler_remarks'] ?? null;
     }
+    public function getPickupIdAttribute(): ?int
+    {
+        return $this->attributes['pickup_id'] ?? null;
+    }
+    public function getIsPickupSourceAttribute(): bool
+    {
+        return (bool) ($this->attributes['is_pickup_source'] ?? false);
+    }
 
     // CT = Date_Loaded - BE_Starttime, in fractional days
     public function scopeWithCt(Builder $q): Builder

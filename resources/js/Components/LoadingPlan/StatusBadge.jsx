@@ -6,7 +6,7 @@ const TONE = {
     queued: "bg-warning/50 text-base-content border-warning",
     done: "bg-success/50 text-base-content border-success",
     shipped: "bg-success text-success-content border-success",
-    qa: "bg-secondary/50 text-base-content border-secondary",
+    postTnr: "bg-secondary/50 text-base-content border-secondary",
     handling: "bg-accent/50 text-base-content border-accent",
     hold: "bg-error/50 text-base-content border-error",
     rework: "bg-orange-500/50 text-base-content border-orange-500",
@@ -14,16 +14,49 @@ const TONE = {
 
 export const STATUS_TONE = {
     NONE: "neutral",
-    RUNNING: "progress", "ON BAKE": "progress", "ON SORT": "progress", "ON BRAND": "progress",
-    "ON LPI": "progress", "ON LLI": "progress", "ON LEADCON": "progress",
-    "FOR DO": "queued", "FOR PROCESS": "queued", "FOR BAKE": "queued", "FOR SORT": "queued",
-    "FOR BRAND": "queued", "FOR LPI": "queued", "FOR LLI": "queued", "FOR LEADCON": "queued",
-    DONE: "done", "DONE DETAPE": "done",
+
+    RUNNING: "progress", 
+    "ON BAKE": "progress", 
+    "ON SORT": "progress", 
+    "ON BRAND": "progress",
+    "ON LPI": "progress", 
+    "ON LLI": "progress", 
+    "ON LEADCON": "progress",
+    HANDLER: "progress", 
+    DETAPE: "progress", 
+    
+    "FOR DO": "queued", 
+    "FOR PROCESS": "queued", 
+    "FOR BAKE": "queued", 
+    "FOR SORT": "queued",
+    "FOR BRAND": "queued", 
+    "FOR LPI": "queued", 
+    "FOR LLI": "queued", 
+    "FOR LEADCON": "queued",
+    
+    // PRE-TNR
+    IQA: "queued", 
+    
+    DONE: "done", 
+    "DONE DETAPE": "done",
     "FINAL SHIP": "shipped",
-    IQA: "qa", OQA: "qa", FVI: "qa", "VISUAL (FVI)": "qa", "BUY-OFF": "qa",
-    HANDLER: "handling", DETAPE: "handling", BOXING: "handling",
-    HOLD: "hold", "IQA HOLD": "hold", "TNR HOLD": "hold", "PACK LABEL HOLD": "hold", "FINAL QA HOLD": "hold",
-    REWORK: "rework",
+    
+    // POST-TNR
+    OQA: "postTnr", 
+    FVI: "postTnr", 
+    "VISUAL (FVI)": "postTnr", 
+    "BUY-OFF": "postTnr",
+    BOXING: "postTnr",
+    
+    // all considered "HOLD" on the loading plan exported excel
+    // HOLD* is to be used in formulas to sum them all up in summary sheets.
+    HOLD: "hold", 
+    "HOLD (IQA)": "hold", 
+    "HOLD (TNR)": "hold", 
+    "HOLD (PACK LABEL)": "hold", 
+    "HOLD (FINAL QA)": "hold",
+    
+    // REWORK: "rework",
 };
 
 const STATUS_STYLES = Object.fromEntries(
