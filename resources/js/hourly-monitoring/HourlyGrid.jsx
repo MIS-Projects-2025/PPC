@@ -1,20 +1,31 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { DataGrid } from 'react-data-grid';
 import { ApiError, api } from './api';
-import { buildCodeIndex, reconcile, suggestCodes, toGridRow } from './cellUtils';
+import { FIELD_KINDS, buildCodeIndex, buildDisplayRows, reconcile, suggestCodes, toGridRow } from './cellUtils';
 import { buildColumns } from './columns';
 import { TextEditor, createSuggestEditor } from './SuggestEditor';
 
 /**
- * Props: { sheet, rows, setRows, codes, config, employeesUrl }
+ * Props: { sheet, rows, setRows, codes, config, employeesUrl, packageTypes?, shift?, title? }
+ *
+ * `rows` are the real rows of the table. For TNR the grid shows them sorted by package type with read-only
+ * subtotal rows and a Grand Total row (see buildDisplayRows); those virtual rows are never saved.
+ * Boxing renders two of these grids per sheet: `shift` ('day' | 'night') is the table, `rows` is already filtered.
  */
-export default function HourlyGrid({ sheet, rows, setRows, codes, config, employeesUrl }) {
+export default function HourlyGrid({ sheet, rows, setRows, codes, config, employeesUrl, packageTypes = [], shift, title }) {
     const codeIdx = useMemo(() => buildCodeIndex(codes), [codes]);
     const [error, setError] = useState(null);
-    const rowsRef = useRef(rows);
-    rowsRef.current = rows;
     const queue = useRef(Promise.resolve()); // saves run one after another, in order
     const clipboard = useRef('');
+    const packageTypesRef = useRef(packageTypes);
+    packageTypesRef.current = packageTypes;
+
+    const displayRows = useMemo(
+        () => (sheet.type === 'tnr' ? buildDisplayRows(rows, codeIdx, config) : rows),
+        [sheet.type, rows, codeIdx, config],
+    );
+    const displayRef = useRef(displayRows);
+    displayRef.current = displayRows;
 
     // Editors must keep a stable identity, otherwise the cell editor remounts on every render.
     const editors = useMemo(
@@ -40,6 +51,20 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
                 // Name is shown optimistically; the server stores its own snapshot.
                 pick: (row, key, s) => ({ ...row, [key]: s.value, [key.replace('_id', '_name')]: s.hint ?? '' }),
             }),
+            // Package type is free text that only *suggests* existing values: Enter keeps what was typed
+            // unless an arrow key / the mouse picked a suggestion.
+            pkg: createSuggestEditor({
+                autoSelect: false,
+                suggest: (value) => {
+                    const q = value.trim().toUpperCase();
+                    if (!q) return [];
+                    const all = packageTypesRef.current;
+                    const starts = all.filter((p) => p.toUpperCase().startsWith(q));
+                    const contains = all.filter((p) => !p.toUpperCase().startsWith(q) && p.toUpperCase().includes(q));
+                    return [...starts, ...contains].slice(0, 8).map((p) => ({ value: p, label: p }));
+                },
+                pick: (row, key, s) => ({ ...row, [key]: s.value }),
+            }),
         }),
         [codes, employeesUrl],
     );
@@ -61,6 +86,8 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
         [reload],
     );
 
+    const empKeys = FIELD_KINDS[sheet.type].emp;
+
     const save = useCallback(
         (changes) => {
             queue.current = queue.current.then(async () => {
@@ -73,9 +100,10 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
                             const server = names.get(row.id);
                             if (!server) return row;
                             const next = { ...row };
-                            for (const shift of ['day', 'night']) {
-                                if ((server[`${shift}_emp_id`] ?? '') === (row[`${shift}_emp_id`] ?? '')) {
-                                    next[`${shift}_emp_name`] = server[`${shift}_emp_name`] ?? '';
+                            for (const idKey of empKeys) {
+                                if ((server[idKey] ?? '') === (row[idKey] ?? '')) {
+                                    const nameKey = idKey.replace('_id', '_name');
+                                    next[nameKey] = server[nameKey] ?? '';
                                 }
                             }
                             return next;
@@ -86,30 +114,40 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
                 }
             });
         },
-        [sheet.id, sheet.urls.rows, setRows, fail],
+        [sheet.id, sheet.urls.rows, setRows, fail, empKeys],
     );
 
     const onRowsChange = useCallback(
         (next, data) => {
-            const previous = rowsRef.current;
-            const accepted = [...next];
+            const previous = displayRef.current;
+            const updates = new Map(); // row id => accepted (or reverted) row
             const changes = [];
             let rejected = null;
 
             for (const index of data.indexes) {
-                const result = reconcile(previous[index], next[index], sheet.type, codeIdx);
+                const before = previous[index];
+                if (!before || before.__kind) continue; // subtotal / grand-total rows are read-only
+
+                const result = reconcile(before, next[index], sheet.type, codeIdx);
+                updates.set(before.id, result.row);
+
                 if (result.error) {
                     rejected = result.error;
-                    accepted[index] = previous[index]; // revert
                     continue;
                 }
-                accepted[index] = result.row;
-                if (Object.keys(result.fields).length || Object.keys(result.cells).length) {
-                    changes.push({ id: result.row.id, fields: result.fields, cells: result.cells });
+
+                const hasLots = Object.keys(result.lots).length > 0;
+                if (Object.keys(result.fields).length || Object.keys(result.cells).length || hasLots) {
+                    changes.push({
+                        id: before.id,
+                        fields: result.fields,
+                        cells: result.cells,
+                        ...(hasLots ? { lots: result.lots } : {}),
+                    });
                 }
             }
 
-            setRows(sheet.id, accepted);
+            setRows(sheet.id, (cur) => cur.map((r) => updates.get(r.id) ?? r));
             setError(rejected);
             if (changes.length) save(changes);
         },
@@ -118,7 +156,7 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
 
     const addRow = async () => {
         try {
-            const res = await api(sheet.urls.rows, { method: 'POST', body: {} });
+            const res = await api(sheet.urls.rows, { method: 'POST', body: shift ? { shift } : {} });
             setRows(sheet.id, (cur) => [...cur, toGridRow(res.data)]);
             setError(null);
         } catch (e) {
@@ -140,19 +178,22 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
     );
 
     const columns = useMemo(
-        () => buildColumns(sheet.type, { codeIdx, config, editors, onDelete: deleteRow }),
-        [sheet.type, codeIdx, config, editors, deleteRow],
+        () => buildColumns(sheet.type, { codeIdx, config, editors, onDelete: deleteRow, shift }),
+        [sheet.type, codeIdx, config, editors, deleteRow, shift],
     );
 
     return (
         <div className="hm-gridwrap">
+            {title && <h2 className="hm-shift-title">{title}</h2>}
             <div className="hm-toolbar">
                 <button type="button" className="hm-btn" onClick={addRow}>
                     Add row
                 </button>
-                <span className="hm-hint">
-                    Type a number or a downtime code · arrows to move · Enter picks the suggestion · drag the corner handle to fill
-                </span>
+                {shift !== 'night' && (
+                    <span className="hm-hint">
+                        Type a number or a downtime code · arrows to move · Enter picks the suggestion · drag the corner handle to fill
+                    </span>
+                )}
                 {error && (
                     <span className="hm-error" role="alert" onClick={() => setError(null)}>
                         {error}
@@ -160,26 +201,33 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
                 )}
             </div>
             <DataGrid
-                className="rdg-light hm-grid"
+                className={`rdg-light hm-grid${shift ? ' is-half' : ''}`}
                 columns={columns}
-                rows={rows}
+                rows={displayRows}
                 rowKeyGetter={(row) => row.id}
+                rowClass={(row) => (row.__kind ? `hm-total-row is-${row.__kind}` : undefined)}
                 onRowsChange={onRowsChange}
-                onFill={({ columnKey, sourceRow, targetRow }) => ({
-                    ...targetRow,
-                    [columnKey]: sourceRow[columnKey],
-                    // keep the displayed name in step with a filled employee ID
-                    ...(columnKey.endsWith('_emp_id')
-                        ? { [columnKey.replace('_id', '_name')]: sourceRow[columnKey.replace('_id', '_name')] }
-                        : {}),
-                })}
+                onFill={({ columnKey, sourceRow, targetRow }) =>
+                    sourceRow.__kind || targetRow.__kind
+                        ? targetRow
+                        : {
+                              ...targetRow,
+                              [columnKey]: sourceRow[columnKey],
+                              // keep the displayed name in step with a filled employee ID
+                              ...(columnKey.endsWith('_emp_id')
+                                  ? { [columnKey.replace('_id', '_name')]: sourceRow[columnKey.replace('_id', '_name')] }
+                                  : {}),
+                          }
+                }
                 onCellCopy={({ row, column }) => {
                     clipboard.current = String(row[column.key] ?? '');
                 }}
-                onCellPaste={({ row, column }) => (column.renderEditCell ? { ...row, [column.key]: clipboard.current } : row)}
+                onCellPaste={({ row, column }) =>
+                    column.renderEditCell && !row.__kind ? { ...row, [column.key]: clipboard.current } : row
+                }
                 rowHeight={30}
                 headerRowHeight={32}
-                renderers={{ noRowsFallback: <div className="hm-empty">No rows yet. Use “Add row” to start this day.</div> }}
+                renderers={{ noRowsFallback: <div className="hm-empty">No rows yet. Use “Add row” to start this table.</div> }}
             />
         </div>
     );

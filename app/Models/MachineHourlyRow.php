@@ -12,7 +12,7 @@ class MachineHourlyRow extends HourlyRow
         'hourly_sheet_id', 'sort_order',
         'machine', 'capacity', 'plan', 'package_type', 'setup',
         'day_emp_id', 'day_emp_name', 'day_lots',
-        'night_emp_id', 'night_emp_name', 'night_lots',
+        'night_setup', 'night_emp_id', 'night_emp_name', 'night_lots',
         'reason', 'action', 'who', 'when_at', 'status',
     ];
 
@@ -36,6 +36,7 @@ class MachineHourlyRow extends HourlyRow
             'setup'        => ['nullable', 'string', 'max:100'],
             'day_emp_id'   => ['nullable', 'string', 'max:50'],
             'day_lots'     => $int,
+            'night_setup'  => ['nullable', 'string', 'max:100'],
             'night_emp_id' => ['nullable', 'string', 'max:50'],
             'night_lots'   => $int,
             'reason'       => $str,
@@ -49,5 +50,10 @@ class MachineHourlyRow extends HourlyRow
     public static function readOnlyFields(): array
     {
         return ['day_emp_name', 'night_emp_name'];
+    }
+
+    public static function employeeFields(): array
+    {
+        return ['day_emp_id' => 'day_emp_name', 'night_emp_id' => 'night_emp_name'];
     }
 }

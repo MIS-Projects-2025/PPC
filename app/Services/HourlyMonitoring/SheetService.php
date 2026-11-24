@@ -41,7 +41,7 @@ class SheetService
 
         return HourlySheet::query()
             ->where('sheet_date', $date)
-            ->with(['machineRows.cells.downtimeCode', 'fviRows.cells.downtimeCode'])
+            ->with(HourlySheet::EAGER)
             ->get()
             ->sortBy(fn (HourlySheet $s) => array_search("{$s->type}:{$s->line}", $order, true))
             ->values();

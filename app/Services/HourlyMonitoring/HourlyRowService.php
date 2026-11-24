@@ -19,12 +19,19 @@ class HourlyRowService
     ) {
     }
 
-    public function addRow(HourlySheet $sheet): HourlyRow
+    /** @param string|null $shift 'day' | 'night' (boxing rows only) */
+    public function addRow(HourlySheet $sheet, ?string $shift = null): HourlyRow
     {
         $model = $sheet->rowModelClass();
         $next  = ((int) $model::where('hourly_sheet_id', $sheet->id)->max('sort_order')) + 1;
 
-        return $model::create(['hourly_sheet_id' => $sheet->id, 'sort_order' => $next])->load('cells.downtimeCode');
+        $attributes = ['hourly_sheet_id' => $sheet->id, 'sort_order' => $next];
+
+        if ($sheet->type === HourlySheet::TYPE_BOXING) {
+            $attributes['shift'] = $shift ?? 'day';
+        }
+
+        return $model::create($attributes)->load('cells.downtimeCode');
     }
 
     public function deleteRow(HourlySheet $sheet, int $rowId): void
@@ -35,20 +42,21 @@ class HourlyRowService
     /**
      * Apply a batch of edits (typed values, drag-fill, paste) atomically.
      *
-     * @param  list<array{id:int, fields?:array<string,mixed>, cells?:array<int|string,?string>}>  $changes
+     * @param  list<array{id:int, fields?:array<string,mixed>, cells?:array<int|string,?string>, lots?:array<int|string,?string>}>  $changes
      * @return Collection<int, HourlyRow>  the updated rows with their cells
      */
     public function apply(HourlySheet $sheet, array $changes): Collection
     {
-        $ids    = array_values(array_unique(array_map(fn ($c) => (int) $c['id'], $changes)));
-        $actor  = Actor::id();
-        $hours  = array_merge(config('hourly_monitoring.day_hours'), config('hourly_monitoring.night_hours'));
+        $ids   = array_values(array_unique(array_map(fn ($c) => (int) $c['id'], $changes)));
+        $actor = Actor::id();
+        $hours = array_merge(config('hourly_monitoring.day_hours'), config('hourly_monitoring.night_hours'));
+        $morph = $sheet->rowModelClass()::MORPH;
 
-        return DB::transaction(function () use ($sheet, $changes, $ids, $actor, $hours) {
-            $rows    = $sheet->rows()->whereIn('id', $ids)->get()->keyBy('id');
-            $errors  = [];
-            $upserts = [];
-            $deletes = []; // [rowId => [hours]]
+        return DB::transaction(function () use ($sheet, $changes, $ids, $actor, $hours, $morph) {
+            $rows   = $sheet->rows()->whereIn('id', $ids)->get()->keyBy('id');
+            $errors = [];
+            $cells  = []; // output / downtime code per slot (a blank value is stored as NULL/NULL and cleaned up below)
+            $lots   = []; // "No of lots" per slot (boxing)
 
             foreach ($changes as $i => $change) {
                 /** @var HourlyRow|null $row */
@@ -62,29 +70,32 @@ class HourlyRowService
                 $this->applyFields($row, $change['fields'] ?? [], "rows.$i.fields", $errors);
 
                 foreach (($change['cells'] ?? []) as $hour => $raw) {
-                    $valid  = ctype_digit((string) $hour) && in_array((int) $hour, $hours, true);
-                    $parsed = $valid ? $this->parser->parse($raw) : null;
+                    $parsed = $this->validHour($hour, $hours) ? $this->parser->parse($raw) : null;
 
                     if ($parsed === null) {
                         $errors["rows.$i.cells.$hour"] = '"' . $raw . '" is neither a whole number nor a known downtime code.';
                         continue;
                     }
 
-                    if ($parsed['qty'] === null && $parsed['code_id'] === null) {
-                        $deletes[$row->id][] = (int) $hour;
+                    $cells[] = $this->record($morph, $row->id, $hour, $actor) + [
+                        'output_qty'       => $parsed['qty'],
+                        'downtime_code_id' => $parsed['code_id'],
+                    ];
+                }
+
+                if (! $row::hasLots()) {
+                    continue;
+                }
+
+                foreach (($change['lots'] ?? []) as $hour => $raw) {
+                    $parsed = $this->validHour($hour, $hours) ? $this->parser->parseWhole($raw) : null;
+
+                    if ($parsed === null) {
+                        $errors["rows.$i.lots.$hour"] = '"' . $raw . '" is not a whole number of lots.';
                         continue;
                     }
 
-                    $upserts[] = [
-                        'rowable_type'     => $row->getMorphClass(),
-                        'rowable_id'       => $row->id,
-                        'hour'             => (int) $hour,
-                        'output_qty'       => $parsed['qty'],
-                        'downtime_code_id' => $parsed['code_id'],
-                        'updated_by'       => $actor,
-                        'created_at'       => now(),
-                        'updated_at'       => now(),
-                    ];
+                    $lots[] = $this->record($morph, $row->id, $hour, $actor) + ['lots' => $parsed['value']];
                 }
             }
 
@@ -98,24 +109,45 @@ class HourlyRowService
                 }
             }
 
-            if ($upserts) {
-                HourlyCell::upsert(
-                    $upserts,
-                    ['rowable_type', 'rowable_id', 'hour'],
-                    ['output_qty', 'downtime_code_id', 'updated_by', 'updated_at']
-                );
+            $key = ['rowable_type', 'rowable_id', 'hour'];
+
+            if ($cells) {
+                HourlyCell::upsert($cells, $key, ['output_qty', 'downtime_code_id', 'updated_by', 'updated_at']);
             }
 
-            foreach ($deletes as $rowId => $clearHours) {
-                $row = $rows->get($rowId);
-                HourlyCell::where('rowable_type', $row->getMorphClass())
-                    ->where('rowable_id', $rowId)
-                    ->whereIn('hour', $clearHours)
+            if ($lots) {
+                HourlyCell::upsert($lots, $key, ['lots', 'updated_by', 'updated_at']);
+            }
+
+            if ($cells || $lots) {
+                // A slot with no output, no code and no lots is simply "no record".
+                HourlyCell::where('rowable_type', $morph)
+                    ->whereIn('rowable_id', $ids)
+                    ->whereNull('output_qty')
+                    ->whereNull('downtime_code_id')
+                    ->whereNull('lots')
                     ->delete();
             }
 
             return $sheet->rows()->whereIn('id', $ids)->with('cells.downtimeCode')->get();
         });
+    }
+
+    private function validHour(int|string $hour, array $allowed): bool
+    {
+        return ctype_digit((string) $hour) && in_array((int) $hour, $allowed, true);
+    }
+
+    private function record(string $morph, int $rowId, int|string $hour, ?string $actor): array
+    {
+        return [
+            'rowable_type' => $morph,
+            'rowable_id'   => $rowId,
+            'hour'         => (int) $hour,
+            'updated_by'   => $actor,
+            'created_at'   => now(),
+            'updated_at'   => now(),
+        ];
     }
 
     /** @param array<string,string> $errors */
@@ -124,9 +156,7 @@ class HourlyRowService
         // Whitelist: names/snapshots can never be written by the client.
         $fields = Arr::only($fields, array_keys($row::editableRules()));
 
-        foreach (['day', 'night'] as $shift) {
-            $key = "{$shift}_emp_id";
-
+        foreach ($row::employeeFields() as $key => $nameKey) {
             if (! array_key_exists($key, $fields)) {
                 continue;
             }
@@ -134,8 +164,8 @@ class HourlyRowService
             $id = trim((string) ($fields[$key] ?? ''));
 
             if ($id === '') {
-                $fields[$key] = null;
-                $fields["{$shift}_emp_name"] = null;
+                $fields[$key]     = null;
+                $fields[$nameKey] = null;
             } elseif ($id === $row->{$key}) {
                 unset($fields[$key]); // unchanged: keep the existing name snapshot
             } else {
@@ -147,8 +177,8 @@ class HourlyRowService
                     continue;
                 }
 
-                $fields[$key] = $id;
-                $fields["{$shift}_emp_name"] = $name; // snapshot
+                $fields[$key]     = $id;
+                $fields[$nameKey] = $name; // snapshot
             }
         }
 

@@ -33,13 +33,18 @@ export function TextEditor({ row, column, onRowChange, onClose }) {
  * @param {(text: string, signal: AbortSignal) => Array | Promise<Array>} options.suggest
  * @param {(row: any, columnKey: string, suggestion: any) => any} options.pick Builds the row after a suggestion is accepted.
  * @param {number} [options.debounceMs]
+ * @param {boolean} [options.autoSelect] true (default): the first match is highlighted, so Enter/Tab accepts it.
+ *   false: nothing is highlighted until the user presses an arrow key / hovers, so Enter/Tab commits exactly what was
+ *   typed (for free-text columns that merely *suggest*, e.g. Package Type).
  */
-export function createSuggestEditor({ suggest, pick, debounceMs = 0 }) {
+export function createSuggestEditor({ suggest, pick, debounceMs = 0, autoSelect = true }) {
+    const initial = autoSelect ? 0 : -1;
+
     return function SuggestEditor({ row, column, onRowChange }) {
         const key = column.key;
         const [text, setText] = useState(String(row[key] ?? ''));
         const [items, setItems] = useState([]);
-        const [active, setActive] = useState(0);
+        const [active, setActive] = useState(initial);
         const [rect, setRect] = useState(null);
         const inputRef = useRef(null);
         const activeRef = useRef(null);
@@ -55,7 +60,7 @@ export function createSuggestEditor({ suggest, pick, debounceMs = 0 }) {
                     const result = await suggest(text, controller.signal);
                     if (!controller.signal.aborted) {
                         setItems(result);
-                        setActive(0);
+                        setActive(initial);
                     }
                 } catch {
                     /* aborted or failed: simply no suggestions */
@@ -82,12 +87,16 @@ export function createSuggestEditor({ suggest, pick, debounceMs = 0 }) {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault();
                 e.stopPropagation();
-                setActive((i) => (e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length));
-            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                setActive((i) => {
+                    if (e.key === 'ArrowDown') return (i + 1) % items.length;
+                    return i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
+                });
+            } else if ((e.key === 'Enter' || e.key === 'Tab') && active >= 0) {
                 e.preventDefault();
                 e.stopPropagation();
                 accept(items[active]);
             }
+            // active < 0: nothing highlighted, the grid commits the typed text
         };
 
         const flipUp = rect ? rect.bottom + 260 > window.innerHeight : false;

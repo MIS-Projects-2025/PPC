@@ -1,19 +1,23 @@
-import { HOUR_KEY, fmt, hourLabel, pct, rowStats } from './cellUtils';
+import { HOUR_KEY, LOT_KEY, fmt, hourLabel, pct, rangeLabel, rowStats, sumLots, sumOutputs } from './cellUtils';
 
 /**
  * ctx = {
  *   codeIdx: Map<string, DowntimeCode>,
  *   config: HmConfig,
- *   editors: { text, code, emp },
+ *   editors: { text, code, emp, pkg },
  *   onDelete: (row) => void,
+ *   shift?: 'day' | 'night'   // boxing tables only
  * }
+ * Rows with __kind ('subtotal' | 'grand') are read-only totals: never editable.
  */
+
+const editable = (row) => !row.__kind;
 
 function ValueCell({ value, ctx }) {
     if (!value) return null;
     const code = ctx.codeIdx.get(String(value).toUpperCase());
     if (code) {
-        // Downtime-coded cell: show the code with its background color.
+        // Downtime-coded cell: the code is centered, on its background color.
         return (
             <div className="hm-code" style={{ background: code.bg_color ?? undefined, color: code.text_color }} title={code.code}>
                 {code.code}
@@ -28,6 +32,7 @@ const text = (ctx, key, name, width, extra = {}) => ({
     name,
     width,
     resizable: true,
+    editable,
     renderEditCell: ctx.editors.text,
     ...extra,
 });
@@ -49,40 +54,55 @@ const count = (ctx) => ({
     width: 74,
     frozen: true,
     editable: false,
-    renderCell: ({ row, rowIdx }) => (
-        <div className="hm-count">
-            <span>{rowIdx + 1}</span>
-            <button type="button" className="hm-del" title="Delete row" onClick={() => ctx.onDelete(row)}>
-                ×
-            </button>
-        </div>
-    ),
+    renderCell: ({ row, rowIdx }) =>
+        row.__kind ? null : (
+            <div className="hm-count">
+                <span>{row.__n ?? rowIdx + 1}</span>
+                <button type="button" className="hm-del" title="Delete row" onClick={() => ctx.onDelete(row)}>
+                    ×
+                </button>
+            </div>
+        ),
 });
 
-const employee = (ctx, shift) => [
-    {
-        key: `${shift}_emp_id`,
-        name: 'Employee #',
-        width: 110,
-        resizable: true,
-        renderEditCell: ctx.editors.emp,
-    },
-    // Name is read-only: it is the server-side snapshot taken when the ID was set.
-    { key: `${shift}_emp_name`, name: 'Employee Name', width: 190, resizable: true, editable: false },
-];
+/** prefix 'day' | 'night' => day_emp_id / day_emp_name; '' => emp_id / emp_name (boxing). */
+const employee = (ctx, prefix) => {
+    const idKey = prefix ? `${prefix}_emp_id` : 'emp_id';
+    return [
+        { key: idKey, name: 'Employee #', width: 110, resizable: true, editable, renderEditCell: ctx.editors.emp },
+        // Name is read-only: it is the server-side snapshot taken when the ID was set.
+        { key: idKey.replace('_id', '_name'), name: 'Employee Name', width: 190, resizable: true, editable: false },
+    ];
+};
 
-const hours = (ctx, list, shift) =>
-    list.map((hour) => {
+const hours = (ctx, list, shift, { label = hourLabel, lots = false } = {}) =>
+    list.flatMap((hour) => {
         const key = HOUR_KEY(hour);
-        return {
-            key,
-            name: hourLabel(hour),
-            width: 96,
-            resizable: true,
-            headerCellClass: `hm-head-${shift}`,
-            renderEditCell: ctx.editors.code,
-            renderCell: ({ row }) => <ValueCell value={row[key]} ctx={ctx} />,
-        };
+        const cols = [
+            {
+                key,
+                name: label(hour),
+                width: 96,
+                resizable: true,
+                editable,
+                headerCellClass: `hm-head-${shift}`,
+                renderEditCell: ctx.editors.code,
+                renderCell: ({ row }) => <ValueCell value={row[key]} ctx={ctx} />,
+            },
+        ];
+        if (lots) {
+            cols.push({
+                key: LOT_KEY(hour),
+                name: 'No of lots',
+                width: 84,
+                resizable: true,
+                editable,
+                cellClass: 'hm-int',
+                headerCellClass: `hm-head-${shift}`,
+                renderEditCell: ctx.editors.text,
+            });
+        }
+        return cols;
     });
 
 export function buildColumns(type, ctx) {
@@ -90,6 +110,26 @@ export function buildColumns(type, ctx) {
     const stats = (row) => rowStats(row, codeIdx, config);
     const capHr = (row) => (Number(row.capacity) || 0) / config.cap_divisor;
     const safeDiv = (a, b) => (b ? a / b : 0); // IFERROR(a / b, 0)
+
+    if (type === 'boxing') {
+        const night = ctx.shift === 'night';
+        const list = night ? config.night_hours : config.day_hours;
+        const shift = night ? 'night' : 'day';
+
+        return [
+            count(ctx),
+            {
+                name: night ? 'NIGHT SHIFT' : 'DAY SHIFT',
+                headerCellClass: `hm-group-${shift}`,
+                children: [
+                    ...employee(ctx, ''),
+                    ...hours(ctx, list, shift, { label: rangeLabel, lots: true }),
+                    calc('total_out', 'TOTAL', 110, (r) => fmt(sumOutputs(r, list))),
+                    calc('total_lots', 'TOTAL # OF LOTS', 140, (r) => fmt(sumLots(r, list))),
+                ],
+            },
+        ];
+    }
 
     if (type === 'fvi') {
         return [
@@ -132,12 +172,14 @@ export function buildColumns(type, ctx) {
     return [
         count(ctx),
         // FUTURE: MACHINE will reference qdn_db.machine_list and become a dropdown.
+        // Subtotal rows show nothing here; the grand-total row shows "Grand Total".
         text(ctx, 'machine', 'MACHINE', 120, { frozen: true }),
         // FUTURE: CAPACITY will reference qdn_db.machine_capacies and become a dropdown.
         integer(ctx, 'capacity', 'CAPACITY', 100),
         calc('cap_hr', 'CAP/HOUR', 100, (r) => fmt(Math.round(capHr(r)))),
         integer(ctx, 'plan', 'PLAN', 90),
-        text(ctx, 'package_type', 'Package Type', 120),
+        // Suggests the package types that already exist; subtotal rows copy the group's package type here.
+        text(ctx, 'package_type', 'Package Type', 130, { renderEditCell: ctx.editors.pkg }),
         text(ctx, 'setup', 'SET-UP', 110),
         {
             name: 'DAY SHIFT',
@@ -153,6 +195,7 @@ export function buildColumns(type, ctx) {
             name: 'NIGHT SHIFT',
             headerCellClass: 'hm-group-night',
             children: [
+                text(ctx, 'night_setup', 'SET-UP', 110),
                 ...employee(ctx, 'night'),
                 ...hours(ctx, config.night_hours, 'night'),
                 calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
@@ -175,7 +218,10 @@ export function buildColumns(type, ctx) {
             children: [
                 calc('total_dt', 'Total Downtime', 120, (r) => `${stats(r).downtime} h`),
                 text(ctx, 'reason', 'Reason', 180),
-                calc('cap_loss', 'Cap loss (Cap/hr * Total DT)', 190, (r) => fmt(Math.round(capHr(r) * stats(r).downtime))),
+                // Totals rows add up the per-row losses (Cap/hr differs per row), not capacity * total downtime.
+                calc('cap_loss', 'Cap loss (Cap/hr * Total DT)', 190, (r) =>
+                    fmt(Math.round(r.__capLoss ?? capHr(r) * stats(r).downtime)),
+                ),
                 text(ctx, 'action', 'Action', 180),
                 text(ctx, 'who', 'Who', 120),
                 text(ctx, 'when_at', 'When', 120),

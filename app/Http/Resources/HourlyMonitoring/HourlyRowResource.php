@@ -14,14 +14,30 @@ class HourlyRowResource extends JsonResource
 
         // hour slot => display value (the downtime code text, or the integer output)
         $cells = [];
+        $lots  = [];
+
         foreach ($row->cells as $cell) {
-            $cells[$cell->hour] = $cell->downtimeCode?->code ?? (string) $cell->output_qty;
+            $display = $cell->downtimeCode?->code ?? ($cell->output_qty !== null ? (string) $cell->output_qty : null);
+
+            if ($display !== null) {
+                $cells[$cell->hour] = $display;
+            }
+
+            if ($cell->lots !== null) {
+                $lots[$cell->hour] = (string) $cell->lots;
+            }
         }
 
-        return [
+        $data = [
             'id'         => $row->id,
             'sort_order' => $row->sort_order,
         ] + $row->only(array_merge(array_keys($row::editableRules()), $row::readOnlyFields()))
           + ['cells' => (object) $cells];
+
+        if ($row::hasLots()) {
+            $data['hour_lots'] = (object) $lots;
+        }
+
+        return $data;
     }
 }

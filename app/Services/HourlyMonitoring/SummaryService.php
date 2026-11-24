@@ -5,24 +5,38 @@ namespace App\Services\HourlyMonitoring;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Summary tab. TNR F1/F2/F3 come from the machine rows, FVI PL1/PL6 from the employee rows.
- * Only numeric output counts; downtime / non-downtime code cells contribute 0.
+ * Summary tab. TNR (F1/F2/F3 = STD + TRAY), FVI (PL1/PL6) and Boxing (F1/F2/F3).
+ * Only numeric output counts; downtime / non-downtime code cells and "No of lots" contribute 0.
+ * The read-only package-type subtotal rows and the grand total of the TNR grid exist only in the browser.
  * Computed on the server, never stored.
+ *
+ * Column keys of a row: "<type>:<family>" per column ("tnr:F1", "boxing:F1", "fvi:PL1") and "<type>" for the group total.
  */
 class SummaryService
 {
     private const SOURCES = [
         'machine' => ['table' => 'machine_hourly_rows', 'type' => 'tnr'],
         'fvi'     => ['table' => 'fvi_hourly_rows',     'type' => 'fvi'],
+        'boxing'  => ['table' => 'boxing_hourly_rows',  'type' => 'boxing'],
     ];
+
+    /** type => [totals block title, hourly block title, detail table title] */
+    private const TITLES = [
+        'tnr'    => ['Tape and Reel', 'TNR Outs',    'TNR'],
+        'fvi'    => ['FVI Outs',      'FVI Outs',    'FVI OUTS'],
+        'boxing' => ['Boxing',        'Boxing Outs', 'BOXING OUTS'],
+    ];
+
+    /** Order of the per-line detail tables under each shift. */
+    private const DETAIL_ORDER = ['tnr', 'boxing', 'fvi'];
 
     public function forDate(string $date): array
     {
-        $lines  = config('hourly_monitoring.lines');
-        $matrix = $this->outputs($date); // [line][hour] => qty
+        $groups = $this->groups();
+        $matrix = $this->outputs($date); // [type][line][hour] => qty
 
-        $day   = $this->shift(config('hourly_monitoring.day_hours'), $matrix, $lines);
-        $night = $this->shift(config('hourly_monitoring.night_hours'), $matrix, $lines);
+        $day   = $this->shift(config('hourly_monitoring.day_hours'), $matrix, $groups);
+        $night = $this->shift(config('hourly_monitoring.night_hours'), $matrix, $groups);
 
         $grand = [];
         foreach ($day['total'] as $key => $value) {
@@ -30,14 +44,14 @@ class SummaryService
         }
 
         return [
-            'date'    => $date,
-            'columns' => $lines,
-            'shifts'  => [
+            'date'   => $date,
+            'groups' => $groups,
+            'shifts' => [
                 'day'   => ['label' => '7am-7pm'] + $day,
                 'night' => ['label' => '7pm-7am'] + $night,
             ],
             // Totals block shown on top of each shift table.
-            'totals'  => [
+            'totals' => [
                 ['label' => '7am-7pm'] + $day['total'],
                 ['label' => '7pm-7am'] + $night['total'],
                 ['label' => 'Total'] + $grand,
@@ -45,7 +59,45 @@ class SummaryService
         ];
     }
 
-    /** @return array<string, array<int, int>> */
+    /** First word of a line: "F1 STD" and "F1 TRAY" both belong to family "F1"; "PL1" is its own family. */
+    private function family(string $line): string
+    {
+        return explode(' ', $line)[0];
+    }
+
+    /** Column layout of the summary tables, in config order. */
+    private function groups(): array
+    {
+        $colors = config('hourly_monitoring.line_colors', []);
+        $groups = [];
+
+        foreach (config('hourly_monitoring.lines') as $type => $lines) {
+            $columns = [];
+
+            foreach ($lines as $line) {
+                $family = $this->family($line);
+
+                $columns[$family] ??= [
+                    'key'   => "$type:$family",
+                    'label' => $family,
+                    'color' => $colors[$family] ?? null,
+                    'lines' => [],
+                ];
+                $columns[$family]['lines'][] = $line;
+            }
+
+            $groups[] = [
+                'key'          => $type,
+                'label'        => self::TITLES[$type][0],
+                'hourly_label' => self::TITLES[$type][1],
+                'columns'      => array_values($columns),
+            ];
+        }
+
+        return $groups;
+    }
+
+    /** @return array<string, array<string, array<int, int>>> [type][line][hour] => qty */
     private function outputs(string $date): array
     {
         $matrix = [];
@@ -63,7 +115,7 @@ class SummaryService
                 ->get();
 
             foreach ($rows as $r) {
-                $matrix[$r->line][(int) $r->hour] = (int) $r->qty;
+                $matrix[$source['type']][$r->line][(int) $r->hour] = (int) $r->qty;
             }
         }
 
@@ -71,19 +123,23 @@ class SummaryService
     }
 
     /** @param list<int> $hours */
-    private function shift(array $hours, array $matrix, array $lines): array
+    private function shift(array $hours, array $matrix, array $groups): array
     {
         $rows  = [];
-        $total = $this->blank($lines);
+        $total = $this->blank($groups);
 
         foreach ($hours as $hour) {
-            $row = $this->blank($lines);
+            $row = $this->blank($groups);
 
-            foreach ($lines as $type => $typeLines) {
-                foreach ($typeLines as $line) {
-                    $qty = $matrix[$line][$hour] ?? 0;
-                    $row[$line] = $qty;
-                    $row[$type] += $qty;
+            foreach ($groups as $group) {
+                foreach ($group['columns'] as $column) {
+                    $qty = 0;
+                    foreach ($column['lines'] as $line) {
+                        $qty += $matrix[$group['key']][$line][$hour] ?? 0;
+                    }
+
+                    $row[$column['key']] = $qty;
+                    $row[$group['key']] += $qty;
                 }
             }
 
@@ -91,20 +147,93 @@ class SummaryService
                 $total[$key] += $value;
             }
 
-            $rows[] = ['label' => sprintf('%02d:00', $hour)] + $row;
+            $rows[] = ['label' => $this->hourLabel($hour)] + $row;
         }
 
-        return ['rows' => $rows, 'total' => $total];
+        return [
+            'hours'  => array_map(fn ($h) => $this->hourLabel($h), $hours),
+            'rows'   => $rows,
+            'total'  => $total,
+            'detail' => $this->detail($hours, $matrix),
+        ];
     }
 
-    private function blank(array $lines): array
+    /**
+     * Per-line tables (hours across): TNR per family (STD + TRAY + Total), then Boxing, then FVI.
+     *
+     * @param list<int> $hours
+     */
+    private function detail(array $hours, array $matrix): array
+    {
+        $colors   = config('hourly_monitoring.line_colors', []);
+        $lines    = config('hourly_monitoring.lines');
+        $sections = [];
+
+        foreach (self::DETAIL_ORDER as $type) {
+            $blocks = [];
+
+            foreach ($this->detailBlocks($type, $lines[$type]) as $blockLines) {
+                $rows = [];
+                $sum  = array_fill(0, count($hours), 0);
+
+                foreach ($blockLines as $line) {
+                    $values = [];
+
+                    foreach ($hours as $i => $hour) {
+                        $qty      = $matrix[$type][$line][$hour] ?? 0;
+                        $values[] = $qty;
+                        $sum[$i] += $qty;
+                    }
+
+                    $rows[] = [
+                        'label'  => $line,
+                        'color'  => $colors[$this->family($line)] ?? null,
+                        'values' => $values,
+                        'total'  => array_sum($values),
+                    ];
+                }
+
+                $blocks[] = [
+                    'rows'  => $rows,
+                    'total' => ['label' => 'Total', 'values' => $sum, 'total' => array_sum($sum)],
+                ];
+            }
+
+            $sections[] = ['key' => $type, 'title' => self::TITLES[$type][2], 'blocks' => $blocks];
+        }
+
+        return $sections;
+    }
+
+    /** TNR: one table per family (F1 STD + F1 TRAY). Boxing / FVI: one table with all lines. */
+    private function detailBlocks(string $type, array $lines): array
+    {
+        if ($type !== 'tnr') {
+            return [$lines];
+        }
+
+        $byFamily = [];
+        foreach ($lines as $line) {
+            $byFamily[$this->family($line)][] = $line;
+        }
+
+        return array_values($byFamily);
+    }
+
+    private function hourLabel(int $hour): string
+    {
+        return sprintf('%02d:00', $hour);
+    }
+
+    private function blank(array $groups): array
     {
         $blank = [];
-        foreach ($lines as $type => $typeLines) {
-            foreach ($typeLines as $line) {
-                $blank[$line] = 0;
+
+        foreach ($groups as $group) {
+            foreach ($group['columns'] as $column) {
+                $blank[$column['key']] = 0;
             }
-            $blank[$type] = 0; // 'tnr' / 'fvi' subtotal
+            $blank[$group['key']] = 0; // group subtotal ('tnr' / 'fvi' / 'boxing')
         }
 
         return $blank;

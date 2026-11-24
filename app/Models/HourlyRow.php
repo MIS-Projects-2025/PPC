@@ -20,6 +20,15 @@ abstract class HourlyRow extends Model
     /** Attributes the grid shows but never writes directly (name snapshots are resolved server-side). */
     abstract public static function readOnlyFields(): array;
 
+    /** Employee ID attribute => the name-snapshot attribute that is filled from the masterlist. */
+    abstract public static function employeeFields(): array;
+
+    /** Whether every hour slot also has a "No of lots" value (boxing). */
+    public static function hasLots(): bool
+    {
+        return false;
+    }
+
     public function getMorphClass(): string
     {
         return static::MORPH;

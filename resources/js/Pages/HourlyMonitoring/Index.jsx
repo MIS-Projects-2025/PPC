@@ -1,17 +1,20 @@
 import { Head, router } from '@inertiajs/react';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import 'react-data-grid/lib/styles.css';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { toGridRow } from '../../hourly-monitoring/cellUtils';
+import { lineFamily, toGridRow } from '../../hourly-monitoring/cellUtils';
 import '../../hourly-monitoring/hourly-monitoring.css';
 import HourlyGrid from '../../hourly-monitoring/HourlyGrid';
 import SummaryView from '../../hourly-monitoring/SummaryView';
 
 /**
- * Props: { date, sheets, downtimeCodes, config, urls: { index, employees, summary } }
- * Tabs: 'tnr' | 'fvi' | 'summary'
+ * Props: { date, sheets, downtimeCodes, packageTypes, config, urls: { index, employees, summary } }
+ * Tabs: 'tnr' | 'fvi' | 'boxing' | 'summary'
  */
+
+const TABS = ['tnr', 'fvi', 'boxing', 'summary'];
+const SHIFT_TITLES = { day: 'Day shift (7am–7pm)', night: 'Night shift (7pm–7am)' };
 
 const parseYmd = (value) => {
     const [y, m, d] = value.split('-').map(Number);
@@ -24,9 +27,9 @@ const shift = (value, days) => {
     return formatYmd(d);
 };
 
-function Workspace({ date, sheets, downtimeCodes, config, urls }) {
+function Workspace({ date, sheets, downtimeCodes, packageTypes: knownPackageTypes, config, urls }) {
     const [tab, setTab] = useState('tnr');
-    const [line, setLine] = useState({ tnr: config.lines.tnr[0], fvi: config.lines.fvi[0] });
+    const [line, setLine] = useState(() => Object.fromEntries(Object.entries(config.lines).map(([type, lines]) => [type, lines[0]])));
     // Rows live here so they survive switching tabs; the server stays the source of truth.
     const [rowsBySheet, setRowsBySheet] = useState(() =>
         Object.fromEntries(sheets.map((s) => [s.id, s.rows.map(toGridRow)])),
@@ -41,8 +44,22 @@ function Workspace({ date, sheets, downtimeCodes, config, urls }) {
         [],
     );
 
+    // Package type suggestions: everything saved so far plus what is typed in any TNR sheet of this day.
+    const packageTypes = useMemo(() => {
+        const seen = new Map();
+        const add = (value) => {
+            const text = String(value ?? '').trim();
+            if (text && !seen.has(text.toUpperCase())) seen.set(text.toUpperCase(), text);
+        };
+        knownPackageTypes.forEach(add);
+        sheets.filter((s) => s.type === 'tnr').forEach((s) => (rowsBySheet[s.id] ?? []).forEach((r) => add(r.package_type)));
+        return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    }, [knownPackageTypes, sheets, rowsBySheet]);
+
     const go = (value) => router.get(urls.index, { date: value }, { preserveState: false, preserveScroll: true });
     const sheet = tab === 'summary' ? undefined : sheets.find((s) => s.type === tab && s.line === line[tab]);
+    const rows = sheet ? (rowsBySheet[sheet.id] ?? []) : [];
+    const gridProps = { setRows, codes: downtimeCodes, config, employeesUrl: urls.employees, packageTypes };
 
     return (
         <div className="hm-page">
@@ -60,7 +77,7 @@ function Workspace({ date, sheets, downtimeCodes, config, urls }) {
             </header>
 
             <nav className="hm-tabs" role="tablist">
-                {['tnr', 'fvi', 'summary'].map((t) => (
+                {TABS.map((t) => (
                     <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'is-active' : undefined} onClick={() => setTab(t)}>
                         {t === 'summary' ? 'Summary' : t.toUpperCase()}
                     </button>
@@ -75,6 +92,7 @@ function Workspace({ date, sheets, downtimeCodes, config, urls }) {
                             role="tab"
                             aria-selected={line[tab] === l}
                             className={line[tab] === l ? 'is-active' : undefined}
+                            style={{ background: config.line_colors?.[lineFamily(l)] }}
                             onClick={() => setLine((prev) => ({ ...prev, [tab]: l }))}
                         >
                             {l}
@@ -84,17 +102,20 @@ function Workspace({ date, sheets, downtimeCodes, config, urls }) {
             )}
 
             {tab === 'summary' && <SummaryView url={urls.summary} date={date} />}
-            {sheet && (
-                <HourlyGrid
-                    key={sheet.id}
-                    sheet={sheet}
-                    rows={rowsBySheet[sheet.id] ?? []}
-                    setRows={setRows}
-                    codes={downtimeCodes}
-                    config={config}
-                    employeesUrl={urls.employees}
-                />
-            )}
+
+            {sheet?.type === 'boxing' &&
+                ['day', 'night'].map((s) => (
+                    <HourlyGrid
+                        key={`${sheet.id}-${s}`}
+                        {...gridProps}
+                        sheet={sheet}
+                        shift={s}
+                        title={SHIFT_TITLES[s]}
+                        rows={rows.filter((r) => r.shift === s)}
+                    />
+                ))}
+
+            {sheet && sheet.type !== 'boxing' && <HourlyGrid key={sheet.id} {...gridProps} sheet={sheet} rows={rows} />}
         </div>
     );
 }

@@ -11,8 +11,6 @@ class SheetController extends Controller
     /** Fresh copy of one sheet (used by the grid to recover after a failed save). */
     public function show(HourlySheet $sheet): HourlySheetResource
     {
-        return new HourlySheetResource(
-            $sheet->load(['machineRows.cells.downtimeCode', 'fviRows.cells.downtimeCode'])
-        );
+        return new HourlySheetResource($sheet->load(HourlySheet::EAGER));
     }
 }

@@ -35,4 +35,9 @@ class FviHourlyRow extends HourlyRow
     {
         return ['day_emp_name', 'night_emp_name'];
     }
+
+    public static function employeeFields(): array
+    {
+        return ['day_emp_id' => 'day_emp_name', 'night_emp_id' => 'night_emp_name'];
+    }
 }

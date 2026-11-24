@@ -8,6 +8,8 @@ use App\Http\Resources\HourlyMonitoring\HourlyRowResource;
 use App\Models\HourlySheet;
 use App\Services\HourlyMonitoring\HourlyRowService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class SheetRowController extends Controller
 {
@@ -15,9 +17,14 @@ class SheetRowController extends Controller
     {
     }
 
-    public function store(HourlySheet $sheet): JsonResponse
+    /** Boxing sends {"shift": "day"|"night"} so the row lands in the right table; other sheets send nothing. */
+    public function store(Request $request, HourlySheet $sheet): JsonResponse
     {
-        return (new HourlyRowResource($this->rows->addRow($sheet)))->response()->setStatusCode(201);
+        $data = $request->validate(['shift' => ['nullable', Rule::in(['day', 'night'])]]);
+
+        return (new HourlyRowResource($this->rows->addRow($sheet, $data['shift'] ?? null)))
+            ->response()
+            ->setStatusCode(201);
     }
 
     /** Batch edit: typed values, drag-fill and paste all arrive here. */

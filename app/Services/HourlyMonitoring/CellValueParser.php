@@ -37,6 +37,30 @@ class CellValueParser
         return $code ? ['qty' => null, 'code_id' => $code->id] : null;
     }
 
+    /**
+     * "No of lots" values: a whole number or blank.
+     *
+     * @return array{value: ?int}|null  null = invalid; value null = clear
+     */
+    public function parseWhole(?string $raw): ?array
+    {
+        $value = trim((string) $raw);
+
+        if ($value === '') {
+            return ['value' => null];
+        }
+
+        if (preg_match('/^\d{1,3}(,\d{3})+$/', $value)) {
+            $value = str_replace(',', '', $value);
+        }
+
+        if (! preg_match('/^\d{1,10}$/', $value) || (int) $value > 2000000000) {
+            return null;
+        }
+
+        return ['value' => (int) $value];
+    }
+
     /** @return array<string, DowntimeCode> */
     private function codes(): array
     {

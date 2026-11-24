@@ -7,10 +7,10 @@ use Illuminate\Foundation\Http\FormRequest;
 /**
  * {
  *   "rows": [
- *     { "id": 12, "fields": {"plan": 5000, "day_emp_id": "1234"}, "cells": {"8": "1500", "9": "E_CHIPOUT", "10": ""} }
+ *     { "id": 12, "fields": {"plan": 5000, "day_emp_id": "1234"}, "cells": {"8": "1500", "9": "E_CHIPOUT", "10": ""}, "lots": {"8": "3"} }
  *   ]
  * }
- * Cells are keyed by hour slot (0-23). A blank cell value clears it.
+ * Cells (and boxing lots) are keyed by hour slot (0-23). A blank value clears it.
  */
 class ApplyRowChangesRequest extends FormRequest
 {
@@ -27,6 +27,8 @@ class ApplyRowChangesRequest extends FormRequest
             'rows.*.fields'  => ['sometimes', 'array'],
             'rows.*.cells'   => ['sometimes', 'array'],
             'rows.*.cells.*' => ['nullable', 'string', 'max:255'],
+            'rows.*.lots'    => ['sometimes', 'array'],
+            'rows.*.lots.*'  => ['nullable', 'string', 'max:20'],
         ];
 
         foreach ($this->route('sheet')->rowModelClass()::editableRules() as $field => $fieldRules) {

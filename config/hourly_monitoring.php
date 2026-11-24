@@ -4,10 +4,19 @@ return [
     // CAP/HOUR = CAPACITY / cap_divisor
     'cap_divisor' => 20,
 
-    // Tabs: TNR has sub-tabs F1/F2/F3, FVI has PL1/PL6. One hourly_sheets row per (date, type, line).
+    // Main tabs and their sub-tabs. One hourly_sheets row per (date, type, line).
+    // The first word of a line is its "family" (F1, F2, F3, PL1...): the summary adds STD + TRAY of a family together.
     'lines' => [
-        'tnr' => ['F1', 'F2', 'F3'],
-        'fvi' => ['PL1', 'PL6'],
+        'tnr'    => ['F1 STD', 'F2 STD', 'F3 STD', 'F1 TRAY', 'F2 TRAY', 'F3 TRAY'],
+        'fvi'    => ['PL1', 'PL6'],
+        'boxing' => ['F1', 'F2', 'F3'],
+    ],
+
+    // Pale colors for the F1 / F2 / F3 tabs and summary headers (keyed by family).
+    'line_colors' => [
+        'F1' => '#D5EFD3', // pale green
+        'F2' => '#FFF3B8', // pale yellow
+        'F3' => '#D3E6F8', // pale blue
     ],
 
     // A slot is the hour *ending* at that time: 0800H = 7am-8am ... 1900H = 6pm-7pm,
@@ -19,8 +28,9 @@ return [
     // SET-UP, PLAN, lots, reason/action/etc. and every hourly cell start empty.
     // Remove the *_emp_* entries if employees should NOT carry over.
     'carry_over' => [
-        'tnr' => ['machine', 'capacity', 'package_type', 'day_emp_id', 'day_emp_name', 'night_emp_id', 'night_emp_name'],
-        'fvi' => ['day_emp_id', 'day_emp_name', 'day_designation', 'night_emp_id', 'night_emp_name', 'night_designation'],
+        'tnr'    => ['machine', 'capacity', 'package_type', 'day_emp_id', 'day_emp_name', 'night_emp_id', 'night_emp_name'],
+        'fvi'    => ['day_emp_id', 'day_emp_name', 'day_designation', 'night_emp_id', 'night_emp_name', 'night_designation'],
+        'boxing' => ['shift', 'emp_id', 'emp_name'],
     ],
 
     'employee_search_limit' => 15,
