@@ -4,6 +4,13 @@ export const hourLabel = (hour) => `${String(hour).padStart(2, '0')}00H`;
 export const fmt = (n) => n.toLocaleString('en-US');
 export const pct = (n) => `${(n * 100).toFixed(1)}%`;
 
+/** Whole numbers get thousands separators; blanks and non-numeric text (codes, names) pass through unchanged. */
+export const fmtCell = (value) => {
+    if (value === null || value === undefined || value === '') return '';
+    const text = String(value).trim();
+    return /^-?\d+$/.test(text) ? fmt(Number(text)) : text;
+};
+
 /** "F1 STD" / "F1 TRAY" / "F1" => "F1" (used to pick the tab color). */
 export const lineFamily = (line) => String(line).split(' ')[0];
 

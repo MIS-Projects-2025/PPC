@@ -129,10 +129,16 @@ function DetailSection({ section, hours }) {
     );
 }
 
-/** Day shift on top, night shift below; each starts with the 7am-7pm / 7pm-7am / Total block, then the hourly table and the per-line tables. */
+const SHIFTS = [
+    ['day', 'Day shift (7am–7pm)'],
+    ['night', 'Night shift (7pm–7am)'],
+];
+
+/** Day / Night shift are sub tabs; each shows the 7am-7pm / 7pm-7am / Total block, then the hourly table and the per-line tables. */
 export default function SummaryView({ url, date }) {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
+    const [shift, setShift] = useState('day');
 
     useEffect(() => {
         const controller = new AbortController();
@@ -148,20 +154,24 @@ export default function SummaryView({ url, date }) {
 
     return (
         <div className="hm-summary">
-            {['day', 'night'].map((shift) => (
-                <section key={shift}>
-                    <h2>{shift === 'day' ? 'Day shift (7am–7pm)' : 'Night shift (7pm–7am)'}</h2>
-                    <div className="hm-sum-scroll">
-                        <TotalsBlock data={data} highlight={data.shifts[shift].label} />
-                    </div>
-                    <div className="hm-sum-scroll">
-                        <HourlyBlock data={data} shift={shift} />
-                    </div>
-                    {data.shifts[shift].detail.map((section) => (
-                        <DetailSection key={section.key} section={section} hours={data.shifts[shift].hours} />
-                    ))}
-                </section>
-            ))}
+            <nav className="hm-tabs hm-subtabs" role="tablist">
+                {SHIFTS.map(([key, label]) => (
+                    <button key={key} role="tab" aria-selected={shift === key} className={shift === key ? 'is-active' : undefined} onClick={() => setShift(key)}>
+                        {label}
+                    </button>
+                ))}
+            </nav>
+            <section key={shift}>
+                <div className="hm-sum-scroll">
+                    <TotalsBlock data={data} highlight={data.shifts[shift].label} />
+                </div>
+                <div className="hm-sum-scroll">
+                    <HourlyBlock data={data} shift={shift} />
+                </div>
+                {data.shifts[shift].detail.map((section) => (
+                    <DetailSection key={section.key} section={section} hours={data.shifts[shift].hours} />
+                ))}
+            </section>
         </div>
     );
 }

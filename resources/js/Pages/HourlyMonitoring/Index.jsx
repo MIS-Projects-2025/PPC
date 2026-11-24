@@ -6,14 +6,16 @@ import 'react-datepicker/dist/react-datepicker.css';
 import { lineFamily, toGridRow } from '../../hourly-monitoring/cellUtils';
 import '../../hourly-monitoring/hourly-monitoring.css';
 import HourlyGrid from '../../hourly-monitoring/HourlyGrid';
+import PickupView from '../../hourly-monitoring/PickupView';
 import SummaryView from '../../hourly-monitoring/SummaryView';
 
 /**
- * Props: { date, sheets, downtimeCodes, packageTypes, config, urls: { index, employees, summary } }
- * Tabs: 'tnr' | 'fvi' | 'boxing' | 'summary'
+ * Props: { date, sheets, downtimeCodes, packageTypes, config, urls: { index, employees, summary, pickup } }
+ * Tabs: 'tnr' | 'pickup' | 'fvi' | 'boxing' | 'summary'
+ * 'pickup' is read-only and has no sheets: config.lines.pickup lists its sub tabs, PickupView loads its data.
  */
 
-const TABS = ['tnr', 'fvi', 'boxing', 'summary'];
+const TABS = ['tnr', 'pickup', 'fvi', 'boxing', 'summary'];
 const SHIFT_TITLES = { day: 'Day shift (7am–7pm)', night: 'Night shift (7pm–7am)' };
 
 const parseYmd = (value) => {
@@ -34,6 +36,10 @@ function Workspace({ date, sheets, downtimeCodes, packageTypes: knownPackageType
     const [rowsBySheet, setRowsBySheet] = useState(() =>
         Object.fromEntries(sheets.map((s) => [s.id, s.rows.map(toGridRow)])),
     );
+    // DAY / NIGHT SHIFT column groups: one shared state, so a collapsed shift stays out of the way on every tab.
+    const [collapsed, setCollapsed] = useState({ day: false, night: false });
+    const toggleShift = useCallback((s) => setCollapsed((prev) => ({ ...prev, [s]: !prev[s] })), []);
+    const [exporting, setExporting] = useState(false);
 
     const setRows = useCallback(
         (sheetId, next) =>
@@ -59,7 +65,20 @@ function Workspace({ date, sheets, downtimeCodes, packageTypes: knownPackageType
     const go = (value) => router.get(urls.index, { date: value }, { preserveState: false, preserveScroll: true });
     const sheet = tab === 'summary' ? undefined : sheets.find((s) => s.type === tab && s.line === line[tab]);
     const rows = sheet ? (rowsBySheet[sheet.id] ?? []) : [];
-    const gridProps = { setRows, codes: downtimeCodes, config, employeesUrl: urls.employees, packageTypes };
+    const gridProps = { setRows, codes: downtimeCodes, config, employeesUrl: urls.employees, packageTypes, collapsed, onToggleShift: toggleShift };
+
+    // One workbook for the day: a sheet per main tab / sub tab, Day + Night together in a single Summary sheet.
+    const exportDay = async () => {
+        setExporting(true);
+        try {
+            const { exportWorkbook } = await import('../../hourly-monitoring/exportWorkbook');
+            await exportWorkbook({ date, sheets, rowsBySheet, codes: downtimeCodes, config, urls });
+        } catch (e) {
+            window.alert(e?.message || 'Export failed.');
+        } finally {
+            setExporting(false);
+        }
+    };
 
     return (
         <div className="hm-page">
@@ -74,6 +93,9 @@ function Workspace({ date, sheets, downtimeCodes, packageTypes: knownPackageType
                         ›
                     </button>
                 </div>
+                <button type="button" className="hm-btn hm-export" onClick={exportDay} disabled={exporting}>
+                    {exporting ? 'Exporting…' : 'Export'}
+                </button>
             </header>
 
             <nav className="hm-tabs" role="tablist">
@@ -102,6 +124,10 @@ function Workspace({ date, sheets, downtimeCodes, packageTypes: knownPackageType
             )}
 
             {tab === 'summary' && <SummaryView url={urls.summary} date={date} />}
+
+            {tab === 'pickup' && (
+                <PickupView url={urls.pickup} date={date} line={line.pickup} config={config} collapsed={collapsed} onToggleShift={toggleShift} />
+            )}
 
             {sheet?.type === 'boxing' &&
                 ['day', 'night'].map((s) => (

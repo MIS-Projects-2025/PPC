@@ -12,6 +12,15 @@ return [
         'boxing' => ['F1', 'F2', 'F3'],
     ],
 
+    // Pickup tab: read-only, fed by the existing pickup tables, so it is NOT in 'lines' (no hourly_sheets row is created for it).
+    // F1 / F2 lots come from ppc_pickupdb (factory = package_list.areas of the lot's part name), F3 lots from process_travelers.
+    'pickup' => [
+        'lines' => ['F1', 'F2', 'F3'],
+    ],
+
+    // Order of the groups in the Summary tab (Pickup sits between Tape and Reel and FVI Outs).
+    'summary_order' => ['tnr', 'pickup', 'fvi', 'boxing'],
+
     // Pale colors for the F1 / F2 / F3 tabs and summary headers (keyed by family).
     'line_colors' => [
         'F1' => '#D5EFD3', // pale green

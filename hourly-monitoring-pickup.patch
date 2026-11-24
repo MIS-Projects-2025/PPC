@@ -1,0 +1,1232 @@
+Hourly Monitoring: Pickup tab, comma formatting, centered downtime codes, collapsible shifts, summary shift sub tabs, Excel export.
+
+Apply from the project root:
+    git apply --whitespace=nowarn hourly-monitoring-pickup.patch      (or: patch -p1 < hourly-monitoring-pickup.patch)
+    npm install exceljs
+No migrations are needed (Pickup reads the existing tables).
+
+diff --git a/config/hourly_monitoring.php b/config/hourly_monitoring.php
+--- a/config/hourly_monitoring.php
++++ b/config/hourly_monitoring.php
+@@ -12,6 +12,15 @@
+         'boxing' => ['F1', 'F2', 'F3'],
+     ],
+ 
++    // Pickup tab: read-only, fed by the existing pickup tables, so it is NOT in 'lines' (no hourly_sheets row is created for it).
++    // F1 / F2 lots come from ppc_pickupdb (factory = package_list.areas of the lot's part name), F3 lots from process_travelers.
++    'pickup' => [
++        'lines' => ['F1', 'F2', 'F3'],
++    ],
++
++    // Order of the groups in the Summary tab (Pickup sits between Tape and Reel and FVI Outs).
++    'summary_order' => ['tnr', 'pickup', 'fvi', 'boxing'],
++
+     // Pale colors for the F1 / F2 / F3 tabs and summary headers (keyed by family).
+     'line_colors' => [
+         'F1' => '#D5EFD3', // pale green
+
+diff --git a/app/Http/Controllers/HourlyMonitoring/HourlyMonitoringController.php b/app/Http/Controllers/HourlyMonitoring/HourlyMonitoringController.php
+--- a/app/Http/Controllers/HourlyMonitoring/HourlyMonitoringController.php
++++ b/app/Http/Controllers/HourlyMonitoring/HourlyMonitoringController.php
+@@ -33,14 +33,16 @@
+                 ->all(),
+             'config'        => [
+                 'cap_divisor' => config('hourly_monitoring.cap_divisor'),
+-                'lines'       => config('hourly_monitoring.lines'),
+-                'line_colors' => config('hourly_monitoring.line_colors'),
+-                'day_hours'   => config('hourly_monitoring.day_hours'),
+-                'night_hours' => config('hourly_monitoring.night_hours'),
+-            ],
+-            'urls'          => [
+-                'index'     => route('hourly-monitoring.index'),
+-                'employees' => route('hourly-monitoring.employees.search'),
+-                'summary'   => route('hourly-monitoring.summary'),
++                // The Pickup tab has sub tabs (F1/F2/F3) but no sheets, so its lines are added here.
++                'lines'       => config('hourly_monitoring.lines') + ['pickup' => config('hourly_monitoring.pickup.lines')],
++                'line_colors' => config('hourly_monitoring.line_colors'),
++                'day_hours'   => config('hourly_monitoring.day_hours'),
++                'night_hours' => config('hourly_monitoring.night_hours'),
++            ],
++            'urls'          => [
++                'index'     => route('hourly-monitoring.index'),
++                'employees' => route('hourly-monitoring.employees.search'),
++                'summary'   => route('hourly-monitoring.summary'),
++                'pickup'    => route('hourly-monitoring.pickup'),
+             ],
+         ]);
+
+diff --git a/routes/hourly-monitoring.php b/routes/hourly-monitoring.php
+--- a/routes/hourly-monitoring.php
++++ b/routes/hourly-monitoring.php
+@@ -3,4 +3,5 @@
+ use App\Http\Controllers\HourlyMonitoring\EmployeeController;
+ use App\Http\Controllers\HourlyMonitoring\HourlyMonitoringController;
++use App\Http\Controllers\HourlyMonitoring\PickupController;
+ use App\Http\Controllers\HourlyMonitoring\SheetController;
+ use App\Http\Controllers\HourlyMonitoring\SheetRowController;
+@@ -23,5 +24,6 @@
+ Route::get('/', [HourlyMonitoringController::class, 'index'])->name('index');
+ Route::get('employees', [EmployeeController::class, 'search'])->name('employees.search');
+ Route::get('summary', [SummaryController::class, 'show'])->name('summary');
++Route::get('pickup', [PickupController::class, 'show'])->name('pickup');
+ 
+ Route::get('sheets/{sheet}', [SheetController::class, 'show'])->whereNumber('sheet')->name('sheets.show');
+
+diff --git a/app/Services/HourlyMonitoring/SummaryService.php b/app/Services/HourlyMonitoring/SummaryService.php
+--- a/app/Services/HourlyMonitoring/SummaryService.php
++++ b/app/Services/HourlyMonitoring/SummaryService.php
+@@ -6,7 +6,8 @@
+ use Illuminate\Support\Facades\DB;
+ 
+ /**
+- * Summary tab. TNR (F1/F2/F3 = STD + TRAY), FVI (PL1/PL6) and Boxing (F1/F2/F3).
+- * Only numeric output counts; downtime / non-downtime code cells and "No of lots" contribute 0.
++ * Summary tab. TNR (F1/F2/F3 = STD + TRAY), Pickup (F1/F2/F3), FVI (PL1/PL6) and Boxing (F1/F2/F3).
++ * Only numeric output counts; downtime / non-downtime code cells and "No of lots" contribute 0.
++ * Pickup is not sheet data: its hourly quantities are the lot quantities computed by PickupService.
+  * The read-only package-type subtotal rows and the grand total of the TNR grid exist only in the browser.
+  * Computed on the server, never stored.
+@@ -23,11 +24,16 @@
+     /** type => [totals block title, hourly block title, detail table title] */
+     private const TITLES = [
+         'tnr'    => ['Tape and Reel', 'TNR Outs',    'TNR'],
+-        'fvi'    => ['FVI Outs',      'FVI Outs',    'FVI OUTS'],
+-        'boxing' => ['Boxing',        'Boxing Outs', 'BOXING OUTS'],
+-    ];
+-
+-    /** Order of the per-line detail tables under each shift. */
+-    private const DETAIL_ORDER = ['tnr', 'boxing', 'fvi'];
++        'pickup' => ['Pickup',        'Pickup',      'PICKUP'],
++        'fvi'    => ['FVI Outs',      'FVI Outs',    'FVI OUTS'],
++        'boxing' => ['Boxing',        'Boxing Outs', 'BOXING OUTS'],
++    ];
++
++    /** Order of the per-line detail tables under each shift (Pickup goes below FVI OUTS). */
++    private const DETAIL_ORDER = ['tnr', 'boxing', 'fvi', 'pickup'];
++
++    public function __construct(private PickupService $pickup)
++    {
++    }
+ 
+     public function forDate(string $date): array
+@@ -66,11 +72,29 @@
+         return explode(' ', $line)[0];
+     }
+ 
+-    /** Column layout of the summary tables, in config order. */
+-    private function groups(): array
+-    {
+-        $colors = config('hourly_monitoring.line_colors', []);
+-        $groups = [];
+-
+-        foreach (config('hourly_monitoring.lines') as $type => $lines) {
++    /**
++     * Type => lines of every summary group, in config('hourly_monitoring.summary_order').
++     * Pickup is not a sheet type, so its lines live under hourly_monitoring.pickup.
++     *
++     * @return array<string, list<string>>
++     */
++    private function lineMap(): array
++    {
++        $configured = config('hourly_monitoring.lines') + ['pickup' => config('hourly_monitoring.pickup.lines')];
++        $map        = [];
++
++        foreach (config('hourly_monitoring.summary_order') as $type) {
++            $map[$type] = $configured[$type];
++        }
++
++        return $map;
++    }
++
++    /** Column layout of the summary tables, in summary_order. */
++    private function groups(): array
++    {
++        $colors = config('hourly_monitoring.line_colors', []);
++        $groups = [];
++
++        foreach ($this->lineMap() as $type => $lines) {
+             $columns = [];
+@@ -125,5 +149,8 @@
+             }
+         }
+ 
++        // Pickup comes from the external pickup tables, not from hourly_cells.
++        $matrix['pickup'] = $this->pickup->totals($date);
++
+         return $matrix;
+     }
+@@ -172,3 +199,3 @@
+         $colors   = config('hourly_monitoring.line_colors', []);
+-        $lines    = config('hourly_monitoring.lines');
++        $lines    = $this->lineMap();
+         $sections = [];
+
+diff --git a/resources/js/hourly-monitoring/cellUtils.js b/resources/js/hourly-monitoring/cellUtils.js
+--- a/resources/js/hourly-monitoring/cellUtils.js
++++ b/resources/js/hourly-monitoring/cellUtils.js
+@@ -4,4 +4,11 @@
+ export const fmt = (n) => n.toLocaleString('en-US');
+ export const pct = (n) => `${(n * 100).toFixed(1)}%`;
+ 
++/** Whole numbers get thousands separators; blanks and non-numeric text (codes, names) pass through unchanged. */
++export const fmtCell = (value) => {
++    if (value === null || value === undefined || value === '') return '';
++    const text = String(value).trim();
++    return /^-?\d+$/.test(text) ? fmt(Number(text)) : text;
++};
++
+ /** "F1 STD" / "F1 TRAY" / "F1" => "F1" (used to pick the tab color). */
+
+diff --git a/resources/js/hourly-monitoring/columns.jsx b/resources/js/hourly-monitoring/columns.jsx
+--- a/resources/js/hourly-monitoring/columns.jsx
++++ b/resources/js/hourly-monitoring/columns.jsx
+@@ -1,4 +1,4 @@
+-import { HOUR_KEY, LOT_KEY, fmt, hourLabel, pct, rangeLabel, rowStats, sumLots, sumOutputs } from './cellUtils';
++import { HOUR_KEY, LOT_KEY, fmt, fmtCell, hourLabel, pct, rangeLabel, rowStats, sumLots, sumOutputs } from './cellUtils';
+ 
+ /**
+  * ctx = {
+@@ -8,3 +8,4 @@
+  *   onDelete: (row) => void,
+  *   shift?: 'day' | 'night'   // boxing tables only
++ *   collapsed?: { day: boolean, night: boolean }   // a collapsed shift keeps only its totals columns
+  * }
+@@ -18,9 +19,9 @@
+     const code = ctx.codeIdx.get(String(value).toUpperCase());
+     if (code) {
+-        // Downtime-coded cell: the code is centered, on its background color.
+-        return (
+-            <div className="hm-code" style={{ background: code.bg_color ?? undefined, color: code.text_color }} title={code.code}>
+-                {code.code}
++        // Downtime-coded cell: the code is centered (both axes, see .hm-code), on its background color.
++        return (
++            <div className="hm-code" style={{ background: code.bg_color ?? undefined, color: code.text_color }} title={code.code}>
++                <span>{code.code}</span>
+             </div>
+         );
+     }
+@@ -37,15 +38,18 @@
+     ...extra,
+ });
+ 
+-const integer = (ctx, key, name, width) => text(ctx, key, name, width, { cellClass: 'hm-int' });
+-
+-const calc = (key, name, width, render) => ({
+-    key,
+-    name,
+-    width,
+-    editable: false,
+-    cellClass: 'hm-calc',
+-    renderCell: ({ row }) => <>{render(row)}</>,
++// Whole numbers are shown with thousands separators; the editor still shows the raw digits.
++const integer = (ctx, key, name, width) =>
++    text(ctx, key, name, width, { cellClass: 'hm-int', renderCell: ({ row }) => fmtCell(row[key]) });
++
++const calc = (key, name, width, render) => ({
++    key,
++    name,
++    width,
++    editable: false,
++    cellClass: 'hm-calc',
++    renderCell: ({ row }) => <>{render(row)}</>,
++    exportValue: render, // the Excel export reads the same text and turns it back into a number
+ });
+ 
+ const count = (ctx) => ({
+@@ -100,10 +104,25 @@
+                 cellClass: 'hm-int',
+                 headerCellClass: `hm-head-${shift}`,
+                 renderEditCell: ctx.editors.text,
+-            });
+-        }
+-        return cols;
+-    });
++                renderCell: ({ row }) => fmtCell(row[LOT_KEY(hour)]),
++            });
++        }
++        return cols;
++    });
++
++/**
++ * A DAY / NIGHT SHIFT column group. Clicking its header (handled by the grid) collapses the shift to `summary`
++ * (its totals); expanded it shows `detail` + `summary`. The is-collapsed class drives the ▸ / ▾ caret in the CSS.
++ */
++const shiftGroup = (ctx, shift, name, detail, summary) => {
++    const collapsed = Boolean(ctx.collapsed?.[shift]);
++
++    return {
++        name,
++        headerCellClass: `hm-group-${shift}${collapsed ? ' is-collapsed' : ''}`,
++        children: collapsed ? summary : [...detail, ...summary],
++    };
++};
+ 
+ export function buildColumns(type, ctx) {
+     const { config, codeIdx } = ctx;
+@@ -117,15 +136,15 @@
+ 
+         return [
+             count(ctx),
+-            {
+-                name: night ? 'NIGHT SHIFT' : 'DAY SHIFT',
+-                headerCellClass: `hm-group-${shift}`,
+-                children: [
+-                    ...employee(ctx, ''),
+-                    ...hours(ctx, list, shift, { label: rangeLabel, lots: true }),
+-                    calc('total_out', 'TOTAL', 110, (r) => fmt(sumOutputs(r, list))),
+-                    calc('total_lots', 'TOTAL # OF LOTS', 140, (r) => fmt(sumLots(r, list))),
+-                ],
+-            },
++            shiftGroup(
++                ctx,
++                shift,
++                night ? 'NIGHT SHIFT' : 'DAY SHIFT',
++                [...employee(ctx, ''), ...hours(ctx, list, shift, { label: rangeLabel, lots: true })],
++                [
++                    calc('total_out', 'TOTAL', 110, (r) => fmt(sumOutputs(r, list))),
++                    calc('total_lots', 'TOTAL # OF LOTS', 140, (r) => fmt(sumLots(r, list))),
++                ],
++            ),
+         ];
+     }
+@@ -136,27 +155,33 @@
+             count(ctx),
+-            {
+-                name: 'DAY SHIFT',
+-                headerCellClass: 'hm-group-day',
+-                children: [
+-                    ...employee(ctx, 'day'),
+-                    // FUTURE: designation may become a reference table too.
+-                    text(ctx, 'day_designation', 'Designation', 130),
+-                    ...hours(ctx, config.day_hours, 'day'),
+-                    calc('day_outs', 'DAY SHIFT OUTS', 120, (r) => fmt(stats(r).day)),
+-                    integer(ctx, 'day_lots', 'TOTAL # of lots', 110),
+-                ],
+-            },
+-            {
+-                name: 'NIGHT SHIFT',
+-                headerCellClass: 'hm-group-night',
+-                children: [
+-                    ...employee(ctx, 'night'),
+-                    // FUTURE: designation may become a reference table too.
+-                    text(ctx, 'night_designation', 'Designation', 130),
+-                    ...hours(ctx, config.night_hours, 'night'),
+-                    calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
+-                    integer(ctx, 'night_lots', 'TOTAL # of lots', 110),
+-                ],
+-            },
++            shiftGroup(
++                ctx,
++                'day',
++                'DAY SHIFT',
++                [
++                    ...employee(ctx, 'day'),
++                    // FUTURE: designation may become a reference table too.
++                    text(ctx, 'day_designation', 'Designation', 130),
++                    ...hours(ctx, config.day_hours, 'day'),
++                ],
++                [
++                    calc('day_outs', 'DAY SHIFT OUTS', 120, (r) => fmt(stats(r).day)),
++                    integer(ctx, 'day_lots', 'TOTAL # of lots', 110),
++                ],
++            ),
++            shiftGroup(
++                ctx,
++                'night',
++                'NIGHT SHIFT',
++                [
++                    ...employee(ctx, 'night'),
++                    // FUTURE: designation may become a reference table too.
++                    text(ctx, 'night_designation', 'Designation', 130),
++                    ...hours(ctx, config.night_hours, 'night'),
++                ],
++                [
++                    calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
++                    integer(ctx, 'night_lots', 'TOTAL # of lots', 110),
++                ],
++            ),
+             {
+                 name: 'OVERALL',
+@@ -183,24 +208,23 @@
+         text(ctx, 'setup', 'SET-UP', 110),
+-        {
+-            name: 'DAY SHIFT',
+-            headerCellClass: 'hm-group-day',
+-            children: [
+-                ...employee(ctx, 'day'),
+-                ...hours(ctx, config.day_hours, 'day'),
+-                calc('day_outs', 'DAY SHIFT OUTS', 120, (r) => fmt(stats(r).day)),
+-                integer(ctx, 'day_lots', 'TOTAL # of lots', 110),
+-            ],
+-        },
+-        {
+-            name: 'NIGHT SHIFT',
+-            headerCellClass: 'hm-group-night',
+-            children: [
+-                text(ctx, 'night_setup', 'SET-UP', 110),
+-                ...employee(ctx, 'night'),
+-                ...hours(ctx, config.night_hours, 'night'),
+-                calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
+-                integer(ctx, 'night_lots', 'TOTAL # of lots', 110),
+-            ],
+-        },
++        shiftGroup(
++            ctx,
++            'day',
++            'DAY SHIFT',
++            [...employee(ctx, 'day'), ...hours(ctx, config.day_hours, 'day')],
++            [
++                calc('day_outs', 'DAY SHIFT OUTS', 120, (r) => fmt(stats(r).day)),
++                integer(ctx, 'day_lots', 'TOTAL # of lots', 110),
++            ],
++        ),
++        shiftGroup(
++            ctx,
++            'night',
++            'NIGHT SHIFT',
++            [text(ctx, 'night_setup', 'SET-UP', 110), ...employee(ctx, 'night'), ...hours(ctx, config.night_hours, 'night')],
++            [
++                calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
++                integer(ctx, 'night_lots', 'TOTAL # of lots', 110),
++            ],
++        ),
+         {
+             name: 'ATTAINMENT',
+
+diff --git a/resources/js/hourly-monitoring/HourlyGrid.jsx b/resources/js/hourly-monitoring/HourlyGrid.jsx
+--- a/resources/js/hourly-monitoring/HourlyGrid.jsx
++++ b/resources/js/hourly-monitoring/HourlyGrid.jsx
+@@ -7,10 +7,12 @@
+ /**
+- * Props: { sheet, rows, setRows, codes, config, employeesUrl, packageTypes?, shift?, title? }
+- *
+- * `rows` are the real rows of the table. For TNR the grid shows them sorted by package type with read-only
+- * subtotal rows and a Grand Total row (see buildDisplayRows); those virtual rows are never saved.
+- * Boxing renders two of these grids per sheet: `shift` ('day' | 'night') is the table, `rows` is already filtered.
+- */
+-export default function HourlyGrid({ sheet, rows, setRows, codes, config, employeesUrl, packageTypes = [], shift, title }) {
++ * Props: { sheet, rows, setRows, codes, config, employeesUrl, packageTypes?, shift?, title?, collapsed?, onToggleShift? }
++ *
++ * `rows` are the real rows of the table. For TNR the grid shows them sorted by package type with read-only
++ * subtotal rows and a Grand Total row (see buildDisplayRows); those virtual rows are never saved.
++ * Boxing renders two of these grids per sheet: `shift` ('day' | 'night') is the table, `rows` is already filtered.
++ * Clicking a DAY / NIGHT SHIFT header calls onToggleShift('day' | 'night'); `collapsed` ({ day, night }) lives in the
++ * page, so every grid follows the same choice.
++ */
++export default function HourlyGrid({ sheet, rows, setRows, codes, config, employeesUrl, packageTypes = [], shift, title, collapsed, onToggleShift }) {
+     const codeIdx = useMemo(() => buildCodeIndex(codes), [codes]);
+     const [error, setError] = useState(null);
+@@ -183,10 +185,16 @@
+     const columns = useMemo(
+-        () => buildColumns(sheet.type, { codeIdx, config, editors, onDelete: deleteRow, shift }),
+-        [sheet.type, codeIdx, config, editors, deleteRow, shift],
+-    );
+-
+-    return (
+-        <div className="hm-gridwrap">
++        () => buildColumns(sheet.type, { codeIdx, config, editors, onDelete: deleteRow, shift, collapsed }),
++        [sheet.type, codeIdx, config, editors, deleteRow, shift, collapsed],
++    );
++
++    // The DAY / NIGHT SHIFT group headers are plain header cells: one delegated click handler toggles the shift.
++    const onHeaderClick = (e) => {
++        const group = e.target.closest?.('.hm-group-day, .hm-group-night');
++        if (group && onToggleShift) onToggleShift(group.classList.contains('hm-group-night') ? 'night' : 'day');
++    };
++
++    return (
++        <div className="hm-gridwrap" onClick={onHeaderClick}>
+             {title && <h2 className="hm-shift-title">{title}</h2>}
+             <div className="hm-toolbar">
+                 <button type="button" className="hm-btn" onClick={addRow}>
+
+diff --git a/resources/js/Pages/HourlyMonitoring/Index.jsx b/resources/js/Pages/HourlyMonitoring/Index.jsx
+--- a/resources/js/Pages/HourlyMonitoring/Index.jsx
++++ b/resources/js/Pages/HourlyMonitoring/Index.jsx
+@@ -7,11 +7,13 @@
+ import '../../hourly-monitoring/hourly-monitoring.css';
+ import HourlyGrid from '../../hourly-monitoring/HourlyGrid';
+-import SummaryView from '../../hourly-monitoring/SummaryView';
+-
+-/**
+- * Props: { date, sheets, downtimeCodes, packageTypes, config, urls: { index, employees, summary } }
+- * Tabs: 'tnr' | 'fvi' | 'boxing' | 'summary'
+- */
+-
+-const TABS = ['tnr', 'fvi', 'boxing', 'summary'];
++import PickupView from '../../hourly-monitoring/PickupView';
++import SummaryView from '../../hourly-monitoring/SummaryView';
++
++/**
++ * Props: { date, sheets, downtimeCodes, packageTypes, config, urls: { index, employees, summary, pickup } }
++ * Tabs: 'tnr' | 'pickup' | 'fvi' | 'boxing' | 'summary'
++ * 'pickup' is read-only and has no sheets: config.lines.pickup lists its sub tabs, PickupView loads its data.
++ */
++
++const TABS = ['tnr', 'pickup', 'fvi', 'boxing', 'summary'];
+ const SHIFT_TITLES = { day: 'Day shift (7am–7pm)', night: 'Night shift (7pm–7am)' };
+@@ -34,5 +36,9 @@
+     const [rowsBySheet, setRowsBySheet] = useState(() =>
+         Object.fromEntries(sheets.map((s) => [s.id, s.rows.map(toGridRow)])),
+     );
++    // DAY / NIGHT SHIFT column groups: one shared state, so a collapsed shift stays out of the way on every tab.
++    const [collapsed, setCollapsed] = useState({ day: false, night: false });
++    const toggleShift = useCallback((s) => setCollapsed((prev) => ({ ...prev, [s]: !prev[s] })), []);
++    const [exporting, setExporting] = useState(false);
+ 
+     const setRows = useCallback(
+@@ -63,5 +69,18 @@
+     const rows = sheet ? (rowsBySheet[sheet.id] ?? []) : [];
+-    const gridProps = { setRows, codes: downtimeCodes, config, employeesUrl: urls.employees, packageTypes };
++    const gridProps = { setRows, codes: downtimeCodes, config, employeesUrl: urls.employees, packageTypes, collapsed, onToggleShift: toggleShift };
++
++    // One workbook for the day: a sheet per main tab / sub tab, Day + Night together in a single Summary sheet.
++    const exportDay = async () => {
++        setExporting(true);
++        try {
++            const { exportWorkbook } = await import('../../hourly-monitoring/exportWorkbook');
++            await exportWorkbook({ date, sheets, rowsBySheet, codes: downtimeCodes, config, urls });
++        } catch (e) {
++            window.alert(e?.message || 'Export failed.');
++        } finally {
++            setExporting(false);
++        }
++    };
+ 
+     return (
+         <div className="hm-page">
+@@ -76,4 +95,7 @@
+                         ›
+                     </button>
+                 </div>
++                <button type="button" className="hm-btn hm-export" onClick={exportDay} disabled={exporting}>
++                    {exporting ? 'Exporting…' : 'Export'}
++                </button>
+             </header>
+@@ -105,3 +127,7 @@
+             {tab === 'summary' && <SummaryView url={urls.summary} date={date} />}
+ 
++            {tab === 'pickup' && (
++                <PickupView url={urls.pickup} date={date} line={line.pickup} config={config} collapsed={collapsed} onToggleShift={toggleShift} />
++            )}
++
+             {sheet?.type === 'boxing' &&
+
+diff --git a/resources/js/hourly-monitoring/SummaryView.jsx b/resources/js/hourly-monitoring/SummaryView.jsx
+--- a/resources/js/hourly-monitoring/SummaryView.jsx
++++ b/resources/js/hourly-monitoring/SummaryView.jsx
+@@ -129,9 +129,15 @@
+     );
+ }
+ 
+-/** Day shift on top, night shift below; each starts with the 7am-7pm / 7pm-7am / Total block, then the hourly table and the per-line tables. */
+-export default function SummaryView({ url, date }) {
+-    const [data, setData] = useState(null);
+-    const [error, setError] = useState(null);
++const SHIFTS = [
++    ['day', 'Day shift (7am–7pm)'],
++    ['night', 'Night shift (7pm–7am)'],
++];
++
++/** Day / Night shift are sub tabs; each shows the 7am-7pm / 7pm-7am / Total block, then the hourly table and the per-line tables. */
++export default function SummaryView({ url, date }) {
++    const [data, setData] = useState(null);
++    const [error, setError] = useState(null);
++    const [shift, setShift] = useState('day');
+ 
+     useEffect(() => {
+@@ -143,20 +149,24 @@
+ 
+     return (
+         <div className="hm-summary">
+-            {['day', 'night'].map((shift) => (
+-                <section key={shift}>
+-                    <h2>{shift === 'day' ? 'Day shift (7am–7pm)' : 'Night shift (7pm–7am)'}</h2>
+-                    <div className="hm-sum-scroll">
+-                        <TotalsBlock data={data} highlight={data.shifts[shift].label} />
+-                    </div>
+-                    <div className="hm-sum-scroll">
+-                        <HourlyBlock data={data} shift={shift} />
+-                    </div>
+-                    {data.shifts[shift].detail.map((section) => (
+-                        <DetailSection key={section.key} section={section} hours={data.shifts[shift].hours} />
+-                    ))}
+-                </section>
+-            ))}
++            <nav className="hm-tabs hm-subtabs" role="tablist">
++                {SHIFTS.map(([key, label]) => (
++                    <button key={key} role="tab" aria-selected={shift === key} className={shift === key ? 'is-active' : undefined} onClick={() => setShift(key)}>
++                        {label}
++                    </button>
++                ))}
++            </nav>
++            <section key={shift}>
++                <div className="hm-sum-scroll">
++                    <TotalsBlock data={data} highlight={data.shifts[shift].label} />
++                </div>
++                <div className="hm-sum-scroll">
++                    <HourlyBlock data={data} shift={shift} />
++                </div>
++                {data.shifts[shift].detail.map((section) => (
++                    <DetailSection key={section.key} section={section} hours={data.shifts[shift].hours} />
++                ))}
++            </section>
+         </div>
+     );
+ }
+
+diff --git a/resources/js/hourly-monitoring/hourly-monitoring.css b/resources/js/hourly-monitoring/hourly-monitoring.css
+--- a/resources/js/hourly-monitoring/hourly-monitoring.css
++++ b/resources/js/hourly-monitoring/hourly-monitoring.css
+@@ -38,6 +38,16 @@
+ .hm-grid .hm-group-action { background: #f1dede; }
+-.hm-code { margin-inline: -8px; padding-inline: 8px; block-size: 100%; overflow: hidden; text-overflow: ellipsis; font-weight: 500; text-align: center; }
+-.hm-qty { text-align: right; }
++.hm-code { display: flex; align-items: center; justify-content: center; margin-inline: -8px; padding-inline: 8px; block-size: 100%; font-weight: 500; line-height: 1; } /* centered on both axes */
++.hm-code > span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.hm-qty { text-align: right; }
++
++/* DAY / NIGHT SHIFT group headers collapse / expand their shift when clicked */
++.hm-grid .hm-group-day, .hm-grid .hm-group-night { cursor: pointer; user-select: none; }
++.hm-grid .hm-group-day::before, .hm-grid .hm-group-night::before { content: '▾'; margin-inline-end: 6px; }
++.hm-grid .hm-group-day.is-collapsed::before, .hm-grid .hm-group-night.is-collapsed::before { content: '▸'; }
++
++/* export button (header) */
++.hm-header .hm-export { margin-inline-start: auto; }
++.hm-btn:disabled { opacity: .6; cursor: default; }
+ .hm-count { display: flex; justify-content: space-between; align-items: center; }
+ .hm-del { visibility: hidden; border: 0; background: none; color: #a30000; font-size: 16px; cursor: pointer; line-height: 1; }
+ .rdg-row:hover .hm-del, .hm-del:focus-visible { visibility: visible; }
+
+diff --git a/app/Http/Controllers/HourlyMonitoring/PickupController.php b/app/Http/Controllers/HourlyMonitoring/PickupController.php
+new file mode 100644
+--- /dev/null
++++ b/app/Http/Controllers/HourlyMonitoring/PickupController.php
+@@ -0,0 +1,24 @@
++<?php
++
++namespace App\Http\Controllers\HourlyMonitoring;
++
++use App\Http\Controllers\Controller;
++use App\Http\Requests\HourlyMonitoring\DateRequest;
++use App\Services\HourlyMonitoring\PickupService;
++use Illuminate\Http\JsonResponse;
++use Illuminate\Support\Facades\Log;
++
++class PickupController extends Controller
++{
++    /** Read-only pickup lots of one day, per line (F1 / F2 / F3). */
++    public function show(DateRequest $request, PickupService $pickup): JsonResponse
++    {
++        try {
++            return response()->json($pickup->forDate($request->day()));
++        } catch (\Throwable $e) {
++            Log::warning('Pickup lookup failed', ['error' => $e->getMessage()]);
++
++            return response()->json(['message' => 'The pickup tables are unreachable. Try again shortly.'], 503);
++        }
++    }
++}
+
+diff --git a/app/Services/HourlyMonitoring/PickupService.php b/app/Services/HourlyMonitoring/PickupService.php
+new file mode 100644
+--- /dev/null
++++ b/app/Services/HourlyMonitoring/PickupService.php
+@@ -0,0 +1,133 @@
++<?php
++
++namespace App\Services\HourlyMonitoring;
++
++use App\Models\PartName;
++use Carbon\CarbonImmutable;
++use Illuminate\Support\Collection;
++use Illuminate\Support\Facades\DB;
++
++/**
++ * Pickup tab + the Pickup columns of the Summary tab. Read-only: nothing is stored, everything is computed from the
++ * existing pickup tables of the default connection:
++ *
++ *   F1 / F2 : ppc_pickupdb. The factory of a lot is package_list.areas (qdn_db) of its PARTNAME (= devicename), via PartName.
++ *   F3      : process_travelers. No reference needed, qty as is.
++ *
++ * Quantities are summed per lot and per hour slot. A slot is the hour *ending* at that time (same convention as the
++ * hourly sheets: 0800H = 07:00-08:00), so the day of a sheet date runs from 07:00 to 07:00 the next morning and the
++ * night shift stays with the day shift of the same sheet date.
++ */
++class PickupService
++{
++    /** The line fed by process_travelers. */
++    private const TRAVELER_LINE = 'F3';
++
++    /**
++     * Lots per line, each with its quantity per hour slot.
++     *
++     * @return array{date: string, lines: array<string, array{rows: list<array>}>}
++     */
++    public function forDate(string $date): array
++    {
++        $byLine = array_fill_keys(config('hourly_monitoring.pickup.lines'), []);
++
++        foreach ($this->lotSlots($date) as $r) {
++            $line = (string) $r->area;
++
++            if (! array_key_exists($line, $byLine)) {
++                continue; // a part without a known factory (F1/F2/F3)
++            }
++
++            $id   = "{$line}|{$r->lot_id}|{$r->part_name}";
++            $slot = (int) $r->slot;
++
++            $byLine[$line][$id] ??= [
++                'id'        => $id,
++                'lot_id'    => (string) $r->lot_id,
++                'part_name' => (string) $r->part_name,
++                'package'   => $r->package,
++                'cells'     => [],
++            ];
++            $byLine[$line][$id]['package'] ??= $r->package;
++            $byLine[$line][$id]['cells'][$slot] = ($byLine[$line][$id]['cells'][$slot] ?? 0) + (int) $r->qty;
++        }
++
++        $lines = [];
++
++        foreach ($byLine as $line => $rows) {
++            $rows = array_values($rows);
++            usort($rows, fn ($a, $b) => [$a['part_name'], $a['lot_id']] <=> [$b['part_name'], $b['lot_id']]);
++
++            $lines[$line] = ['rows' => array_map(fn ($row) => ['cells' => (object) $row['cells']] + $row, $rows)];
++        }
++
++        return ['date' => $date, 'lines' => $lines];
++    }
++
++    /**
++     * Total quantity per line and hour slot (what the Summary tab adds up).
++     *
++     * @return array<string, array<int, int>> [line][slot] => qty
++     */
++    public function totals(string $date): array
++    {
++        $matrix = [];
++
++        foreach ($this->lotSlots($date) as $r) {
++            $slot = (int) $r->slot;
++            $matrix[$r->area][$slot] = ($matrix[$r->area][$slot] ?? 0) + (int) $r->qty;
++        }
++
++        return $matrix;
++    }
++
++    /** @return Collection<int, object{area: ?string, lot_id: string, part_name: string, package: ?string, slot: int, qty: int}> */
++    private function lotSlots(string $date): Collection
++    {
++        [$from, $to] = $this->window($date);
++
++        return $this->ppc($from, $to)->concat($this->travelers($from, $to));
++    }
++
++    /** [from, to) of the sheet date: slot 8 is 07:00-08:00, so the day starts at (first day slot - 1):00. */
++    private function window(string $date): array
++    {
++        $from = CarbonImmutable::parse($date)->setTime(min(config('hourly_monitoring.day_hours')) - 1, 0);
++
++        return [$from->toDateTimeString(), $from->addDay()->toDateTimeString()];
++    }
++
++    /** F1 / F2 (and whatever else package_list says): ppc_pickupdb joined to the part's area. */
++    private function ppc(string $from, string $to): Collection
++    {
++        // One area per part name: package_list may repeat a devicename, which would double the quantities.
++        $areas = DB::table(PartName::qualifiedTable())
++            ->selectRaw('devicename, MIN(UPPER(TRIM(areas))) as area')
++            ->groupBy('devicename');
++
++        $slot = '((HOUR(p.DATE_CREATED) + 1) % 24)';
++
++        return DB::table('ppc_pickupdb as p')
++            ->joinSub($areas, 'pl', 'pl.devicename', '=', 'p.PARTNAME')
++            ->where('p.DATE_CREATED', '>=', $from)
++            ->where('p.DATE_CREATED', '<', $to)
++            ->selectRaw("pl.area as area, p.LOTID as lot_id, p.PARTNAME as part_name, MAX(p.PACKAGE) as package, {$slot} as slot, SUM(p.QTY) as qty")
++            ->groupByRaw("pl.area, p.LOTID, p.PARTNAME, {$slot}")
++            ->get();
++    }
++
++    /** F3: process_travelers (soft-deleted travelers are ignored). */
++    private function travelers(string $from, string $to): Collection
++    {
++        $slot = '((HOUR(date_created) + 1) % 24)';
++
++        return DB::table('process_travelers')
++            ->whereNull('deleted_at')
++            ->where('date_created', '>=', $from)
++            ->where('date_created', '<', $to)
++            ->selectRaw("'" . self::TRAVELER_LINE . "' as area, lot_number as lot_id, part_number as part_name, MAX(pkg_code) as package, {$slot} as slot, SUM(qty) as qty")
++            ->groupByRaw("lot_number, part_number, {$slot}")
++            ->get();
++    }
++}
+
+diff --git a/resources/js/hourly-monitoring/pickupUtils.js b/resources/js/hourly-monitoring/pickupUtils.js
+new file mode 100644
+--- /dev/null
++++ b/resources/js/hourly-monitoring/pickupUtils.js
+@@ -0,0 +1,72 @@
++import { HOUR_KEY, fmt, fmtCell, hourLabel } from './cellUtils';
++
++const sumHours = (row, hours) => hours.reduce((t, h) => t + (Number(row[HOUR_KEY(h)]) || 0), 0);
++
++const withTotals = (row, config) => ({
++    ...row,
++    day_total: sumHours(row, config.day_hours),
++    night_total: sumHours(row, config.night_hours),
++    all_total: sumHours(row, [...config.day_hours, ...config.night_hours]),
++});
++
++/**
++ * Server lots ({ id, lot_id, part_name, package, cells }) => grid rows with one flat `h{hour}` number per slot and the
++ * day / night / overall totals, followed by a read-only Grand Total row. Nothing here is ever sent back to the server.
++ */
++export function buildPickupRows(lots, config) {
++    const hours = [...config.day_hours, ...config.night_hours];
++
++    const rows = lots.map((lot) => {
++        const row = { id: lot.id, lot_id: lot.lot_id, part_name: lot.part_name, package: lot.package ?? '' };
++        for (const h of hours) row[HOUR_KEY(h)] = lot.cells?.[h] ?? '';
++        return withTotals(row, config);
++    });
++
++    if (!rows.length) return rows;
++
++    const grand = { id: 'grand', __kind: 'grand', lot_id: 'Grand Total', part_name: '', package: '' };
++    for (const h of hours) {
++        const sum = rows.reduce((t, r) => t + (Number(r[HOUR_KEY(h)]) || 0), 0);
++        grand[HOUR_KEY(h)] = sum || '';
++    }
++
++    return [...rows, withTotals(grand, config)];
++}
++
++/** Read-only columns of the pickup table. `collapsed` ({ day, night }) hides the hour columns of a shift (see shiftGroup in columns.jsx). */
++export function pickupColumns(config, collapsed = {}) {
++    const hourCols = (list, shift) =>
++        list.map((h) => ({
++            key: HOUR_KEY(h),
++            name: hourLabel(h),
++            width: 96,
++            resizable: true,
++            cellClass: 'hm-int',
++            headerCellClass: `hm-head-${shift}`,
++            renderCell: ({ row }) => fmtCell(row[HOUR_KEY(h)]),
++        }));
++
++    const total = (key, name, width) => ({
++        key,
++        name,
++        width,
++        resizable: true,
++        cellClass: 'hm-calc',
++        renderCell: ({ row }) => fmt(row[key] ?? 0),
++    });
++
++    const group = (shift, name, list, totalCol) => ({
++        name,
++        headerCellClass: `hm-group-${shift}${collapsed[shift] ? ' is-collapsed' : ''}`,
++        children: collapsed[shift] ? [totalCol] : [...hourCols(list, shift), totalCol],
++    });
++
++    return [
++        { key: 'lot_id', name: 'LOT ID', width: 160, frozen: true, resizable: true },
++        { key: 'part_name', name: 'PART NAME', width: 180, resizable: true },
++        { key: 'package', name: 'PACKAGE', width: 120, resizable: true },
++        group('day', 'DAY SHIFT', config.day_hours, total('day_total', 'DAY SHIFT TOTAL', 140)),
++        group('night', 'NIGHT SHIFT', config.night_hours, total('night_total', 'NIGHT SHIFT TOTAL', 150)),
++        { name: 'OVERALL', headerCellClass: 'hm-group-total', children: [total('all_total', 'OVERALL TOTAL', 140)] },
++    ];
++}
+
+diff --git a/resources/js/hourly-monitoring/PickupView.jsx b/resources/js/hourly-monitoring/PickupView.jsx
+new file mode 100644
+--- /dev/null
++++ b/resources/js/hourly-monitoring/PickupView.jsx
+@@ -0,0 +1,65 @@
++import { useEffect, useMemo, useState } from 'react';
++import { DataGrid } from 'react-data-grid';
++import { api } from './api';
++import { buildPickupRows, pickupColumns } from './pickupUtils';
++
++/**
++ * Props: { url, date, line, config, collapsed?, onToggleShift? }
++ *
++ * Read-only pickup table (see PickupService): every lot is a row, every hour slot holds the quantity picked up in that hour.
++ * One request per date feeds the F1 / F2 / F3 sub tabs (`line` only chooses which one is shown).
++ * The DAY / NIGHT SHIFT headers collapse exactly like they do in HourlyGrid.
++ */
++export default function PickupView({ url, date, line, config, collapsed, onToggleShift }) {
++    const [data, setData] = useState(null);
++    const [error, setError] = useState(null);
++    const [version, setVersion] = useState(0); // bumped by "Refresh"
++
++    useEffect(() => {
++        const controller = new AbortController();
++        setData(null);
++        setError(null);
++        api(`${url}?date=${encodeURIComponent(date)}`, { signal: controller.signal })
++            .then(setData)
++            .catch((e) => !controller.signal.aborted && setError(e.message));
++        return () => controller.abort();
++    }, [url, date, version]);
++
++    const columns = useMemo(() => pickupColumns(config, collapsed), [config, collapsed]);
++    const rows = useMemo(() => buildPickupRows(data?.lines?.[line]?.rows ?? [], config), [data, line, config]);
++
++    const onHeaderClick = (e) => {
++        const group = e.target.closest?.('.hm-group-day, .hm-group-night');
++        if (group && onToggleShift) onToggleShift(group.classList.contains('hm-group-night') ? 'night' : 'day');
++    };
++
++    return (
++        <div className="hm-gridwrap" onClick={onHeaderClick}>
++            <div className="hm-toolbar">
++                <button type="button" className="hm-btn" onClick={() => setVersion((v) => v + 1)}>
++                    Refresh
++                </button>
++                <span className="hm-hint">Read-only · quantity of every lot picked up per hour</span>
++                {error && (
++                    <span className="hm-error" role="alert">
++                        {error}
++                    </span>
++                )}
++            </div>
++            {!data && !error ? (
++                <div className="hm-empty">Loading pickup…</div>
++            ) : (
++                <DataGrid
++                    className="rdg-light hm-grid"
++                    columns={columns}
++                    rows={rows}
++                    rowKeyGetter={(row) => row.id}
++                    rowClass={(row) => (row.__kind ? `hm-total-row is-${row.__kind}` : undefined)}
++                    rowHeight={30}
++                    headerRowHeight={32}
++                    renderers={{ noRowsFallback: <div className="hm-empty">No pickup lots for this day.</div> }}
++                />
++            )}
++        </div>
++    );
++}
+
+diff --git a/resources/js/hourly-monitoring/exportWorkbook.js b/resources/js/hourly-monitoring/exportWorkbook.js
+new file mode 100644
+--- /dev/null
++++ b/resources/js/hourly-monitoring/exportWorkbook.js
+@@ -0,0 +1,309 @@
++import ExcelJS from 'exceljs';
++import { api } from './api';
++import { buildCodeIndex, buildDisplayRows } from './cellUtils';
++import { buildColumns } from './columns';
++import { buildPickupRows, pickupColumns } from './pickupUtils';
++
++/**
++ * One workbook per day: a sheet for every main tab / sub tab (TNR F1 STD ... PICKUP F3 ... FVI PL1 ... BOXING F3)
++ * and a single SUMMARY sheet that holds the Day and the Night shift together.
++ *
++ * The grid sheets are built from the very same column definitions as the screen (buildColumns / pickupColumns), so what
++ * is exported is what is shown: calculated columns, TNR subtotal / Grand Total rows, downtime-code colors.
++ * Always exports the expanded columns, whatever is collapsed on screen.
++ */
++
++const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
++const INT = '#,##0';
++const NAVY = '1F3864';
++const SHIFT_TITLES = { day: 'Day shift (7am–7pm)', night: 'Night shift (7pm–7am)' };
++
++// Same colors as hourly-monitoring.css
++const GROUP_FILL = { 'hm-group-day': 'FFE9A8', 'hm-group-night': 'C9D3E8', 'hm-group-total': 'D9EADB', 'hm-group-action': 'F1DEDE' };
++const HEAD_FILL = { 'hm-head-day': 'FFF6DD', 'hm-head-night': 'E4E9F3' };
++const NEUTRAL = 'D9DEE7';
++
++const THIN = { style: 'thin', color: { argb: 'FFC9CED6' } };
++const BORDER = { top: THIN, left: THIN, bottom: THIN, right: THIN };
++
++const argb = (hex) => `FF${String(hex).replace('#', '').toUpperCase()}`;
++
++function pick(map, classes, fallback) {
++    const names = String(classes ?? '').split(' ');
++    const hit = Object.keys(map).find((key) => names.includes(key));
++    return hit ? map[hit] : fallback;
++}
++
++function put(ws, r, c, value, { numFmt, fill, color, bold, align } = {}) {
++    const cell = ws.getCell(r, c);
++    cell.value = value === undefined ? null : value;
++    cell.border = BORDER;
++    if (numFmt) cell.numFmt = numFmt;
++    if (fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(fill) } };
++    cell.font = { bold: Boolean(bold), ...(color ? { color: { argb: argb(color) } } : {}) };
++    cell.alignment = { vertical: 'middle', horizontal: align ?? (typeof value === 'number' ? 'right' : 'left') };
++    return cell;
++}
++
++function heading(ws, r, text, size = 13) {
++    const cell = ws.getCell(r, 1);
++    cell.value = text;
++    cell.font = { bold: true, size };
++}
++
++function sheetName(wb, wanted) {
++    const base = wanted.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31);
++    let name = base;
++    for (let n = 2; wb.getWorksheet(name); n++) name = `${base.slice(0, 28)} ${n}`;
++    return name;
++}
++
++/** Calculated columns carry the text they show ("1,500", "85.3%", "3 h"); turn it back into a number with a number format. */
++function parseDisplay(display) {
++    const text = String(display ?? '').trim();
++    if (/^-?\d[\d,]*$/.test(text)) return { value: Number(text.replace(/,/g, '')), numFmt: INT };
++    if (/^-?\d+(\.\d+)?%$/.test(text)) return { value: Number(text.slice(0, -1)) / 100, numFmt: '0.0%' };
++    const hours = /^(-?\d+) h$/.exec(text);
++    if (hours) return { value: Number(hours[1]), numFmt: '0" h"' };
++    return { value: text === '' ? null : text };
++}
++
++/** Value + style of one body cell. */
++function gridCell(col, row, index, codeIdx) {
++    if (col.key === 'count') return { value: row.__kind ? null : (row.__n ?? index + 1) };
++    if (col.exportValue) return parseDisplay(col.exportValue(row));
++
++    const raw = row[col.key];
++    if (raw === null || raw === undefined || raw === '') return { value: null };
++    if (typeof raw === 'number') return { value: raw, numFmt: INT };
++
++    const text = String(raw);
++    if (/^[hl]\d+$/.test(col.key)) {
++        if (/^-?\d+$/.test(text)) return { value: Number(text), numFmt: INT };
++        const code = codeIdx.get(text.toUpperCase());
++        if (code) return { value: code.code, fill: code.bg_color ?? undefined, color: code.text_color, align: 'center' };
++    }
++
++    return { value: text };
++}
++
++/** Leaf columns of a column tree, each remembering the group it sits in. */
++const leaves = (columns, group = null) => columns.flatMap((c) => (c.children ? leaves(c.children, c) : [{ ...c, group }]));
++
++/** Two header rows: group names on top (merged), column names below. Columns without a group span both rows. */
++function writeHeader(ws, r, cols) {
++    let i = 0;
++
++    while (i < cols.length) {
++        const col = cols[i];
++
++        if (!col.group) {
++            put(ws, r, i + 1, col.name, { bold: true, fill: pick(HEAD_FILL, col.headerCellClass, NEUTRAL), align: 'center' });
++            put(ws, r + 1, i + 1, null, { fill: pick(HEAD_FILL, col.headerCellClass, NEUTRAL) });
++            ws.mergeCells(r, i + 1, r + 1, i + 1);
++            i += 1;
++            continue;
++        }
++
++        let j = i;
++        while (j + 1 < cols.length && cols[j + 1].group === col.group) j += 1;
++
++        const groupFill = pick(GROUP_FILL, col.group.headerCellClass, NEUTRAL);
++        put(ws, r, i + 1, col.group.name, { bold: true, fill: groupFill, align: 'center' });
++        if (j > i) ws.mergeCells(r, i + 1, r, j + 1);
++        for (let k = i; k <= j; k++) {
++            put(ws, r + 1, k + 1, cols[k].name, { bold: true, fill: pick(HEAD_FILL, cols[k].headerCellClass, groupFill), align: 'center' });
++        }
++
++        i = j + 1;
++    }
++}
++
++/** Writes header + rows starting at row `r`; returns the first free row below the table. */
++function writeTable(ws, r, { columns, rows, codeIdx }) {
++    const cols = leaves(columns);
++    writeHeader(ws, r, cols);
++
++    cols.forEach((col, k) => {
++        const column = ws.getColumn(k + 1);
++        column.width = Math.max(column.width ?? 0, Math.round((col.width ?? 100) / 7));
++    });
++
++    rows.forEach((row, i) => {
++        cols.forEach((col, k) => {
++            const { value, ...style } = gridCell(col, row, i, codeIdx);
++
++            if (row.__kind === 'grand') Object.assign(style, { fill: NAVY, color: 'FFFFFF', bold: true });
++            else if (row.__kind === 'subtotal') Object.assign(style, { fill: 'E6EAF1', bold: true });
++
++            put(ws, r + 2 + i, k + 1, value, style);
++        });
++    });
++
++    return r + 2 + rows.length;
++}
++
++const frozenCount = (columns) => {
++    const cols = leaves(columns);
++    const first = cols.findIndex((c) => !c.frozen);
++    return first === -1 ? cols.length : first;
++};
++
++function writeGridSheet(ws, { type, line, date, rows, codeIdx, config }) {
++    heading(ws, 1, `${type.toUpperCase()} - ${line} - ${date}`);
++    const ctx = (shift) => ({ codeIdx, config, editors: {}, onDelete: () => {}, shift, collapsed: {} });
++
++    if (type === 'boxing') {
++        // Two tables on screen (day, night): stacked in the same sheet.
++        let r = 3;
++        for (const shift of ['day', 'night']) {
++            heading(ws, r, SHIFT_TITLES[shift], 11);
++            r = writeTable(ws, r + 1, { columns: buildColumns('boxing', ctx(shift)), rows: rows.filter((x) => x.shift === shift), codeIdx }) + 1;
++        }
++        return;
++    }
++
++    const columns = buildColumns(type, ctx());
++    const display = type === 'tnr' ? buildDisplayRows(rows, codeIdx, config) : rows;
++    writeTable(ws, 3, { columns, rows: display, codeIdx });
++
++    const xSplit = frozenCount(columns);
++    ws.views = [{ state: 'frozen', ySplit: 4, ...(xSplit ? { xSplit } : {}) }];
++}
++
++function writePickupSheet(ws, { line, date, lots, config }) {
++    heading(ws, 1, `PICKUP - ${line} - ${date}`);
++    const columns = pickupColumns(config);
++    writeTable(ws, 3, { columns, rows: buildPickupRows(lots, config), codeIdx: new Map() });
++
++    const xSplit = frozenCount(columns);
++    ws.views = [{ state: 'frozen', ySplit: 4, ...(xSplit ? { xSplit } : {}) }];
++}
++
++/* ---------- Summary (Day + Night in one sheet) ---------- */
++
++const headStyle = { bold: true, fill: NAVY, color: 'FFFFFF', align: 'center' };
++
++/** Totals block / hourly block: one column per family + the group's Total. Returns the first free row below. */
++function writeGroupTable(ws, r, data, { corner, titleKey, rows, sumRow }) {
++    put(ws, r, 1, corner || null, headStyle);
++    put(ws, r + 1, 1, null, headStyle);
++    ws.mergeCells(r, 1, r + 1, 1);
++
++    let c = 2;
++    for (const g of data.groups) {
++        const span = g.columns.length + 1;
++        put(ws, r, c, g[titleKey], headStyle);
++        ws.mergeCells(r, c, r, c + span - 1);
++        g.columns.forEach((col, i) => {
++            put(ws, r + 1, c + i, col.label, col.color ? { bold: true, fill: col.color, color: '1A1A1A', align: 'center' } : headStyle);
++        });
++        put(ws, r + 1, c + g.columns.length, 'Total', { ...headStyle, fill: '2F4F88' });
++        c += span;
++    }
++
++    const body = rows.map((row) => ({ row, label: row.label, sum: false }));
++    if (sumRow) body.push({ row: sumRow, label: 'TOTAL', sum: true });
++
++    body.forEach(({ row, label, sum }, i) => {
++        const rr = r + 2 + i;
++        const strong = sum || label === 'Total';
++        put(ws, rr, 1, label, { bold: true, fill: sum ? 'DFE5EF' : 'F1F3F6' });
++
++        let k = 2;
++        for (const g of data.groups) {
++            for (const col of g.columns) put(ws, rr, k++, Number(row[col.key] ?? 0), { numFmt: INT, bold: strong, fill: sum ? 'DFE5EF' : undefined });
++            put(ws, rr, k++, Number(row[g.key] ?? 0), { numFmt: INT, bold: true, fill: sum ? 'DFE5EF' : 'EEF1F5' });
++        }
++    });
++
++    return r + 2 + body.length + 1;
++}
++
++/** Per-line tables with the hours across (TNR per family, Boxing, FVI, Pickup). */
++function writeDetail(ws, r, section, hours) {
++    heading(ws, r, section.title, 11);
++    r += 1;
++
++    for (const block of section.blocks) {
++        put(ws, r, 1, null, headStyle);
++        hours.forEach((h, i) => put(ws, r, 2 + i, h, headStyle));
++        put(ws, r, 2 + hours.length, 'Total', { ...headStyle, fill: '2F4F88' });
++
++        block.rows.forEach((row, i) => {
++            const rr = r + 1 + i;
++            put(ws, rr, 1, row.label, { bold: true, fill: row.color ?? 'F1F3F6' });
++            row.values.forEach((v, j) => put(ws, rr, 2 + j, v, { numFmt: INT }));
++            put(ws, rr, 2 + hours.length, row.total, { numFmt: INT, bold: true, fill: 'EEF1F5' });
++        });
++
++        const t = r + 1 + block.rows.length;
++        put(ws, t, 1, block.total.label, { bold: true, fill: 'DFE5EF' });
++        block.total.values.forEach((v, j) => put(ws, t, 2 + j, v, { numFmt: INT, bold: true, fill: 'DFE5EF' }));
++        put(ws, t, 2 + hours.length, block.total.total, { numFmt: INT, bold: true, fill: 'DFE5EF' });
++
++        r = t + 2;
++    }
++
++    return r;
++}
++
++function writeSummarySheet(ws, data) {
++    ws.getColumn(1).width = 14;
++    for (let c = 2; c <= 20; c++) ws.getColumn(c).width = 12;
++
++    heading(ws, 1, `SUMMARY - ${data.date}`);
++    heading(ws, 3, 'Totals', 11);
++    let r = writeGroupTable(ws, 4, data, { corner: '', titleKey: 'label', rows: data.totals });
++
++    for (const shift of ['day', 'night']) {
++        const block = data.shifts[shift];
++        heading(ws, r, SHIFT_TITLES[shift]);
++        r = writeGroupTable(ws, r + 1, data, { corner: 'TIME', titleKey: 'hourly_label', rows: block.rows, sumRow: block.total });
++        for (const section of block.detail) r = writeDetail(ws, r, section, block.hours);
++        r += 1;
++    }
++}
++
++function download(buffer, filename) {
++    const url = URL.createObjectURL(new Blob([buffer], { type: XLSX_MIME }));
++    const a = document.createElement('a');
++    a.href = url;
++    a.download = filename;
++    document.body.appendChild(a);
++    a.click();
++    a.remove();
++    setTimeout(() => URL.revokeObjectURL(url), 10000);
++}
++
++/**
++ * @param {{ date: string, sheets: any[], rowsBySheet: Record<string, any[]>, codes: any[], config: any, urls: { pickup: string, summary: string } }} args
++ * `rowsBySheet` are the grid rows currently on screen; pickup and summary come from the server.
++ */
++export async function exportWorkbook({ date, sheets, rowsBySheet, codes, config, urls }) {
++    const query = `?date=${encodeURIComponent(date)}`;
++    const [pickup, summary] = await Promise.all([api(urls.pickup + query), api(urls.summary + query)]);
++
++    const codeIdx = buildCodeIndex(codes);
++    const wb = new ExcelJS.Workbook();
++    wb.created = new Date();
++
++    // Same order as the main tabs.
++    for (const type of ['tnr', 'pickup', 'fvi', 'boxing']) {
++        for (const line of config.lines[type] ?? []) {
++            const ws = wb.addWorksheet(sheetName(wb, `${type.toUpperCase()} ${line}`));
++
++            if (type === 'pickup') {
++                writePickupSheet(ws, { line, date, lots: pickup.lines?.[line]?.rows ?? [], config });
++                continue;
++            }
++
++            const sheet = sheets.find((s) => s.type === type && s.line === line);
++            writeGridSheet(ws, { type, line, date, rows: sheet ? (rowsBySheet[sheet.id] ?? []) : [], codeIdx, config });
++        }
++    }
++
++    writeSummarySheet(wb.addWorksheet('SUMMARY'), summary);
++
++    download(await wb.xlsx.writeBuffer(), `hourly-monitoring-${date}.xlsx`);
++}

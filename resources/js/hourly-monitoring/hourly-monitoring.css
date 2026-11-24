@@ -33,8 +33,18 @@
 .hm-grid .hm-group-night { background: #c9d3e8; }
 .hm-grid .hm-group-total { background: #d9eadb; }
 .hm-grid .hm-group-action { background: #f1dede; }
-.hm-code { margin-inline: -8px; padding-inline: 8px; block-size: 100%; overflow: hidden; text-overflow: ellipsis; font-weight: 500; text-align: center; }
+.hm-code { display: flex; align-items: center; justify-content: center; margin-inline: -8px; padding-inline: 8px; block-size: 100%; font-weight: 500; line-height: 1; } /* centered on both axes */
+.hm-code > span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hm-qty { text-align: right; }
+
+/* DAY / NIGHT SHIFT group headers collapse / expand their shift when clicked */
+.hm-grid .hm-group-day, .hm-grid .hm-group-night { cursor: pointer; user-select: none; }
+.hm-grid .hm-group-day::before, .hm-grid .hm-group-night::before { content: '▾'; margin-inline-end: 6px; }
+.hm-grid .hm-group-day.is-collapsed::before, .hm-grid .hm-group-night.is-collapsed::before { content: '▸'; }
+
+/* export button (header) */
+.hm-header .hm-export { margin-inline-start: auto; }
+.hm-btn:disabled { opacity: .6; cursor: default; }
 .hm-count { display: flex; justify-content: space-between; align-items: center; }
 .hm-del { visibility: hidden; border: 0; background: none; color: #a30000; font-size: 16px; cursor: pointer; line-height: 1; }
 .rdg-row:hover .hm-del, .hm-del:focus-visible { visibility: visible; }

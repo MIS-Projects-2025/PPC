@@ -1,4 +1,4 @@
-import { HOUR_KEY, LOT_KEY, fmt, hourLabel, pct, rangeLabel, rowStats, sumLots, sumOutputs } from './cellUtils';
+import { HOUR_KEY, LOT_KEY, fmt, fmtCell, hourLabel, pct, rangeLabel, rowStats, sumLots, sumOutputs } from './cellUtils';
 
 /**
  * ctx = {
@@ -7,6 +7,7 @@ import { HOUR_KEY, LOT_KEY, fmt, hourLabel, pct, rangeLabel, rowStats, sumLots, 
  *   editors: { text, code, emp, pkg },
  *   onDelete: (row) => void,
  *   shift?: 'day' | 'night'   // boxing tables only
+ *   collapsed?: { day: boolean, night: boolean }   // a collapsed shift keeps only its totals columns
  * }
  * Rows with __kind ('subtotal' | 'grand') are read-only totals: never editable.
  */
@@ -17,10 +18,10 @@ function ValueCell({ value, ctx }) {
     if (!value) return null;
     const code = ctx.codeIdx.get(String(value).toUpperCase());
     if (code) {
-        // Downtime-coded cell: the code is centered, on its background color.
+        // Downtime-coded cell: the code is centered (both axes, see .hm-code), on its background color.
         return (
             <div className="hm-code" style={{ background: code.bg_color ?? undefined, color: code.text_color }} title={code.code}>
-                {code.code}
+                <span>{code.code}</span>
             </div>
         );
     }
@@ -37,7 +38,9 @@ const text = (ctx, key, name, width, extra = {}) => ({
     ...extra,
 });
 
-const integer = (ctx, key, name, width) => text(ctx, key, name, width, { cellClass: 'hm-int' });
+// Whole numbers are shown with thousands separators; the editor still shows the raw digits.
+const integer = (ctx, key, name, width) =>
+    text(ctx, key, name, width, { cellClass: 'hm-int', renderCell: ({ row }) => fmtCell(row[key]) });
 
 const calc = (key, name, width, render) => ({
     key,
@@ -46,6 +49,7 @@ const calc = (key, name, width, render) => ({
     editable: false,
     cellClass: 'hm-calc',
     renderCell: ({ row }) => <>{render(row)}</>,
+    exportValue: render, // the Excel export reads the same text and turns it back into a number
 });
 
 const count = (ctx) => ({
@@ -100,10 +104,25 @@ const hours = (ctx, list, shift, { label = hourLabel, lots = false } = {}) =>
                 cellClass: 'hm-int',
                 headerCellClass: `hm-head-${shift}`,
                 renderEditCell: ctx.editors.text,
+                renderCell: ({ row }) => fmtCell(row[LOT_KEY(hour)]),
             });
         }
         return cols;
     });
+
+/**
+ * A DAY / NIGHT SHIFT column group. Clicking its header (handled by the grid) collapses the shift to `summary`
+ * (its totals); expanded it shows `detail` + `summary`. The is-collapsed class drives the ▸ / ▾ caret in the CSS.
+ */
+const shiftGroup = (ctx, shift, name, detail, summary) => {
+    const collapsed = Boolean(ctx.collapsed?.[shift]);
+
+    return {
+        name,
+        headerCellClass: `hm-group-${shift}${collapsed ? ' is-collapsed' : ''}`,
+        children: collapsed ? summary : [...detail, ...summary],
+    };
+};
 
 export function buildColumns(type, ctx) {
     const { config, codeIdx } = ctx;
@@ -118,46 +137,52 @@ export function buildColumns(type, ctx) {
 
         return [
             count(ctx),
-            {
-                name: night ? 'NIGHT SHIFT' : 'DAY SHIFT',
-                headerCellClass: `hm-group-${shift}`,
-                children: [
-                    ...employee(ctx, ''),
-                    ...hours(ctx, list, shift, { label: rangeLabel, lots: true }),
+            shiftGroup(
+                ctx,
+                shift,
+                night ? 'NIGHT SHIFT' : 'DAY SHIFT',
+                [...employee(ctx, ''), ...hours(ctx, list, shift, { label: rangeLabel, lots: true })],
+                [
                     calc('total_out', 'TOTAL', 110, (r) => fmt(sumOutputs(r, list))),
                     calc('total_lots', 'TOTAL # OF LOTS', 140, (r) => fmt(sumLots(r, list))),
                 ],
-            },
+            ),
         ];
     }
 
     if (type === 'fvi') {
         return [
             count(ctx),
-            {
-                name: 'DAY SHIFT',
-                headerCellClass: 'hm-group-day',
-                children: [
+            shiftGroup(
+                ctx,
+                'day',
+                'DAY SHIFT',
+                [
                     ...employee(ctx, 'day'),
                     // FUTURE: designation may become a reference table too.
                     text(ctx, 'day_designation', 'Designation', 130),
                     ...hours(ctx, config.day_hours, 'day'),
+                ],
+                [
                     calc('day_outs', 'DAY SHIFT OUTS', 120, (r) => fmt(stats(r).day)),
                     integer(ctx, 'day_lots', 'TOTAL # of lots', 110),
                 ],
-            },
-            {
-                name: 'NIGHT SHIFT',
-                headerCellClass: 'hm-group-night',
-                children: [
+            ),
+            shiftGroup(
+                ctx,
+                'night',
+                'NIGHT SHIFT',
+                [
                     ...employee(ctx, 'night'),
                     // FUTURE: designation may become a reference table too.
                     text(ctx, 'night_designation', 'Designation', 130),
                     ...hours(ctx, config.night_hours, 'night'),
+                ],
+                [
                     calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
                     integer(ctx, 'night_lots', 'TOTAL # of lots', 110),
                 ],
-            },
+            ),
             {
                 name: 'OVERALL',
                 headerCellClass: 'hm-group-total',
@@ -181,27 +206,26 @@ export function buildColumns(type, ctx) {
         // Suggests the package types that already exist; subtotal rows copy the group's package type here.
         text(ctx, 'package_type', 'Package Type', 130, { renderEditCell: ctx.editors.pkg }),
         text(ctx, 'setup', 'SET-UP', 110),
-        {
-            name: 'DAY SHIFT',
-            headerCellClass: 'hm-group-day',
-            children: [
-                ...employee(ctx, 'day'),
-                ...hours(ctx, config.day_hours, 'day'),
+        shiftGroup(
+            ctx,
+            'day',
+            'DAY SHIFT',
+            [...employee(ctx, 'day'), ...hours(ctx, config.day_hours, 'day')],
+            [
                 calc('day_outs', 'DAY SHIFT OUTS', 120, (r) => fmt(stats(r).day)),
                 integer(ctx, 'day_lots', 'TOTAL # of lots', 110),
             ],
-        },
-        {
-            name: 'NIGHT SHIFT',
-            headerCellClass: 'hm-group-night',
-            children: [
-                text(ctx, 'night_setup', 'SET-UP', 110),
-                ...employee(ctx, 'night'),
-                ...hours(ctx, config.night_hours, 'night'),
+        ),
+        shiftGroup(
+            ctx,
+            'night',
+            'NIGHT SHIFT',
+            [text(ctx, 'night_setup', 'SET-UP', 110), ...employee(ctx, 'night'), ...hours(ctx, config.night_hours, 'night')],
+            [
                 calc('night_outs', 'NIGHT SHIFT OUTS', 130, (r) => fmt(stats(r).night)),
                 integer(ctx, 'night_lots', 'TOTAL # of lots', 110),
             ],
-        },
+        ),
         {
             name: 'ATTAINMENT',
             headerCellClass: 'hm-group-total',

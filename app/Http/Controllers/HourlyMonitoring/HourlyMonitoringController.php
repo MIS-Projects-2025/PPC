@@ -33,7 +33,8 @@ class HourlyMonitoringController extends Controller
                 ->all(),
             'config'        => [
                 'cap_divisor' => config('hourly_monitoring.cap_divisor'),
-                'lines'       => config('hourly_monitoring.lines'),
+                // The Pickup tab has sub tabs (F1/F2/F3) but no sheets, so its lines are added here.
+                'lines'       => config('hourly_monitoring.lines') + ['pickup' => config('hourly_monitoring.pickup.lines')],
                 'line_colors' => config('hourly_monitoring.line_colors'),
                 'day_hours'   => config('hourly_monitoring.day_hours'),
                 'night_hours' => config('hourly_monitoring.night_hours'),
@@ -42,6 +43,7 @@ class HourlyMonitoringController extends Controller
                 'index'     => route('hourly-monitoring.index'),
                 'employees' => route('hourly-monitoring.employees.search'),
                 'summary'   => route('hourly-monitoring.summary'),
+                'pickup'    => route('hourly-monitoring.pickup'),
             ],
         ]);
     }

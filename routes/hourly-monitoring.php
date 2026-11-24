@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\HourlyMonitoring\EmployeeController;
 use App\Http\Controllers\HourlyMonitoring\HourlyMonitoringController;
+use App\Http\Controllers\HourlyMonitoring\PickupController;
 use App\Http\Controllers\HourlyMonitoring\SheetController;
 use App\Http\Controllers\HourlyMonitoring\SheetRowController;
 use App\Http\Controllers\HourlyMonitoring\SummaryController;
@@ -23,6 +24,7 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', [HourlyMonitoringController::class, 'index'])->name('index');
 Route::get('employees', [EmployeeController::class, 'search'])->name('employees.search');
 Route::get('summary', [SummaryController::class, 'show'])->name('summary');
+Route::get('pickup', [PickupController::class, 'show'])->name('pickup');
 
 Route::get('sheets/{sheet}', [SheetController::class, 'show'])->whereNumber('sheet')->name('sheets.show');
 Route::post('sheets/{sheet}/rows', [SheetRowController::class, 'store'])->whereNumber('sheet')->name('sheets.rows.store');

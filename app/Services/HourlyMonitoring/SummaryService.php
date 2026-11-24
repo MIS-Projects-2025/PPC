@@ -5,8 +5,9 @@ namespace App\Services\HourlyMonitoring;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Summary tab. TNR (F1/F2/F3 = STD + TRAY), FVI (PL1/PL6) and Boxing (F1/F2/F3).
+ * Summary tab. TNR (F1/F2/F3 = STD + TRAY), Pickup (F1/F2/F3), FVI (PL1/PL6) and Boxing (F1/F2/F3).
  * Only numeric output counts; downtime / non-downtime code cells and "No of lots" contribute 0.
+ * Pickup is not sheet data: its hourly quantities are the lot quantities computed by PickupService.
  * The read-only package-type subtotal rows and the grand total of the TNR grid exist only in the browser.
  * Computed on the server, never stored.
  *
@@ -23,12 +24,17 @@ class SummaryService
     /** type => [totals block title, hourly block title, detail table title] */
     private const TITLES = [
         'tnr'    => ['Tape and Reel', 'TNR Outs',    'TNR'],
+        'pickup' => ['Pickup',        'Pickup',      'PICKUP'],
         'fvi'    => ['FVI Outs',      'FVI Outs',    'FVI OUTS'],
         'boxing' => ['Boxing',        'Boxing Outs', 'BOXING OUTS'],
     ];
 
-    /** Order of the per-line detail tables under each shift. */
-    private const DETAIL_ORDER = ['tnr', 'boxing', 'fvi'];
+    /** Order of the per-line detail tables under each shift (Pickup goes below FVI OUTS). */
+    private const DETAIL_ORDER = ['tnr', 'boxing', 'fvi', 'pickup'];
+
+    public function __construct(private PickupService $pickup)
+    {
+    }
 
     public function forDate(string $date): array
     {
@@ -65,13 +71,31 @@ class SummaryService
         return explode(' ', $line)[0];
     }
 
-    /** Column layout of the summary tables, in config order. */
+    /**
+     * Type => lines of every summary group, in config('hourly_monitoring.summary_order').
+     * Pickup is not a sheet type, so its lines live under hourly_monitoring.pickup.
+     *
+     * @return array<string, list<string>>
+     */
+    private function lineMap(): array
+    {
+        $configured = config('hourly_monitoring.lines') + ['pickup' => config('hourly_monitoring.pickup.lines')];
+        $map        = [];
+
+        foreach (config('hourly_monitoring.summary_order') as $type) {
+            $map[$type] = $configured[$type];
+        }
+
+        return $map;
+    }
+
+    /** Column layout of the summary tables, in summary_order. */
     private function groups(): array
     {
         $colors = config('hourly_monitoring.line_colors', []);
         $groups = [];
 
-        foreach (config('hourly_monitoring.lines') as $type => $lines) {
+        foreach ($this->lineMap() as $type => $lines) {
             $columns = [];
 
             foreach ($lines as $line) {
@@ -118,6 +142,9 @@ class SummaryService
                 $matrix[$source['type']][$r->line][(int) $r->hour] = (int) $r->qty;
             }
         }
+
+        // Pickup comes from the external pickup tables, not from hourly_cells.
+        $matrix['pickup'] = $this->pickup->totals($date);
 
         return $matrix;
     }
@@ -166,7 +193,7 @@ class SummaryService
     private function detail(array $hours, array $matrix): array
     {
         $colors   = config('hourly_monitoring.line_colors', []);
-        $lines    = config('hourly_monitoring.lines');
+        $lines    = $this->lineMap();
         $sections = [];
 
         foreach (self::DETAIL_ORDER as $type) {

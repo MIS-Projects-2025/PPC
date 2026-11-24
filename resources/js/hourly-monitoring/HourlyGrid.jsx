@@ -6,13 +6,15 @@ import { buildColumns } from './columns';
 import { TextEditor, createSuggestEditor } from './SuggestEditor';
 
 /**
- * Props: { sheet, rows, setRows, codes, config, employeesUrl, packageTypes?, shift?, title? }
+ * Props: { sheet, rows, setRows, codes, config, employeesUrl, packageTypes?, shift?, title?, collapsed?, onToggleShift? }
  *
  * `rows` are the real rows of the table. For TNR the grid shows them sorted by package type with read-only
  * subtotal rows and a Grand Total row (see buildDisplayRows); those virtual rows are never saved.
  * Boxing renders two of these grids per sheet: `shift` ('day' | 'night') is the table, `rows` is already filtered.
+ * Clicking a DAY / NIGHT SHIFT header calls onToggleShift('day' | 'night'); `collapsed` ({ day, night }) lives in the
+ * page, so every grid follows the same choice.
  */
-export default function HourlyGrid({ sheet, rows, setRows, codes, config, employeesUrl, packageTypes = [], shift, title }) {
+export default function HourlyGrid({ sheet, rows, setRows, codes, config, employeesUrl, packageTypes = [], shift, title, collapsed, onToggleShift }) {
     const codeIdx = useMemo(() => buildCodeIndex(codes), [codes]);
     const [error, setError] = useState(null);
     const queue = useRef(Promise.resolve()); // saves run one after another, in order
@@ -178,12 +180,18 @@ export default function HourlyGrid({ sheet, rows, setRows, codes, config, employ
     );
 
     const columns = useMemo(
-        () => buildColumns(sheet.type, { codeIdx, config, editors, onDelete: deleteRow, shift }),
-        [sheet.type, codeIdx, config, editors, deleteRow, shift],
+        () => buildColumns(sheet.type, { codeIdx, config, editors, onDelete: deleteRow, shift, collapsed }),
+        [sheet.type, codeIdx, config, editors, deleteRow, shift, collapsed],
     );
 
+    // The DAY / NIGHT SHIFT group headers are plain header cells: one delegated click handler toggles the shift.
+    const onHeaderClick = (e) => {
+        const group = e.target.closest?.('.hm-group-day, .hm-group-night');
+        if (group && onToggleShift) onToggleShift(group.classList.contains('hm-group-night') ? 'night' : 'day');
+    };
+
     return (
-        <div className="hm-gridwrap">
+        <div className="hm-gridwrap" onClick={onHeaderClick}>
             {title && <h2 className="hm-shift-title">{title}</h2>}
             <div className="hm-toolbar">
                 <button type="button" className="hm-btn" onClick={addRow}>
