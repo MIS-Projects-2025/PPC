@@ -90,21 +90,6 @@ export default function NavLinks({ isCollapse = false }) {
 
             <Dropdown
                 isIconOnly={isCollapse}
-                label="Hourly Monitoring"
-                icon={<ImCalendar className="w-4 h-4" />}
-                links={[
-                    {
-                        href: route("hourly-monitoring.index"),
-                        label: "Hourly Output",
-                        icon: <ImCalendar className="w-4 h-4" />,
-                        notification: false,
-                    },
-                ]}
-                notification={false}
-            />
-
-            <Dropdown
-                isIconOnly={isCollapse}
                 label="Production"
                 icon={<MdConveyorBelt className="w-4 h-4" />}
                 links={[

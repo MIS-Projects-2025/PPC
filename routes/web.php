@@ -112,10 +112,6 @@ Route::prefix('loading-plan')
     ->name('loading-plan.')
     ->group(__DIR__ . '/loading-plan.php');
 
-Route::prefix('hourly-monitoring')
-    ->name('hourly-monitoring.')
-    ->group(__DIR__ . '/hourly-monitoring.php');
-
 Route::prefix('/lot-upstream')->name('lot-upstream.')->group(function () {
     Route::get('/{productionLine}', [LotController::class, 'index'])
         ->name('index');
